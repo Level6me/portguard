@@ -12,7 +12,7 @@ import subprocess
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry
+from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry
 
 def parse_loose_json_or_lines(text):
     text = (text or "").strip()
@@ -1687,16 +1687,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (currentAccessLogMode === 'port') {
             pageLogs.forEach(l => {
                 const geoText = l.country ? `${l.country} ${l.region || ''} ${l.isp ? '· ' + l.isp : ''}`.trim() : '公网探测';
-                const actionTag = (l.action === 'WHITELIST' || l.action === '放行') 
-                    ? '<span class="tag success" style="font-weight:700;">🛡️ 信任放行</span>' 
-                    : '<span class="tag danger" style="font-weight:700;">🚫 内核阻断</span>';
+                let actionTag = '<span class="tag danger" style="font-weight:700;">🚫 诱捕阻断</span>';
+                if (l.action === 'WHITELIST' || l.action === '放行') {
+                    actionTag = '<span class="tag success" style="font-weight:700;">🛡️ 信任放行</span>';
+                } else if (l.action === 'BUSINESS' || l.action === '业务') {
+                    actionTag = '<span class="tag accent" style="font-weight:700;">⚡ 正常业务</span>';
+                } else if (l.action === 'PROBE' || l.action === '探测') {
+                    actionTag = '<span class="tag warning" style="font-weight:700;">🔍 外部探测</span>';
+                }
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
                     <td><span class="ip-text" onclick="copyIP('${l.ip}')">${l.ip}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
-                    <td><b style="color:var(--text); font-size:12px;">${l.port_name || '蜜罐诱饵'}</b></td>
+                    <td><b style="color:var(--text); font-size:12px;">${l.port_name || '网络连接'}</b></td>
                     <td>${actionTag}</td>
                 </tr>
                 `;
@@ -2713,11 +2718,13 @@ def run_server():
     print(f"[Portsentry-UI Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
     
     trap_instance.start()
+    sniffer_instance.start()
     
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    sniffer_instance.stop()
     httpd.server_close()
 
 if __name__ == "__main__":

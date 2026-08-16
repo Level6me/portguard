@@ -619,10 +619,122 @@ class TrapServer:
             except Exception as e:
                 time.sleep(0.5)
 
+class GlobalPortSniffer:
+    """全端口网络连接实时感知引擎 (基于 Linux 原生 Raw Socket 嗅探 TCP SYN 连接握手)"""
+    def __init__(self):
+        self.running = False
+        self.raw_sock = None
+        self._recent_cache = {} # (ip, port) -> timestamp (防抖降噪)
+        
+    def start(self):
+        self.running = True
+        threading.Thread(target=self._sniffer_loop, daemon=True).start()
+        
+    def stop(self):
+        self.running = False
+        if self.raw_sock:
+            try:
+                self.raw_sock.close()
+            except Exception:
+                pass
+
+    def _sniffer_loop(self):
+        try:
+            # 建立 RAW TCP 监听套接字 (Linux root 权限)
+            self.raw_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        except Exception as e:
+            print(f"[Sniffer] 无法开启底层全局端口嗅探 (可能非 root 环境或无 RAW 权限): {e}")
+            return
+            
+        print("[Sniffer] 全局端口连接嗅探引擎已就绪 (实时捕获全服务器 1-65535 端口入站连接)...")
+        while self.running:
+            try:
+                raw_data, _ = self.raw_sock.recvfrom(65535)
+                if len(raw_data) < 40:
+                    continue
+                v_ihl = raw_data[0]
+                ihl = (v_ihl & 0x0F) * 4
+                if len(raw_data) < ihl + 20:
+                    continue
+                src_ip = socket.inet_ntoa(raw_data[12:16])
+                
+                # 过滤本机发出的包或环回流量
+                if src_ip.startswith("127.") or src_ip == "0.0.0.0":
+                    continue
+                    
+                tcp_hdr = raw_data[ihl:ihl+20]
+                src_port, dst_port, seq, ack, offset_flags = struct.unpack("!HHLLH", tcp_hdr[:14])
+                flags = offset_flags & 0x01FF
+                is_syn = (flags & 0x02) != 0
+                is_ack = (flags & 0x10) != 0
+                
+                # 只捕获 TCP 连接发起阶段的 SYN 握手包 (SYN=1, ACK=0)
+                if not (is_syn and not is_ack):
+                    continue
+                    
+                now_ts = time.time()
+                cache_key = (src_ip, dst_port)
+                # 3秒内相同 IP + 端口去重防抖
+                if cache_key in self._recent_cache:
+                    if now_ts - self._recent_cache[cache_key] < 3.0:
+                        continue
+                self._recent_cache[cache_key] = now_ts
+                
+                # 定期清理防抖缓存
+                if len(self._recent_cache) > 5000:
+                    cutoff = now_ts - 10.0
+                    self._recent_cache = {k: v for k, v in self._recent_cache.items() if v > cutoff}
+                    
+                # 异步记录此端口连接事件
+                self._handle_port_access(src_ip, dst_port)
+            except Exception:
+                pass
+
+    def _handle_port_access(self, src_ip, dst_port):
+        cfg = load_config()
+        whitelist = cfg.get("whitelist", [])
+        active_ports = get_active_system_ports()
+        
+        # 判断动作与端口属性
+        if ip_in_whitelist(src_ip, whitelist):
+            action = "WHITELIST"
+            desc = "安全白名单放行"
+        elif dst_port in trap_instance.trap_map:
+            # 蜜罐端口会由 TrapServer 触发拦截
+            action = "INTERCEPTED"
+            trap_meta = trap_instance.trap_map.get(dst_port, {})
+            desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
+        elif dst_port in active_ports:
+            action = "BUSINESS"
+            desc = f"正常业务连接 (端口 {dst_port})"
+        else:
+            action = "PROBE"
+            desc = f"常规端口探测 (端口 {dst_port})"
+            
+        def _async_write():
+            try:
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                geo = resolve_ip_geo(src_ip)
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("""
+                INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+                VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (src_ip, dst_port, desc, geo.get("country", "公网节点"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), action, now_str, now_ts))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+                
+        threading.Thread(target=_async_write, daemon=True).start()
+
 trap_instance = TrapServer()
+sniffer_instance = GlobalPortSniffer()
 
 if __name__ == "__main__":
     init_db()
     trap_instance.start()
+    sniffer_instance.start()
     while True:
         time.sleep(3600)
