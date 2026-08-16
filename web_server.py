@@ -726,7 +726,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr>
                             <th>攻击拦截时间</th>
                             <th>攻击者 IP</th>
-                            <th>归属地 / ISP 运营商</th>
+                            <th>归属地</th>
                             <th>命中诱饵端口</th>
                             <th>服务特征分类</th>
                             <th>威胁评级</th>
@@ -738,6 +738,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr><td colspan="8" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入审计日志...</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- 拦截日志分页控制栏 (50条/页) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div style="font-size: 12px; color: var(--text-sec);">
+                    共 <b id="logs-total-cnt" style="color: var(--text);">0</b> 条记录 · 每页 50 条 · 当前第 <b id="logs-page-info" style="color: var(--accent);">1 / 1</b> 页
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="pill-btn" onclick="changeLogsPage(-1)" id="btn-logs-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                    <div id="logs-page-nums" style="display: flex; gap: 4px;"></div>
+                    <button class="pill-btn" onclick="changeLogsPage(1)" id="btn-logs-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                </div>
             </div>
         </div>
         <div class="bottom-spacer"></div>
@@ -773,7 +785,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr>
                             <th>已阻断 IP 地址</th>
                             <th>拉黑原因 / 诱饵端口</th>
-                            <th>归属地域</th>
+                            <th>归属地</th>
                             <th>处置动作</th>
                             <th>封禁时间</th>
                             <th>管理操作</th>
@@ -783,6 +795,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- 黑名单分页控制栏 (50条/页) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div style="font-size: 12px; color: var(--text-sec);">
+                    共 <b id="blacklist-total-cnt" style="color: var(--text);">0</b> 条记录 · 每页 50 条 · 当前第 <b id="blacklist-page-info" style="color: var(--accent);">1 / 1</b> 页
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="pill-btn" onclick="changeBlacklistPage(-1)" id="btn-blacklist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                    <div id="blacklist-page-nums" style="display: flex; gap: 4px;"></div>
+                    <button class="pill-btn" onclick="changeBlacklistPage(1)" id="btn-blacklist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                </div>
             </div>
         </div>
         <div class="bottom-spacer"></div>
@@ -829,6 +853,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </tbody>
                 </table>
             </div>
+
+            <!-- 蜜罐策略分页控制栏 (50条/页) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div style="font-size: 12px; color: var(--text-sec);">
+                    共 <b id="traps-total-cnt" style="color: var(--text);">0</b> 条策略 · 每页 50 条 · 当前第 <b id="traps-page-info" style="color: var(--accent);">1 / 1</b> 页
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="pill-btn" onclick="changeTrapsPage(-1)" id="btn-traps-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                    <div id="traps-page-nums" style="display: flex; gap: 4px;"></div>
+                    <button class="pill-btn" onclick="changeTrapsPage(1)" id="btn-traps-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                </div>
+            </div>
         </div>
         <div class="bottom-spacer"></div>
     </div>
@@ -871,6 +907,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </tbody>
                 </table>
             </div>
+
+            <!-- 白名单分页控制栏 (50条/页) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div style="font-size: 12px; color: var(--text-sec);">
+                    共 <b id="whitelist-total-cnt" style="color: var(--text);">0</b> 条白名单 · 每页 50 条 · 当前第 <b id="whitelist-page-info" style="color: var(--accent);">1 / 1</b> 页
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="pill-btn" onclick="changeWhitelistPage(-1)" id="btn-whitelist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                    <div id="whitelist-page-nums" style="display: flex; gap: 4px;"></div>
+                    <button class="pill-btn" onclick="changeWhitelistPage(1)" id="btn-whitelist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                </div>
+            </div>
         </div>
         <div class="bottom-spacer"></div>
     </div>
@@ -906,7 +954,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr>
                             <th>访问时间</th>
                             <th>来源 IP</th>
-                            <th>归属地域 / 运营商</th>
+                            <th>归属地</th>
                             <th>目标端口</th>
                             <th>服务说明</th>
                             <th>防御处置</th>
@@ -1080,6 +1128,58 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
             <button class="pill-btn accent" onclick="submitEditTrap()">保存修改</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: IP 属性与威胁情报详情 -->
+<div class="modal-overlay" id="modal-ip-detail">
+    <div class="modal-sheet" style="max-width: 520px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">🔍</span>
+                <h3 style="font-size: 16px; font-weight: 700; margin: 0;">IP 属性与威胁情报详情</h3>
+            </div>
+            <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+
+        <div style="background: var(--card-sec); border-radius: 14px; padding: 16px; border: 1px solid var(--border); margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px;">
+                <div>
+                    <div style="font-size: 11px; color: var(--text-sec); font-weight: 600; text-transform: uppercase; margin-bottom: 2px;">目标 IP 地址</div>
+                    <div style="font-family: monospace; font-size: 20px; font-weight: 800; color: var(--text);" id="ip-detail-ip">--</div>
+                </div>
+                <button class="pill-btn accent" onclick="copyIP(document.getElementById('ip-detail-ip').innerText)" style="padding: 5px 12px; font-size: 12px;">📋 复制 IP</button>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; font-size: 13px;">
+                <div>
+                    <span style="color: var(--text-sec); font-size: 12px;">归属国家/地区:</span>
+                    <div style="font-weight: 700; color: var(--text); margin-top: 3px;" id="ip-detail-country">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec); font-size: 12px;">所在城市/省份:</span>
+                    <div style="font-weight: 700; color: var(--text); margin-top: 3px;" id="ip-detail-region-city">--</div>
+                </div>
+                <div style="grid-column: span 2;">
+                    <span style="color: var(--text-sec); font-size: 12px;">网络运营商 (ISP):</span>
+                    <div style="font-weight: 600; color: var(--text); margin-top: 3px; word-break: break-all;" id="ip-detail-isp">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec); font-size: 12px;">威胁等级评定:</span>
+                    <div style="margin-top: 4px;" id="ip-detail-level">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec); font-size: 12px;">当前防御处置:</span>
+                    <div style="margin-top: 4px;" id="ip-detail-status">--</div>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
+            <button class="pill-btn" onclick="closeModals()">关闭</button>
+            <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
+            <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 一键拉黑</button>
         </div>
     </div>
 </div>
@@ -1405,15 +1505,126 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let html = '';
         geoList.forEach(g => {
             const pct = ((g.count / max) * 100).toFixed(0);
+            const countryCN = COUNTRY_CN_MAP[g.country] || g.country || '公网节点';
             html += `
             <div class="rank-item">
-                <span style="width: 100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;">🌐 ${g.country}</span>
+                <span style="width: 100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;">🌐 ${countryCN}</span>
                 <div class="rank-bar-bg"><div class="rank-bar-fill" style="width: ${pct}%"></div></div>
                 <span style="font-weight:700; width: 32px; text-align:right; font-variant-numeric:tabular-nums;">${g.count}</span>
             </div>
             `;
         });
         box.innerHTML = html;
+    }
+
+    const PAGE_SIZE = 50;
+    let logsPage = 1;
+    let blacklistPage = 1;
+    let trapsPage = 1;
+    let whitelistPage = 1;
+    let accessLogPage = 1;
+
+    const COUNTRY_CN_MAP = {
+        "United States": "美国", "United Kingdom": "英国", "Germany": "德国", "France": "法国",
+        "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
+        "Canada": "加拿大", "Australia": "澳大利亚", "Brazil": "巴西", "India": "印度",
+        "Singapore": "新加坡", "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Netherlands": "荷兰",
+        "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
+        "Indonesia": "印度尼西亚", "Malaysia": "马来西亚", "Philippines": "菲律宾", "Turkey": "土耳其",
+        "Ukraine": "乌克兰", "Poland": "波兰", "Sweden": "瑞典", "Switzerland": "瑞士",
+        "South Africa": "南非", "Egypt": "埃及", "Mexico": "墨西哥", "Argentina": "阿根廷",
+        "Chile": "智利", "Colombia": "哥伦比亚", "Iran": "伊朗", "Israel": "以色列",
+        "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦"
+    };
+
+    function formatGeoCN(item) {
+        if (!item) return '公网节点';
+        let country = item.country || '';
+        country = COUNTRY_CN_MAP[country] || country || '公网节点';
+        let region = item.region || item.city || '';
+        if (region && !country.includes(region)) {
+            return `🌐 ${country} · ${region}`;
+        }
+        return `🌐 ${country}`;
+    }
+
+    let currentDetailIP = '';
+    let currentDetailMeta = {};
+
+    function showIPDetail(ip) {
+        currentDetailIP = ip;
+        let meta = null;
+        if (allEvents) meta = allEvents.find(e => e.ip === ip);
+        if (!meta && allPortLogs) meta = allPortLogs.find(l => l.ip === ip);
+        if (!meta && allBlacklist) meta = allBlacklist.find(b => b.ip === ip);
+        if (!meta && allWebLogs) meta = allWebLogs.find(w => w.ip === ip);
+        
+        currentDetailMeta = meta || { ip };
+        
+        document.getElementById('ip-detail-ip').innerText = ip;
+        const countryCN = COUNTRY_CN_MAP[currentDetailMeta.country] || currentDetailMeta.country || '公网节点';
+        document.getElementById('ip-detail-country').innerText = countryCN;
+        document.getElementById('ip-detail-region-city').innerText = (currentDetailMeta.region || currentDetailMeta.city) ? `${currentDetailMeta.region || ''} ${currentDetailMeta.city || ''}`.trim() : '未知城市';
+        document.getElementById('ip-detail-isp').innerText = currentDetailMeta.isp || '未知运营商 / 本地或专用网络';
+        
+        const level = currentDetailMeta.level || '高危';
+        document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${level === '极高危' ? 'danger' : (level === '高危' ? 'warning' : 'accent')}">${level}</span>`;
+        
+        const isBanned = allBlacklist && allBlacklist.some(b => b.ip === ip);
+        const isWhite = allWhitelist && allWhitelist.some(w => w.ip === ip);
+        
+        let statusHtml = '<span class="tag warning">● 未封禁 (正常)</span>';
+        if (isBanned) {
+            statusHtml = '<span class="tag danger">🚫 内核黑名单 (已阻断)</span>';
+        } else if (isWhite) {
+            statusHtml = '<span class="tag success">🛡️ 信任白名单 (已放行)</span>';
+        }
+        document.getElementById('ip-detail-status').innerHTML = statusHtml;
+        
+        const banBtn = document.getElementById('btn-ip-detail-ban');
+        if (banBtn) {
+            if (isBanned) {
+                banBtn.innerText = '🔓 从黑名单解封';
+                banBtn.className = 'pill-btn success';
+            } else {
+                banBtn.innerText = '🚫 一键拉黑 IP';
+                banBtn.className = 'pill-btn danger';
+            }
+        }
+        
+        document.getElementById('modal-ip-detail').style.display = 'flex';
+    }
+
+    function addCurrentDetailIPToWhite() {
+        if (!currentDetailIP) return;
+        fetch('/api/whitelist/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip: currentDetailIP, remark: '详情卡片快速添加' })
+        }).then(res => res.json()).then(res => {
+            showToast(res.msg || `已将 ${currentDetailIP} 添加至白名单`, '🛡️');
+            closeModals();
+            fetchData(false);
+        });
+    }
+
+    function toggleCurrentDetailIPBan() {
+        if (!currentDetailIP) return;
+        const isBanned = allBlacklist && allBlacklist.some(b => b.ip === currentDetailIP);
+        if (isBanned) {
+            unbanIP(currentDetailIP);
+            closeModals();
+        } else {
+            fetch('/api/ban', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: currentDetailIP, reason: '详情卡片快速拉黑' })
+            }).then(res => res.json()).then(res => {
+                showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
+                closeModals();
+                fetchData(false);
+            });
+        }
     }
 
     function renderRecentThreats(threats) {
@@ -1425,11 +1636,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let html = '';
         threats.forEach(t => {
             const tagClass = (t.level === '极高危') ? 'danger' : (t.level === '高危' ? 'warning' : 'accent');
+            const geoText = formatGeoCN(t);
             html += `
             <div style="display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border-subtle);">
                 <div>
-                    <span class="ip-text" onclick="copyIP('${t.ip}')">${t.ip}</span>
-                    <span style="font-size:11px; color:var(--text-sec); margin-left:4px;">${t.country || '公网'}</span>
+                    <span class="ip-text" onclick="showIPDetail('${t.ip}')" title="点击查看 IP 详情">${t.ip}</span>
+                    <span style="font-size:11px; color:var(--text-sec); margin-left:4px;">${geoText}</span>
                     <div style="font-size:11px; color:var(--text-sec); margin-top:2px;">探测端口: <b>TCP/${t.port}</b> · ${t.port_name || '未定义'}</div>
                 </div>
                 <div style="text-align:right;">
@@ -1442,11 +1654,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         box.innerHTML = html;
     }
 
+    function renderPaginationUI(totalCount, currentPage, pageSize, cntElId, infoElId, prevBtnId, nextBtnId, numsElId, changePageFnName) {
+        const cntEl = document.getElementById(cntElId);
+        if (cntEl) cntEl.innerText = totalCount;
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+        const infoEl = document.getElementById(infoElId);
+        if (infoEl) infoEl.innerText = `${currentPage} / ${totalPages}`;
+        const prevBtn = document.getElementById(prevBtnId);
+        const nextBtn = document.getElementById(nextBtnId);
+        if (prevBtn) prevBtn.disabled = (currentPage <= 1);
+        if (nextBtn) nextBtn.disabled = (currentPage >= totalPages);
+        const numsEl = document.getElementById(numsElId);
+        if (numsEl) {
+            let html = '';
+            for (let p = Math.max(1, currentPage - 2); p <= Math.min(totalPages, currentPage + 2); p++) {
+                const active = (p === currentPage);
+                html += `<button class="pill-btn ${active ? 'accent' : ''}" onclick="${changePageFnName}(${p})" style="padding: 4px 10px; font-size: 11px; font-weight: 700; ${active ? 'background: var(--accent); color: #fff;' : ''}">${p}</button>`;
+            }
+            numsEl.innerHTML = html;
+        }
+    }
+
+    function changeLogsPage(delta) {
+        const query = (document.getElementById('search-input')?.value || '').toLowerCase();
+        let filtered = allEvents;
+        if (currentCategory === 'rdp') filtered = filtered.filter(e => [3389, 5900].includes(e.port));
+        else if (currentCategory === 'db') filtered = filtered.filter(e => [1433, 6379, 27017, 9200].includes(e.port));
+        else if (currentCategory === 'smb') filtered = filtered.filter(e => [445, 135, 139].includes(e.port));
+        else if (currentCategory === 'web') filtered = filtered.filter(e => [8888, 8080, 8088].includes(e.port));
+        if (query) filtered = filtered.filter(e => (e.ip && e.ip.toLowerCase().includes(query)) || (e.country && e.country.toLowerCase().includes(query)) || (e.port && String(e.port).includes(query)));
+        
+        const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+        const target = logsPage + delta;
+        if (target >= 1 && target <= totalPages) {
+            logsPage = target;
+            renderLogsTable();
+        }
+    }
+    function setLogsPage(p) { logsPage = p; renderLogsTable(); }
+
     function renderLogsTable() {
         const tbody = document.getElementById('logs-tbody');
         const query = (document.getElementById('search-input')?.value || '').toLowerCase();
 
-        let filtered = allEvents;
+        let filtered = allEvents || [];
         if (currentCategory === 'rdp') {
             filtered = filtered.filter(e => [3389, 5900].includes(e.port));
         } else if (currentCategory === 'db') {
@@ -1466,20 +1717,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             );
         }
 
-        if (filtered.length === 0) {
+        const totalCount = filtered.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+        if (logsPage > totalPages) logsPage = totalPages;
+        if (logsPage < 1) logsPage = 1;
+
+        renderPaginationUI(totalCount, logsPage, PAGE_SIZE, 'logs-total-cnt', 'logs-page-info', 'btn-logs-prev', 'btn-logs-next', 'logs-page-nums', 'setLogsPage');
+
+        if (totalCount === 0) {
             tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-sec); padding: 30px;">未发现匹配的拦截记录</td></tr>';
             return;
         }
 
+        const startIdx = (logsPage - 1) * PAGE_SIZE;
+        const endIdx = startIdx + PAGE_SIZE;
+        const pageList = filtered.slice(startIdx, endIdx);
+
         let html = '';
-        filtered.forEach(e => {
+        pageList.forEach(e => {
             const tagClass = (e.level === '极高危') ? 'danger' : (e.level === '高危' ? 'warning' : 'accent');
             const catName = CATEGORY_LABELS[e.category] || e.category || '服务探针';
+            const geoText = formatGeoCN(e);
             html += `
             <tr>
                 <td style="font-size:12px; color:var(--text-sec);">${e.attack_time}</td>
-                <td><span class="ip-text" onclick="copyIP('${e.ip}')" title="点击复制 IP">${e.ip}</span></td>
-                <td>🌐 ${e.country || '公网'} ${e.region || ''} <span style="color:var(--text-ter); font-size:11px;">${e.isp ? '· ' + e.isp : ''}</span></td>
+                <td><span class="ip-text" onclick="showIPDetail('${e.ip}')" title="点击查看 IP 详情">${e.ip}</span></td>
+                <td>${geoText}</td>
                 <td><span class="tag neutral">TCP / ${e.port}</span></td>
                 <td style="font-weight:600;">${e.port_name || '自定义诱饵'} <span class="tag accent" style="margin-left:4px;">${catName}</span></td>
                 <td><span class="tag ${tagClass}">${e.level || '高危'}</span></td>
@@ -1493,19 +1756,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    function changeBlacklistPage(delta) {
+        const total = allBlacklist ? allBlacklist.length : 0;
+        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        const target = blacklistPage + delta;
+        if (target >= 1 && target <= totalPages) {
+            blacklistPage = target;
+            renderBlacklistTable();
+        }
+    }
+    function setBlacklistPage(p) { blacklistPage = p; renderBlacklistTable(); }
+
     function renderBlacklistTable() {
         const tbody = document.getElementById('blacklist-tbody');
-        if (!allBlacklist || allBlacklist.length === 0) {
+        const list = allBlacklist || [];
+        const totalCount = list.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+        if (blacklistPage > totalPages) blacklistPage = totalPages;
+        if (blacklistPage < 1) blacklistPage = 1;
+
+        renderPaginationUI(totalCount, blacklistPage, PAGE_SIZE, 'blacklist-total-cnt', 'blacklist-page-info', 'btn-blacklist-prev', 'btn-blacklist-next', 'blacklist-page-nums', 'setBlacklistPage');
+
+        if (totalCount === 0) {
             tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 24px;">当前内核黑名单池为空</td></tr>';
             return;
         }
+
+        const startIdx = (blacklistPage - 1) * PAGE_SIZE;
+        const endIdx = startIdx + PAGE_SIZE;
+        const pageList = list.slice(startIdx, endIdx);
+
         let html = '';
-        allBlacklist.forEach(b => {
+        pageList.forEach(b => {
+            const geoText = formatGeoCN(b);
             html += `
             <tr>
-                <td><span class="ip-text" onclick="copyIP('${b.ip}')">${b.ip}</span></td>
+                <td><span class="ip-text" onclick="showIPDetail('${b.ip}')" title="点击查看 IP 详情">${b.ip}</span></td>
                 <td>${b.reason || '自动诱捕阻断'}</td>
-                <td>🌐 ${b.country || '公网'}</td>
+                <td>${geoText}</td>
                 <td><span class="tag danger">iptables + blackhole</span></td>
                 <td style="font-size:12px; color:var(--text-sec);">${b.ban_time}</td>
                 <td>
@@ -1517,14 +1805,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    function changeTrapsPage(delta) {
+        const total = allTraps ? allTraps.length : 0;
+        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        const target = trapsPage + delta;
+        if (target >= 1 && target <= totalPages) {
+            trapsPage = target;
+            renderTrapsTable();
+        }
+    }
+    function setTrapsPage(p) { trapsPage = p; renderTrapsTable(); }
+
     function renderTrapsTable() {
         const tbody = document.getElementById('traps-tbody');
-        if (!allTraps || allTraps.length === 0) {
+        const list = allTraps || [];
+        const totalCount = list.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+        if (trapsPage > totalPages) trapsPage = totalPages;
+        if (trapsPage < 1) trapsPage = 1;
+
+        renderPaginationUI(totalCount, trapsPage, PAGE_SIZE, 'traps-total-cnt', 'traps-page-info', 'btn-traps-prev', 'btn-traps-next', 'traps-page-nums', 'setTrapsPage');
+
+        if (totalCount === 0) {
             tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px;">暂无诱捕端口</td></tr>';
             return;
         }
+
+        const startIdx = (trapsPage - 1) * PAGE_SIZE;
+        const endIdx = startIdx + PAGE_SIZE;
+        const pageList = list.slice(startIdx, endIdx);
+
         let html = '';
-        allTraps.forEach(t => {
+        pageList.forEach(t => {
             const isEnabled = (t.enabled === true || t.strategy === 'accept' || t.strategy === 'enabled' || t.strategy === '启用');
             const statusTag = isEnabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
             const btnText = isEnabled ? '停用' : '启用';
@@ -1556,17 +1868,43 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    function changeWhitelistPage(delta) {
+        const total = allWhitelist ? allWhitelist.length : 0;
+        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+        const target = whitelistPage + delta;
+        if (target >= 1 && target <= totalPages) {
+            whitelistPage = target;
+            renderWhitelistTable();
+        }
+    }
+    function setWhitelistPage(p) { whitelistPage = p; renderWhitelistTable(); }
+
     function renderWhitelistTable() {
         const tbody = document.getElementById('whitelist-tbody');
-        if (!allWhitelist || allWhitelist.length === 0) {
+        const list = allWhitelist || [];
+        const totalCount = list.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+        if (whitelistPage > totalPages) whitelistPage = totalPages;
+        if (whitelistPage < 1) whitelistPage = 1;
+
+        renderPaginationUI(totalCount, whitelistPage, PAGE_SIZE, 'whitelist-total-cnt', 'whitelist-page-info', 'btn-whitelist-prev', 'btn-whitelist-next', 'whitelist-page-nums', 'setWhitelistPage');
+
+        if (totalCount === 0) {
             tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:24px;">暂无信任 IP</td></tr>';
             return;
         }
+
+        const startIdx = (whitelistPage - 1) * PAGE_SIZE;
+        const endIdx = startIdx + PAGE_SIZE;
+        const pageList = list.slice(startIdx, endIdx);
+
         let html = '';
-        allWhitelist.forEach(w => {
+        pageList.forEach(w => {
             html += `
             <tr>
-                <td style="font-family:monospace; font-weight:700; color:var(--success); font-size:13px;">${w.ip}</td>
+                <td style="font-family:monospace; font-weight:700; color:var(--success); font-size:13px;">
+                    <span class="ip-text" onclick="showIPDetail('${w.ip}')" title="点击查看 IP 详情">${w.ip}</span>
+                </td>
                 <td style="font-weight:600;">${w.remark || '无备注'}</td>
                 <td>
                     <button class="action-btn danger" onclick="deleteWhitelist('${w.ip}')">删除白名单</button>
@@ -1647,46 +1985,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function renderAccessLogsTable() {
         const tbody = document.getElementById('access-logs-tbody');
         const activeLogs = (currentAccessLogMode === 'port') ? allPortLogs : allWebLogs;
-        const totalLogs = activeLogs ? activeLogs.length : 0;
-        const totalCntEl = document.getElementById('access-log-total-cnt');
-        if (totalCntEl) totalCntEl.innerText = totalLogs;
-
-        const totalPages = Math.max(1, Math.ceil(totalLogs / ACCESS_LOG_PAGE_SIZE));
+        const list = activeLogs || [];
+        const totalCount = list.length;
+        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
         if (accessLogPage > totalPages) accessLogPage = totalPages;
         if (accessLogPage < 1) accessLogPage = 1;
 
-        const pageInfoEl = document.getElementById('access-log-page-info');
-        if (pageInfoEl) pageInfoEl.innerText = `${accessLogPage} / ${totalPages}`;
-        
-        const prevBtn = document.getElementById('btn-access-prev');
-        const nextBtn = document.getElementById('btn-access-next');
-        if (prevBtn) prevBtn.disabled = (accessLogPage <= 1);
-        if (nextBtn) nextBtn.disabled = (accessLogPage >= totalPages);
+        renderPaginationUI(totalCount, accessLogPage, PAGE_SIZE, 'access-log-total-cnt', 'access-log-page-info', 'btn-access-prev', 'btn-access-next', 'access-log-page-nums', 'setAccessLogPage');
 
-        const pageNumsEl = document.getElementById('access-log-page-nums');
-        if (pageNumsEl) {
-            let pageNumHtml = '';
-            for (let p = Math.max(1, accessLogPage - 2); p <= Math.min(totalPages, accessLogPage + 2); p++) {
-                const activeClass = (p === accessLogPage) ? 'accent' : '';
-                pageNumHtml += `<button class="pill-btn ${activeClass}" onclick="setAccessLogPage(${p})" style="padding: 4px 10px; font-size: 11px; font-weight: 700; ${p === accessLogPage ? 'background: var(--accent); color: #fff;' : ''}">${p}</button>`;
-            }
-            pageNumsEl.innerHTML = pageNumHtml;
-        }
-
-        if (!activeLogs || activeLogs.length === 0) {
+        if (totalCount === 0) {
             const emptyColspan = (currentAccessLogMode === 'port') ? 6 : 7;
             tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">暂无${currentAccessLogMode === 'port' ? '端口网络访问' : 'Web控制台访问'}记录</td></tr>`;
             return;
         }
 
-        const startIdx = (accessLogPage - 1) * ACCESS_LOG_PAGE_SIZE;
-        const endIdx = startIdx + ACCESS_LOG_PAGE_SIZE;
-        const pageLogs = activeLogs.slice(startIdx, endIdx);
+        const startIdx = (accessLogPage - 1) * PAGE_SIZE;
+        const endIdx = startIdx + PAGE_SIZE;
+        const pageLogs = list.slice(startIdx, endIdx);
 
         let html = '';
         if (currentAccessLogMode === 'port') {
             pageLogs.forEach(l => {
-                const geoText = l.country ? `${l.country} ${l.region || ''} ${l.isp ? '· ' + l.isp : ''}`.trim() : '公网探测';
+                const geoText = formatGeoCN(l);
                 let actionTag = '<span class="tag danger" style="font-weight:700;">🚫 诱捕阻断</span>';
                 if (l.action === 'WHITELIST' || l.action === '放行') {
                     actionTag = '<span class="tag success" style="font-weight:700;">🛡️ 信任放行</span>';
@@ -1698,7 +2018,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="copyIP('${l.ip}')">${l.ip}</span></td>
+                    <td><span class="ip-text" onclick="showIPDetail('${l.ip}')" title="点击查看 IP 详情">${l.ip}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
                     <td><b style="color:var(--text); font-size:12px;">${l.port_name || '网络连接'}</b></td>
@@ -1715,12 +2035,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 } else if (l.status_code >= 500) {
                     statusTag = `<span class="tag danger" style="font-weight:700;">${l.status_code}</span>`;
                 }
-                const geoText = l.country ? `${l.country} ${l.region || ''} ${l.isp ? '· ' + l.isp : ''}`.trim() : '内部网络 / 本地';
+                const geoText = formatGeoCN(l);
                 const uaShort = (l.user_agent || 'Unknown').slice(0, 48);
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="copyIP('${l.ip}')">${l.ip}</span></td>
+                    <td><span class="ip-text" onclick="showIPDetail('${l.ip}')" title="点击查看 IP 详情">${l.ip}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td>${methodTag}</td>
                     <td><code style="background:var(--card-sec); padding:3px 6px; border-radius:6px; font-size:12px; font-weight:600;">${l.path}</code></td>

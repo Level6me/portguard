@@ -383,15 +383,34 @@ def ip_in_whitelist(ip, whitelist_items):
             return True
     return False
 
+GEO_COUNTRY_CN = {
+    "United States": "美国", "United Kingdom": "英国", "Germany": "德国", "France": "法国",
+    "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
+    "Canada": "加拿大", "Australia": "澳大利亚", "Brazil": "巴西", "India": "印度",
+    "Singapore": "新加坡", "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Netherlands": "荷兰",
+    "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
+    "Indonesia": "印度尼西亚", "Malaysia": "马来西亚", "Philippines": "菲律宾", "Turkey": "土耳其",
+    "Ukraine": "乌克兰", "Poland": "波兰", "Sweden": "瑞典", "Switzerland": "瑞士",
+    "South Africa": "南非", "Egypt": "埃及", "Mexico": "墨西哥", "Argentina": "阿根廷",
+    "Chile": "智利", "Colombia": "哥伦比亚", "Iran": "伊朗", "Israel": "以色列",
+    "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦"
+}
+
+def translate_country_cn(name):
+    if not name:
+        return "未知地域"
+    return GEO_COUNTRY_CN.get(name.strip(), name.strip())
+
 def resolve_ip_geo(ip):
     try:
-        url = f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp"
+        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
         req = urllib.request.Request(url, headers={"User-Agent": "PortsentryUI/2.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             if data.get("status") == "success":
+                c = translate_country_cn(data.get("country", ""))
                 return {
-                    "country": data.get("country", "未知国家"),
+                    "country": c,
                     "region": data.get("regionName", ""),
                     "city": data.get("city", ""),
                     "isp": data.get("isp", "")
