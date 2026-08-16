@@ -1033,6 +1033,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 </div>
 
+<!-- Modal: 编辑蜜罐诱饵策略 -->
+<div class="modal-overlay" id="modal-trap-edit">
+    <div class="modal-sheet">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑蜜罐诱饵策略</h3>
+        <input type="hidden" id="edit-trap-orig-port">
+        <div class="form-group">
+            <label class="form-label">端口号或端口范围 (例如 8088 或 1000-3000)</label>
+            <input type="text" class="form-control" id="edit-trap-port-val" placeholder="单个端口如 8088，或范围如 1000-3000">
+        </div>
+        <div class="form-group">
+            <label class="form-label">模拟服务说明</label>
+            <input type="text" class="form-control" id="edit-trap-name-val" placeholder="例如：测试管理后台">
+        </div>
+        <div class="form-group">
+            <label class="form-label">分类类型</label>
+            <select class="form-control" id="edit-trap-cat-val">
+                <option value="web">管理面板/Web</option>
+                <option value="rdp">远程控制/RDP</option>
+                <option value="db">数据库服务</option>
+                <option value="smb">文件共享/SMB</option>
+                <option value="ftp">FTP 服务</option>
+                <option value="telnet">Telnet 服务</option>
+                <option value="custom">自定义服务</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">威胁等级评定</label>
+            <select class="form-control" id="edit-trap-level-val">
+                <option value="极高危">极高危</option>
+                <option value="高危">高危</option>
+                <option value="中危">中危</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">诱捕开关状态</label>
+            <select class="form-control" id="edit-trap-enabled-val">
+                <option value="true">● 启用监听诱捕 (Accept)</option>
+                <option value="false">○ 停用监听 (Reject/Disabled)</option>
+            </select>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="submitEditTrap()">保存修改</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: 通用智能导入 (蜜罐策略 / 黑名单 / 白名单) -->
 <div class="modal-overlay" id="modal-import">
     <div class="modal-sheet" style="max-width: 580px;">
@@ -1476,16 +1523,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const desc = t.description || t.name || (t.protocol ? `${t.protocol.toUpperCase()}/${t.port}` : `TCP/${t.port}`);
             const proto = (t.protocol || 'tcp').toUpperCase();
             const level = t.level || '高危';
-            const portNum = parseInt(t.port) || t.port;
+            const portDisplay = String(t.port || (t.port_start === t.port_end ? t.port_start : `${t.port_start}-${t.port_end}`));
+            const safePortParam = portDisplay.replace(/'/g, "\\'");
             html += `
             <tr>
-                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portNum}</span></td>
+                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
                 <td><b style="color: var(--text);">${desc}</b></td>
                 <td><span class="tag accent">${catName}</span></td>
                 <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
                 <td>${statusTag}</td>
                 <td>
-                    <button class="action-btn ${btnClass}" onclick="toggleTrap(${portNum}, ${!isEnabled})">${btnText}</button>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="action-btn" onclick="openEditTrapModal('${safePortParam}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                        <button class="action-btn ${btnClass}" onclick="toggleTrap('${safePortParam}', ${!isEnabled})">${btnText}</button>
+                        <button class="action-btn danger" onclick="deleteTrap('${safePortParam}')" title="删除此策略">🗑️</button>
+                    </div>
                 </td>
             </tr>
             `;
@@ -1707,11 +1759,67 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     }
 
+    function openEditTrapModal(portStr) {
+        const item = allTraps.find(t => String(t.port) === String(portStr) || String(t.port_start) === String(portStr));
+        if (!item) return showToast('未找到该策略数据', '⚠️');
+        
+        document.getElementById('edit-trap-orig-port').value = portStr;
+        document.getElementById('edit-trap-port-val').value = item.port || portStr;
+        document.getElementById('edit-trap-name-val').value = item.description || item.name || '';
+        document.getElementById('edit-trap-cat-val').value = item.category || 'custom';
+        document.getElementById('edit-trap-level-val').value = item.level || '高危';
+        const isEnabled = (item.enabled === true || item.strategy === 'accept' || item.strategy === 'enabled' || item.strategy === '启用');
+        document.getElementById('edit-trap-enabled-val').value = isEnabled ? 'true' : 'false';
+        
+        document.getElementById('modal-trap-edit').style.display = 'flex';
+    }
+
+    function submitEditTrap() {
+        const orig_port = document.getElementById('edit-trap-orig-port').value.trim();
+        const port = document.getElementById('edit-trap-port-val').value.trim();
+        const name = document.getElementById('edit-trap-name-val').value.trim();
+        const category = document.getElementById('edit-trap-cat-val').value;
+        const level = document.getElementById('edit-trap-level-val').value;
+        const enabled = (document.getElementById('edit-trap-enabled-val').value === 'true');
+        
+        if (!port) return showToast('端口号或范围不能为空', '⚠️');
+
+        fetch('/api/traps/edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orig_port, port, name, category, level, enabled })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '策略已更新', '✓');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '更新失败', '❌');
+            }
+        });
+    }
+
+    function deleteTrap(port) {
+        if (!confirm(`确定要彻底删除诱饵策略 [${port}] 吗？`)) return;
+        fetch('/api/traps/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port: String(port) })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || `已删除端口策略 ${port}`, '🗑️');
+                fetchData(false);
+            } else {
+                showToast(res.msg || '删除失败', '❌');
+            }
+        });
+    }
+
     function toggleTrap(port, enabled) {
         fetch('/api/traps/toggle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port: port, enabled: enabled })
+            body: JSON.stringify({ port: String(port), enabled: enabled })
         }).then(res => res.json()).then(res => {
             showToast(res.msg || `端口 ${port} 状态已更新`, '⚙️');
             fetchData(false);
@@ -2357,6 +2465,64 @@ class RequestHandler(BaseHTTPRequestHandler):
                     save_config(cfg)
                     trap_instance.reload()
                 self._send_json({"success": True, "msg": f"已激活诱捕端口/策略: {port_key}"})
+                return
+
+            if path == "/api/traps/edit":
+                orig_port = str(req_data.get("orig_port", "")).strip()
+                new_port = str(req_data.get("port", "")).strip()
+                name = str(req_data.get("name", "")).strip()
+                level = req_data.get("level", "高危")
+                category = req_data.get("category", "custom")
+                enabled = bool(req_data.get("enabled", True))
+                
+                temp_item = {
+                    "port": new_port,
+                    "name": name,
+                    "description": name,
+                    "category": category,
+                    "level": level,
+                    "enabled": enabled,
+                    "strategy": "accept" if enabled else "reject"
+                }
+                norm_new = normalize_trap_item(temp_item)
+                if not norm_new:
+                    self._send_json({"success": False, "msg": "端口格式不合法，请输入单个端口 (1-65535) 或端口范围 (例如 1000-3000)"}, status=400)
+                    return
+                    
+                cfg = load_config()
+                traps = cfg.get("trap_ports", [])
+                normalized = []
+                found = False
+                for item in traps:
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        if str(norm.get("port")) == orig_port:
+                            normalized.append(norm_new)
+                            found = True
+                        else:
+                            normalized.append(norm)
+                if not found:
+                    normalized.append(norm_new)
+                    
+                cfg["trap_ports"] = normalized
+                save_config(cfg)
+                trap_instance.reload()
+                self._send_json({"success": True, "msg": f"蜜罐策略已更新: {norm_new['port']}"})
+                return
+
+            if path == "/api/traps/delete":
+                port_key = str(req_data.get("port", "")).strip()
+                cfg = load_config()
+                traps = cfg.get("trap_ports", [])
+                normalized = []
+                for item in traps:
+                    norm = normalize_trap_item(item)
+                    if norm and str(norm.get("port")) != port_key:
+                        normalized.append(norm)
+                cfg["trap_ports"] = normalized
+                save_config(cfg)
+                trap_instance.reload()
+                self._send_json({"success": True, "msg": f"已彻底删除蜜罐策略: {port_key}"})
                 return
 
             if path == "/api/traps/toggle":

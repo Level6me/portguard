@@ -437,9 +437,10 @@ def get_active_system_ports():
 
 class TrapServer:
     def __init__(self):
-        self.sockets = []
+        self.sockets = {}  # fd -> (socket, port)
         self.running = False
-        self.trap_map = {}
+        self.trap_map = {} # port -> item
+        self.epoll = None
         
     def start(self):
         self.running = True
@@ -447,13 +448,26 @@ class TrapServer:
         threading.Thread(target=self._loop, daemon=True).start()
         
     def reload(self):
-        for s, _ in self.sockets:
+        if self.epoll:
+            try:
+                self.epoll.close()
+            except Exception:
+                pass
+            self.epoll = None
+
+        for fd, (s, _) in list(self.sockets.items()):
             try:
                 s.close()
             except Exception:
                 pass
-        self.sockets = []
+        self.sockets = {}
         self.trap_map = {}
+        
+        try:
+            if hasattr(select, 'epoll'):
+                self.epoll = select.epoll()
+        except Exception:
+            self.epoll = None
         
         cfg = load_config()
         raw_trap_ports = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
@@ -465,7 +479,7 @@ class TrapServer:
             if norm:
                 normalized_traps.append(norm)
             
-        MAX_TOTAL_TRAP_SOCKETS = 8192
+        MAX_TOTAL_TRAP_SOCKETS = 30000
         total_bound = 0
 
         for item in normalized_traps:
@@ -481,9 +495,7 @@ class TrapServer:
 
             bound_count_for_item = 0
             for port in range(start_p, end_p + 1):
-                if port in active_ports:
-                    continue
-                if port in self.trap_map:
+                if port in active_ports or port in self.trap_map:
                     continue
                 if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
                     print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
@@ -494,7 +506,10 @@ class TrapServer:
                     s.bind(("0.0.0.0", port))
                     s.listen(64)
                     s.setblocking(False)
-                    self.sockets.append((s, port))
+                    fd = s.fileno()
+                    if self.epoll:
+                        self.epoll.register(fd, select.EPOLLIN)
+                    self.sockets[fd] = (s, port)
                     self.trap_map[port] = item
                     total_bound += 1
                     bound_count_for_item += 1
@@ -506,28 +521,46 @@ class TrapServer:
                 print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
 
     def _loop(self):
-        cfg = load_config()
         while self.running:
             try:
                 if not self.sockets:
                     time.sleep(1)
                     continue
-                rlist = [s for s, _ in self.sockets]
-                readable, _, _ = select.select(rlist, [], [], 1.0)
-                for s in readable:
-                    port = next((p for sock, p in self.sockets if sock == s), 0)
-                    try:
-                        client_sock, client_addr = s.accept()
-                        client_ip = client_addr[0]
-                        client_sock.close()
-                        
-                        port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "other", "level": "高危"})
-                        print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
-                        threading.Thread(target=ban_ip, args=(client_ip, port, port_info), daemon=True).start()
-                    except Exception:
-                        pass
+                
+                if self.epoll:
+                    events = self.epoll.poll(timeout=1.0)
+                    for fd, event in events:
+                        if (event & select.EPOLLIN) and (fd in self.sockets):
+                            s, port = self.sockets[fd]
+                            try:
+                                client_sock, client_addr = s.accept()
+                                client_ip = client_addr[0]
+                                client_sock.close()
+                                
+                                port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
+                                print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
+                                threading.Thread(target=ban_ip, args=(client_ip, port, port_info), daemon=True).start()
+                            except Exception:
+                                pass
+                else:
+                    # 回退到 select (仅在无 epoll 平台)
+                    sock_list = [s for s, _ in list(self.sockets.values())[:1000]]
+                    readable, _, _ = select.select(sock_list, [], [], 1.0)
+                    for s in readable:
+                        for fd, (sock_obj, port) in list(self.sockets.items()):
+                            if sock_obj == s:
+                                try:
+                                    client_sock, client_addr = s.accept()
+                                    client_ip = client_addr[0]
+                                    client_sock.close()
+                                    
+                                    port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
+                                    print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
+                                    threading.Thread(target=ban_ip, args=(client_ip, port, port_info), daemon=True).start()
+                                except Exception:
+                                    pass
             except Exception as e:
-                time.sleep(1)
+                time.sleep(0.5)
 
 trap_instance = TrapServer()
 
