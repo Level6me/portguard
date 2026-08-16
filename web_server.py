@@ -1167,8 +1167,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function switchTab(tabKey, btn) {
-        ['overview', 'logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
-            document.getElementById(`tab-${t}`).style.display = (t === tabKey) ? 'block' : 'none';
+        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
+            const el = document.getElementById(`tab-${t}`);
+            if (el) el.style.display = (t === tabKey) ? 'block' : 'none';
         });
         document.querySelectorAll('.dock-btn').forEach(b => b.classList.remove('active'));
         const targetBtn = btn || document.getElementById(`dock-btn-${tabKey}`);
