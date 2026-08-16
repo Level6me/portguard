@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install
 
 ---
 
-## ⚙️ 运维管理与一键卸载
+## ⚙️ 运维管理、一键平滑更新与卸载
 
 ### 常用运维命令
 ```bash
@@ -55,8 +55,20 @@ systemctl restart portsentry-ui.service
 systemctl stop portsentry-ui.service
 ```
 
+### 🔄 一键平滑热更新命令
+在终端执行以下命令，会自动拉取最新版本程序并平滑热重载，**100% 完整保留您现有的策略配置 (`config.json`) 和黑名单/事件数据库 (`data.db`)**：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.sh | bash
+```
+
+> **或者使用部署脚本的更新参数：**
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash -s -- update
+> ```
+
 ### 🗑️ 一键完全卸载命令
-在终端执行以下**一行命令**即可将 Portsentry 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
+在终端执行以下命令即可将 Portsentry 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash

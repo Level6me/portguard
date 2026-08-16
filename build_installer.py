@@ -12,9 +12,12 @@ with open(os.path.join(BASE_DIR, 'sentry_daemon.py'), 'rb') as f:
 with open(os.path.join(BASE_DIR, 'uninstall.sh'), 'rb') as f:
     uninstall_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+with open(os.path.join(BASE_DIR, 'update.sh'), 'rb') as f:
+    update_b64 = base64.b64encode(f.read()).decode('utf-8')
+
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
-# Portsentry Defense & Apple-Style WebUI - 独立自包含一行一键生产部署脚本
+# Portsentry Defense & Apple-Style WebUI - 独立自包含一行一键生产部署与更新脚本
 # 适用系统: Ubuntu 18+, Debian 10+, CentOS 7/8/9, RHEL, Alibaba Cloud Linux, Rocky
 # ==============================================================================
 
@@ -27,9 +30,22 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-echo -e "${CYAN}================================================================${NC}"
-echo -e "${GREEN}   🍯 Portsentry Apple-Style Honeypot & WebUI 一键极速部署    ${NC}"
-echo -e "${CYAN}================================================================${NC}"
+IS_UPDATE=false
+for arg in "$@"; do
+    if [[ "$arg" == "update" || "$arg" == "--update" || "$arg" == "-u" ]]; then
+        IS_UPDATE=true
+    fi
+done
+
+if [ "$IS_UPDATE" = true ]; then
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${GREEN}   🔄 Portsentry Apple-Style Honeypot & WebUI 一键平滑更新    ${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+else
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${GREEN}   🍯 Portsentry Apple-Style Honeypot & WebUI 一键极速部署    ${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+fi
 
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}[ERROR] 本脚本必须使用 root 权限执行！请使用 sudo bash install.sh${NC}" 
@@ -69,7 +85,11 @@ chmod 644 "${INSTALL_DIR}/sentry_daemon.py"
 echo "__UNINSTALL_B64__" | base64 -d > "${INSTALL_DIR}/uninstall.sh"
 chmod 755 "${INSTALL_DIR}/uninstall.sh"
 
-echo -e "${GREEN}[✓] 核心代码与卸载工具已成功解包并写入完毕！${NC}"
+# 释放 update.sh
+echo "__UPDATE_B64__" | base64 -d > "${INSTALL_DIR}/update.sh"
+chmod 755 "${INSTALL_DIR}/update.sh"
+
+echo -e "${GREEN}[✓] 核心代码、更新模块与卸载工具已成功解包并写入完毕！${NC}"
 
 echo -e "\n${BLUE}[3/5] 正在生成智能防误封白名单与诱饵策略...${NC}"
 CURRENT_SSH_IP=$(echo "${SSH_CLIENT:-}" | awk '{print $1}')
@@ -107,7 +127,7 @@ if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
 EOF
     echo -e "${GREEN}[✓] 已自动将当前运维 IP (${CURRENT_SSH_IP}) 加入防误封白名单！${NC}"
 else
-    echo -e "${YELLOW}[!] 检测到已存在配置文件，保留现有配置。${NC}"
+    echo -e "${YELLOW}[!] 检测到已存在配置文件，保留现有配置 (不覆盖用户策略)。${NC}"
 fi
 
 echo -e "\n${BLUE}[4/5] 正在注册并启动 Systemd 守护进程...${NC}"
@@ -138,7 +158,11 @@ sleep 2
 
 echo -e "\n${BLUE}[5/5] 正在核验服务运行状态...${NC}"
 if systemctl is-active --quiet portsentry-ui.service; then
-    echo -e "${GREEN}[✓] Portsentry-UI 服务已成功启动且运行正常！${NC}"
+    if [ "$IS_UPDATE" = true ]; then
+        echo -e "${GREEN}[✓] Portsentry-UI 服务已成功平滑更新且运行正常！${NC}"
+    else
+        echo -e "${GREEN}[✓] Portsentry-UI 服务已成功启动且运行正常！${NC}"
+    fi
 else
     echo -e "${RED}[ERROR] 服务启动异常，请使用 journalctl -u portsentry-ui.service -n 20 查看错误日志。${NC}"
     exit 1
@@ -147,7 +171,11 @@ fi
 PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "YOUR_SERVER_IP")
 
 echo -e "\n${CYAN}================================================================${NC}"
-echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台部署成功！${NC}"
+if [ "$IS_UPDATE" = true ]; then
+    echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台更新完成！${NC}"
+else
+    echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台部署成功！${NC}"
+fi
 echo -e "${CYAN}================================================================${NC}"
 echo -e "🌐 Web 控制台访问入口: ${YELLOW}http://${PUBLIC_IP}:9099${NC}"
 echo -e "📁 安装运行目录:       ${BLUE}${INSTALL_DIR}${NC}"
@@ -158,11 +186,12 @@ echo -e "💡 常用维护命令:"
 echo -e "  查看服务状态: ${CYAN}systemctl status portsentry-ui.service${NC}"
 echo -e "  重启防御服务: ${CYAN}systemctl restart portsentry-ui.service${NC}"
 echo -e "  查看拦截日志: ${CYAN}journalctl -u portsentry-ui.service -f${NC}"
+echo -e "  一键平滑更新: ${GREEN}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.sh | bash${NC}"
 echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash${NC}"
 echo -e "${CYAN}================================================================${NC}\n"
 '''
 
-final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64).replace("__UNINSTALL_B64__", uninstall_b64)
+final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64).replace("__UNINSTALL_B64__", uninstall_b64).replace("__UPDATE_B64__", update_b64)
 
 with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)

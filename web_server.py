@@ -1326,19 +1326,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         let html = '';
         allTraps.forEach(t => {
-            const statusTag = t.enabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
-            const btnText = t.enabled ? '停用' : '启用';
-            const btnClass = t.enabled ? 'danger' : 'success';
-            const catName = CATEGORY_LABELS[t.category] || t.category || '服务探针';
+            const isEnabled = (t.enabled === true || t.strategy === 'accept' || t.strategy === 'enabled' || t.strategy === '启用');
+            const statusTag = isEnabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
+            const btnText = isEnabled ? '停用' : '启用';
+            const btnClass = isEnabled ? 'danger' : 'success';
+            const cat = t.category || 'custom';
+            const catName = CATEGORY_LABELS[cat] || cat || '服务探针';
+            const desc = t.description || t.name || (t.protocol ? `${t.protocol.toUpperCase()}/${t.port}` : `TCP/${t.port}`);
+            const proto = (t.protocol || 'tcp').toUpperCase();
+            const level = t.level || '高危';
+            const portNum = parseInt(t.port) || t.port;
             html += `
             <tr>
-                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${t.port}</span></td>
-                <td><b>${t.name}</b></td>
+                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portNum}</span></td>
+                <td><b style="color: var(--text);">${desc}</b></td>
                 <td><span class="tag accent">${catName}</span></td>
-                <td><span class="tag ${t.level === '极高危' ? 'danger' : 'warning'}">${t.level || '高危'}</span></td>
+                <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
                 <td>${statusTag}</td>
                 <td>
-                    <button class="action-btn ${btnClass}" onclick="toggleTrap(${t.port}, ${!t.enabled})">${btnText}</button>
+                    <button class="action-btn ${btnClass}" onclick="toggleTrap(${portNum}, ${!isEnabled})">${btnText}</button>
                 </td>
             </tr>
             `;
@@ -1774,7 +1780,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(rows)
                 return
 
-            if path in ("/api/traps", "/api/traps/export"):
+            if path == "/api/traps":
+                cfg = load_config()
+                raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
+                normalized = []
+                for item in raw_traps:
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        normalized.append(norm)
+                self._send_json(normalized)
+                return
+
+            if path == "/api/traps/export":
                 cfg = load_config()
                 raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
                 export_list = []
