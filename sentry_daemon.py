@@ -772,15 +772,30 @@ class GlobalPortSniffer:
             try:
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())
-                geo = resolve_ip_geo(src_ip)
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
                 INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-                VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (src_ip, dst_port, desc, geo.get("country", "公网节点"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), action, now_str, now_ts))
+                VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', ?, ?, ?)
+                """, (src_ip, dst_port, desc, action, now_str, now_ts))
+                new_id = c.lastrowid
                 conn.commit()
                 conn.close()
+                
+                # 异步解析地理位置
+                def _geo_backfill(record_id, ip_addr):
+                    try:
+                        g = resolve_ip_geo(ip_addr)
+                        c2 = get_db()
+                        cur = c2.cursor()
+                        cur.execute("""
+                        UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
+                        """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), record_id))
+                        c2.commit()
+                        c2.close()
+                    except Exception:
+                        pass
+                threading.Thread(target=_geo_backfill, args=(new_id, src_ip), daemon=True).start()
             except Exception:
                 pass
                 
