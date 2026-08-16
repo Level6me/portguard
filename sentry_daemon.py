@@ -692,42 +692,59 @@ class GlobalPortSniffer:
                 pass
 
     def _sniffer_loop(self):
+        sock = None
+        use_packet_layer = False
         try:
-            # 建立 RAW TCP 监听套接字 (Linux root 权限)
-            self.raw_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-        except Exception as e:
-            print(f"[Sniffer] 无法开启底层全局端口嗅探 (可能非 root 环境或无 RAW 权限): {e}")
-            return
-            
-        print("[Sniffer] 全局端口连接嗅探引擎已就绪 (实时捕获全服务器 1-65535 端口入站连接)...")
+            # 优先采用 Linux 链路层 AF_PACKET 套接字 (捕获全网卡、Docker 转发与全部 TCP 会话)
+            ETH_P_IP = 0x0800
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+            use_packet_layer = True
+            print("[Sniffer] AF_PACKET 链路层全端口嗅探引擎已激活 (100% 捕获全网卡入站连接与服务通信)...")
+        except Exception:
+            try:
+                # 降级方案: AF_INET RAW 套接字
+                sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+                print("[Sniffer] IPPROTO_TCP 原始套接字嗅探引擎已激活...")
+            except Exception as e:
+                print(f"[Sniffer] 无法开启底层网络嗅探 (可能非 root 环境或无 RAW 权限): {e}")
+                return
+                
+        self.raw_sock = sock
         while self.running:
             try:
                 raw_data, _ = self.raw_sock.recvfrom(65535)
-                if len(raw_data) < 40:
-                    continue
-                v_ihl = raw_data[0]
-                ihl = (v_ihl & 0x0F) * 4
-                if len(raw_data) < ihl + 20:
-                    continue
-                src_ip = socket.inet_ntoa(raw_data[12:16])
-                
-                # 过滤本机发出的包或出站连接
-                if src_ip in self.local_ips or src_ip.startswith("127.") or src_ip == "0.0.0.0":
+                # 解析以太网头 (14 字节) 或 IP 头
+                offset = 14 if use_packet_layer else 0
+                if len(raw_data) < offset + 20:
                     continue
                     
-                tcp_hdr = raw_data[ihl:ihl+20]
-                src_port, dst_port, seq, ack, offset_flags = struct.unpack("!HHLLH", tcp_hdr[:14])
-                flags = offset_flags & 0x01FF
-                is_syn = (flags & 0x02) != 0
-                is_ack = (flags & 0x10) != 0
+                ip_hdr = raw_data[offset:offset+20]
+                proto = ip_hdr[9]
+                if proto != 6: # 仅处理 TCP
+                    continue
+                    
+                v_ihl = ip_hdr[0]
+                ihl = (v_ihl & 0x0F) * 4
+                if len(raw_data) < offset + ihl + 20:
+                    continue
+                    
+                src_ip = socket.inet_ntoa(ip_hdr[12:16])
+                dst_ip = socket.inet_ntoa(ip_hdr[16:20])
                 
-                # 只捕获 TCP 连接发起阶段的 SYN 握手包 (SYN=1, ACK=0)
-                if not (is_syn and not is_ack):
+                # 过滤本机发出的包、环回流量以及私有 Docker 内部流量
+                if src_ip in self.local_ips or src_ip.startswith("127.") or src_ip == "0.0.0.0" or src_ip.startswith("172.17.") or src_ip.startswith("172.18."):
+                    continue
+                    
+                tcp_hdr = raw_data[offset+ihl:offset+ihl+20]
+                src_port, dst_port = struct.unpack("!HH", tcp_hdr[:4])
+                
+                # 过滤本机发起的外网请求返回包 (如外部 80/443/53 等响应)
+                if src_port in (80, 443, 53, 123, 853) and dst_port > 1024 and dst_port not in (15633, 40123, 9099, 29675, 8088, 9090):
                     continue
                     
                 now_ts = time.time()
                 cache_key = (src_ip, dst_port)
-                # 3秒内相同 IP + 端口去重防抖
+                # 3秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)
                 if cache_key in self._recent_cache:
                     if now_ts - self._recent_cache[cache_key] < 3.0:
                         continue
