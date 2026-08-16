@@ -52,6 +52,110 @@ DEFAULT_CONFIG = {
 
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
 
+def normalize_trap_item(item):
+    if isinstance(item, int):
+        matched = next((x for x in DEFAULT_CONFIG["trap_ports"] if x["port"] == item), None)
+        if matched:
+            return normalize_trap_item(matched)
+        return {
+            "family": "ipv4",
+            "address": "",
+            "port": item,
+            "protocol": "tcp",
+            "strategy": "accept",
+            "description": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"),
+            "name": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"),
+            "enabled": True,
+            "level": "高危",
+            "category": "custom"
+        }
+    
+    if not isinstance(item, dict):
+        return None
+    
+    # 提取端口 (支持 port / prot / dst_port)
+    raw_port = item.get("port", item.get("prot", item.get("dst_port")))
+    if raw_port is None or str(raw_port).strip() == "":
+        return None
+    try:
+        port = int(str(raw_port).strip())
+        if port < 1 or port > 65535:
+            return None
+    except Exception:
+        return None
+        
+    # 提取协议 (protocol / proto)
+    protocol = str(item.get("protocol", item.get("proto", "tcp"))).strip().lower()
+    if protocol not in ("tcp", "udp"):
+        protocol = "tcp"
+        
+    # 提取策略与开关 (strategy / enabled / status)
+    raw_strat = item.get("strategy", item.get("enabled", item.get("status", "accept")))
+    if isinstance(raw_strat, bool):
+        enabled = raw_strat
+    elif isinstance(raw_strat, str):
+        s_lower = raw_strat.strip().lower()
+        if s_lower in ("accept", "enabled", "enable", "open", "true", "启用", "允许", "1"):
+            enabled = True
+        elif s_lower in ("reject", "drop", "disabled", "disable", "close", "false", "停用", "禁止", "0"):
+            enabled = False
+        else:
+            enabled = True
+    else:
+        enabled = bool(raw_strat)
+        
+    strategy = "accept" if enabled else "reject"
+    
+    # 提取描述 (description / desc / name / remark)
+    desc = item.get("description", item.get("desc", item.get("name", item.get("remark", ""))))
+    if not desc:
+        desc = PORT_DESCRIPTIONS.get(port, f"{protocol.upper()}/{port}")
+    desc = str(desc).strip()
+    
+    # 类别判定
+    cat = item.get("category", "")
+    if not cat:
+        if port in (80, 443, 8080, 8888, 8000, 8848, 8088):
+            cat = "web"
+        elif port in (3389, 5900, 5901, 22):
+            cat = "rdp"
+        elif port in (1433, 3306, 6379, 27017, 5432, 9200):
+            cat = "db"
+        elif port in (445, 135, 139):
+            cat = "smb"
+        elif port in (21, 20):
+            cat = "ftp"
+        elif port in (23,):
+            cat = "telnet"
+        else:
+            cat = "custom"
+            
+    # 威胁等级判定
+    level = item.get("level", "")
+    if not level:
+        if port in (445, 3389, 6379, 1433):
+            level = "极高危"
+        elif port in (139, 8888, 8080):
+            level = "中危"
+        else:
+            level = "高危"
+            
+    family = item.get("family", "ipv4")
+    address = item.get("address", "")
+    
+    return {
+        "family": family,
+        "address": address,
+        "port": port,
+        "protocol": protocol,
+        "strategy": strategy,
+        "description": desc,
+        "name": desc,
+        "enabled": enabled,
+        "level": level,
+        "category": cat
+    }
+
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -278,9 +382,9 @@ class TrapServer:
         
         normalized_traps = []
         for item in raw_trap_ports:
-            if isinstance(item, int):
-                item = {"port": item, "name": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"), "enabled": True, "level": "高危", "category": "custom"}
-            normalized_traps.append(item)
+            norm = normalize_trap_item(item)
+            if norm:
+                normalized_traps.append(norm)
             
         for item in normalized_traps:
             if not item.get("enabled", True):

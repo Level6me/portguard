@@ -9,9 +9,57 @@ import json
 import time
 import sqlite3
 import subprocess
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS
+from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item
+
+def parse_loose_json_or_lines(text):
+    text = (text or "").strip()
+    if not text:
+        return []
+    # 1. 尝试直接标准 JSON 解析
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for k in ("data", "items", "traps", "blacklist", "whitelist", "rules", "list"):
+                if k in data and isinstance(data[k], list):
+                    return data[k]
+            return [data]
+    except Exception:
+        pass
+    
+    # 2. 修复常见手输 JSON 瑕疵 (如末尾多余逗号 ,] 或 ,} 以及注释)
+    cleaned = text
+    cleaned = re.sub(r'//.*', '', cleaned)
+    cleaned = re.sub(r'/\*[\s\S]*?\*/', '', cleaned)
+    cleaned = re.sub(r',\s*([\]\}])', r'\1', cleaned)
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for k in ("data", "items", "traps", "blacklist", "whitelist", "rules", "list"):
+                if k in data and isinstance(data[k], list):
+                    return data[k]
+            return [data]
+    except Exception:
+        pass
+
+    # 3. 逐行提取（针对纯文本 IP / 规则行模式）
+    results = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or line.startswith('//'):
+            continue
+        try:
+            line_obj = json.loads(re.sub(r',\s*$', '', line))
+            results.append(line_obj)
+        except Exception:
+            results.append(line)
+    return results
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
@@ -708,6 +756,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
                 </div>
                 <div class="header-action-wrap">
+                    <button class="pill-btn" onclick="openImportModal('blacklist')">
+                        <span>📥</span>
+                        <span>导入黑名单</span>
+                    </button>
+                    <button class="pill-btn" onclick="exportBlacklistJSON()">
+                        <span>📤</span>
+                        <span>导出 JSON</span>
+                    </button>
                     <button class="pill-btn danger" onclick="openManualBanModal()">
                         <span>➕</span>
                         <span>手动拉黑 IP</span>
@@ -745,6 +801,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub">模拟高危服务静默监听，一旦连入即自动封禁</div>
                 </div>
                 <div class="header-action-wrap">
+                    <button class="pill-btn" onclick="openImportModal('traps')">
+                        <span>📥</span>
+                        <span>导入策略 (JSON)</span>
+                    </button>
+                    <button class="pill-btn" onclick="exportTrapsJSON()">
+                        <span>📤</span>
+                        <span>导出策略 (JSON)</span>
+                    </button>
                     <button class="pill-btn accent" onclick="openAddTrapModal()">
                         <span>➕</span>
                         <span>添加自定义诱饵</span>
@@ -782,6 +846,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub">白名单内的 IP 永不触发任何封禁拦截机制</div>
                 </div>
                 <div class="header-action-wrap">
+                    <button class="pill-btn" onclick="openImportModal('whitelist')">
+                        <span>📥</span>
+                        <span>导入白名单</span>
+                    </button>
+                    <button class="pill-btn" onclick="exportWhitelistJSON()">
+                        <span>📤</span>
+                        <span>导出 JSON</span>
+                    </button>
                     <button class="pill-btn accent" onclick="openAddWhiteModal()">
                         <span>➕</span>
                         <span>添加信任 IP</span>
@@ -903,6 +975,54 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
             <button class="pill-btn accent" onclick="submitAddTrap()">激活诱饵</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 通用智能导入 (蜜罐策略 / 黑名单 / 白名单) -->
+<div class="modal-overlay" id="modal-import">
+    <div class="modal-sheet" style="max-width: 580px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="font-size: 16px; font-weight: 700;" id="import-modal-title">📥 智能导入</h3>
+            <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+        
+        <div class="form-group" id="import-format-tip" style="background: var(--card-sec); border-radius: 10px; padding: 10px 12px; font-size: 12px; color: var(--text-sec); margin-bottom: 12px; border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 700; color: var(--text); margin-bottom: 4px;">📌 导入说明与格式规范：</div>
+            <div id="import-tip-content" style="line-height: 1.5;"></div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" style="display: flex; justify-content: space-between;">
+                <span>选择本地文件 (.json / .txt)</span>
+                <span id="import-file-name" style="color: var(--accent); font-weight: 600;"></span>
+            </label>
+            <input type="file" id="import-file-input" accept=".json,.txt" class="form-control" onchange="handleImportFileSelect(event)" style="padding: 6px 10px;">
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" style="display: flex; justify-content: space-between;">
+                <span>或直接在此粘贴内容 (JSON / 文本列表)</span>
+                <a href="javascript:void(0)" onclick="insertImportTemplate()" id="btn-insert-sample" style="color: var(--accent); font-size: 12px; text-decoration: none; font-weight: 600;">填入格式示例</a>
+            </label>
+            <textarea class="form-control" id="import-text-val" rows="7" placeholder="在此粘贴 JSON 数组或文本数据..." style="font-family: monospace; font-size: 12px; line-height: 1.4;"></textarea>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">导入模式</label>
+            <div style="display: flex; gap: 16px; margin-top: 6px;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; font-weight: 600;">
+                    <input type="radio" name="import-mode" value="append" checked> 增量合并 (保留现有并更新)
+                </label>
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; font-weight: 600; color: var(--danger);">
+                    <input type="radio" name="import-mode" value="replace"> 全量覆盖 (清空现有并重设)
+                </label>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="submitUniversalImport()" id="btn-submit-import">🚀 确认导入</button>
         </div>
     </div>
 </div>
@@ -1341,6 +1461,181 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     }
 
+    let currentImportType = 'traps';
+
+    function openImportModal(type) {
+        currentImportType = type;
+        const modal = document.getElementById('modal-import');
+        const titleEl = document.getElementById('import-modal-title');
+        const tipEl = document.getElementById('import-tip-content');
+        const fileInput = document.getElementById('import-file-input');
+        const textVal = document.getElementById('import-text-val');
+        const fileName = document.getElementById('import-file-name');
+
+        fileInput.value = '';
+        textVal.value = '';
+        fileName.innerText = '';
+
+        if (type === 'traps') {
+            titleEl.innerText = '🍯 智能导入蜜罐策略';
+            tipEl.innerHTML = `
+                支持导入标准 JSON 策略数组，<b>向下兼容以下手输格式</b>：<br>
+                <code>[{"family":"ipv4","address":"","port":"80","protocol":"tcp","strategy":"accept","description":"网页"}]</code><br>
+                • <code>port/prot</code>: 诱饵端口号 (1-65535)<br>
+                • <code>protocol</code>: 协议 (tcp/udp)<br>
+                • <code>strategy</code>: 开关状态 (accept/enabled/启用 ➔ 启用; reject/disabled/停用 ➔ 停用)<br>
+                • <code>description/desc</code>: 模拟服务说明描述 (如 "网页", "FTP")<br>
+                <i>系统会自动容错清洗末尾多余逗号 (<code>, ]</code>) 与宽松语法！</i>
+            `;
+            textVal.placeholder = `粘贴蜜罐策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "80",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "网页"\n  }\n]`;
+        } else if (type === 'blacklist') {
+            titleEl.innerText = '🚫 批量导入内核黑名单';
+            tipEl.innerHTML = `
+                支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
+                • JSON 格式: <code>[{"ip": "1.2.3.4", "reason": "嗅探扫描", "level": "极高危"}]</code><br>
+                • 文本格式: 每行一个 IP 地址（例如 <code>1.2.3.4 恶意扫描</code> 或纯 <code>1.2.3.4</code>）<br>
+                导入后系统将自动下发内核 iptables DROP 规则与路由黑洞！
+            `;
+            textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 恶意暴力破解\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "reason": "嗅探扫描"}]`;
+        } else if (type === 'whitelist') {
+            titleEl.innerText = '🛡️ 批量导入安全信任白名单';
+            tipEl.innerHTML = `
+                支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
+                • JSON 格式: <code>[{"ip": "111.183.103.75", "remark": "办公室运维"}]</code><br>
+                • 文本格式: 每行一个 IP / 网段（例如 <code>192.168.1.0/24 局域网</code> 或 <code>111.183.103.75</code>）<br>
+                白名单内的 IP 永不触发任何诱捕封禁机制！
+            `;
+            textVal.placeholder = `粘贴白名单 IP 列表或 JSON 数组，例如：\n111.183.103.75 办公室固定IP\n192.168.1.0/24 局域网网段\n\n或 JSON 格式：\n[{"ip": "111.183.103.75", "remark": "办公室运维"}]`;
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    function insertImportTemplate() {
+        const textVal = document.getElementById('import-text-val');
+        if (currentImportType === 'traps') {
+            textVal.value = JSON.stringify([
+                {
+                    "family": "ipv4",
+                    "address": "",
+                    "port": "80",
+                    "protocol": "tcp",
+                    "strategy": "accept",
+                    "description": "网页"
+                },
+                {
+                    "family": "ipv4",
+                    "address": "",
+                    "port": "21",
+                    "protocol": "tcp",
+                    "strategy": "accept",
+                    "description": "FTP 暴力破解诱饵"
+                },
+                {
+                    "family": "ipv4",
+                    "address": "",
+                    "port": "3389",
+                    "protocol": "tcp",
+                    "strategy": "accept",
+                    "description": "RDP 远程桌面探针"
+                },
+                {
+                    "family": "ipv4",
+                    "address": "",
+                    "port": "8888",
+                    "protocol": "tcp",
+                    "strategy": "reject",
+                    "description": "宝塔控制台探针(已停用)"
+                }
+            ], null, 2);
+        } else if (currentImportType === 'blacklist') {
+            textVal.value = JSON.stringify([
+                { "ip": "198.51.100.1", "reason": "SSH 暴力破解源", "level": "极高危" },
+                { "ip": "203.0.113.5", "reason": "全端口自动化扫描器", "level": "高危" }
+            ], null, 2);
+        } else if (currentImportType === 'whitelist') {
+            textVal.value = JSON.stringify([
+                { "ip": "192.168.1.0/24", "remark": "局域网管理网段" },
+                { "ip": "111.183.103.75", "remark": "运维固定公网 IP" }
+            ], null, 2);
+        }
+        showToast('已填入标准格式示例', '📝');
+    }
+
+    function handleImportFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        document.getElementById('import-file-name').innerText = file.name;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            document.getElementById('import-text-val').value = e.target.result;
+            showToast(`已加载文件: ${file.name}`, '📂');
+        };
+        reader.readAsText(file);
+    }
+
+    function submitUniversalImport() {
+        const textVal = document.getElementById('import-text-val').value.trim();
+        if (!textVal) return showToast('请先选择文件或粘贴导入内容', '⚠️');
+
+        const modeRadio = document.querySelector('input[name="import-mode"]:checked');
+        const mode = modeRadio ? modeRadio.value : 'append';
+
+        const btn = document.getElementById('btn-submit-import');
+        btn.disabled = true;
+        btn.innerText = '正在导入中...';
+
+        fetch(`/api/${currentImportType}/import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: textVal, mode: mode })
+        }).then(res => res.json()).then(res => {
+            btn.disabled = false;
+            btn.innerText = '🚀 确认导入';
+            if (res.success) {
+                showToast(res.msg || '导入成功！', '🎉');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '导入失败，请检查格式', '❌');
+            }
+        }).catch(err => {
+            btn.disabled = false;
+            btn.innerText = '🚀 确认导入';
+            showToast('请求发生网络异常: ' + err, '❌');
+        });
+    }
+
+    function exportTrapsJSON() {
+        fetch('/api/traps/export').then(res => res.json()).then(data => {
+            downloadJSONFile(data, `portsentry_traps_strategy_${new Date().toISOString().slice(0,10)}.json`);
+            showToast('蜜罐策略 JSON 已开始导出', '📤');
+        }).catch(() => showToast('导出策略失败', '❌'));
+    }
+
+    function exportBlacklistJSON() {
+        fetch('/api/blacklist/export').then(res => res.json()).then(data => {
+            downloadJSONFile(data, `portsentry_blacklist_${new Date().toISOString().slice(0,10)}.json`);
+            showToast('黑名单 JSON 已开始导出', '📤');
+        }).catch(() => showToast('导出黑名单失败', '❌'));
+    }
+
+    function exportWhitelistJSON() {
+        fetch('/api/whitelist/export').then(res => res.json()).then(data => {
+            downloadJSONFile(data, `portsentry_whitelist_${new Date().toISOString().slice(0,10)}.json`);
+            showToast('白名单 JSON 已开始导出', '📤');
+        }).catch(() => showToast('导出白名单失败', '❌'));
+    }
+
+    function downloadJSONFile(dataObj, fileName) {
+        const jsonStr = JSON.stringify(dataObj, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName;
+        link.click();
+    }
+
     function exportLogsCSV() {
         if (!allEvents || allEvents.length === 0) return showToast('当前暂无日志可导出', '⚠️');
         let csv = '\uFEFF攻击拦截时间,攻击者IP,国家,地区,ISP运营商,探测端口,服务名称,威胁等级,防护状态\n';
@@ -1479,22 +1774,25 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(rows)
                 return
 
-            if path == "/api/traps":
+            if path in ("/api/traps", "/api/traps/export"):
                 cfg = load_config()
                 raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
-                normalized = []
+                export_list = []
                 for item in raw_traps:
-                    if isinstance(item, int):
-                        matched = next((x for x in DEFAULT_CONFIG["trap_ports"] if x["port"] == item), None)
-                        if matched:
-                            item = matched
-                        else:
-                            item = {"port": item, "name": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"), "enabled": True, "level": "高危", "category": "custom"}
-                    normalized.append(item)
-                self._send_json(normalized)
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        export_list.append({
+                            "family": norm.get("family", "ipv4"),
+                            "address": norm.get("address", ""),
+                            "port": str(norm.get("port")),
+                            "protocol": norm.get("protocol", "tcp"),
+                            "strategy": norm.get("strategy", "accept"),
+                            "description": norm.get("description", norm.get("name", ""))
+                        })
+                self._send_json(export_list)
                 return
 
-            if path == "/api/whitelist":
+            if path in ("/api/whitelist", "/api/whitelist/export"):
                 cfg = load_config()
                 raw_white = cfg.get("whitelist", DEFAULT_CONFIG["whitelist"])
                 normalized = []
@@ -1503,6 +1801,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                         item = {"ip": item, "remark": "信任IP"}
                     normalized.append(item)
                 self._send_json(normalized)
+                return
+
+            if path in ("/api/blacklist/export",):
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist ORDER BY timestamp DESC")
+                rows = [dict(r) for r in c.fetchall()]
+                conn.close()
+                self._send_json(rows)
                 return
 
             self._send_json({"error": "Not Found"}, status=404)
@@ -1570,6 +1877,73 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}"})
                 return
 
+            if path == "/api/blacklist/import":
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+                    
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的 IP 数据"}, status=400)
+                    return
+                    
+                conn = get_db()
+                c = conn.cursor()
+                
+                if mode == "replace":
+                    c.execute("SELECT ip FROM blacklist")
+                    for (old_ip,) in c.fetchall():
+                        subprocess.run(f"iptables -D INPUT -s {old_ip} -j DROP 2>/dev/null || true", shell=True)
+                        subprocess.run(f"ip route del blackhole {old_ip}/32 2>/dev/null || true", shell=True)
+                    c.execute("DELETE FROM blacklist")
+                    conn.commit()
+                    
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                
+                success_count = 0
+                for item in parsed_items:
+                    if isinstance(item, dict):
+                        ip = str(item.get("ip", "")).strip()
+                        reason = str(item.get("reason", "批量导入拉黑")).strip()
+                        country = str(item.get("country", "手动导入")).strip()
+                        level = str(item.get("level", "极高危")).strip()
+                        ban_time = str(item.get("ban_time", now_str)).strip()
+                    elif isinstance(item, str):
+                        parts = item.strip().split(maxsplit=1)
+                        ip = parts[0].strip() if parts else ""
+                        reason = parts[1].strip() if len(parts) > 1 else "批量导入拉黑"
+                        country = "手动导入"
+                        level = "极高危"
+                        ban_time = now_str
+                    else:
+                        continue
+                        
+                    if not ip or len(ip) < 7:
+                        continue
+                        
+                    subprocess.run(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null || true", shell=True)
+                    subprocess.run(f"ip route add blackhole {ip}/32 2>/dev/null || true", shell=True)
+                    
+                    c.execute("""
+                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, (ip, reason, country, level, ban_time, now_ts))
+                    success_count += 1
+                    
+                subprocess.run("iptables-save > /etc/sysconfig/iptables 2>/dev/null || true", shell=True)
+                conn.commit()
+                conn.close()
+                
+                self._send_json({"success": True, "msg": f"黑名单导入成功！共写入 {success_count} 个拦截目标", "count": success_count})
+                return
+
             if path == "/api/whitelist/add":
                 ip = req_data.get("ip", "").strip()
                 remark = req_data.get("remark", "信任IP").strip()
@@ -1593,6 +1967,64 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已移除白名单: {ip}"})
                 return
 
+            if path == "/api/whitelist/import":
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+                    
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的白名单数据"}, status=400)
+                    return
+                    
+                cfg = load_config()
+                existing_list = cfg.get("whitelist", DEFAULT_CONFIG["whitelist"])
+                current_map = {}
+                if mode == "append":
+                    for item in existing_list:
+                        if isinstance(item, str):
+                            current_map[item] = {"ip": item, "remark": "信任IP"}
+                        elif isinstance(item, dict) and item.get("ip"):
+                            current_map[item["ip"]] = item
+                            
+                success_count = 0
+                for item in parsed_items:
+                    if isinstance(item, dict):
+                        ip = str(item.get("ip", "")).strip()
+                        remark = str(item.get("remark", "导入信任IP")).strip()
+                    elif isinstance(item, str):
+                        parts = item.strip().split(maxsplit=1)
+                        ip = parts[0].strip() if parts else ""
+                        remark = parts[1].strip() if len(parts) > 1 else "导入信任IP"
+                    else:
+                        continue
+                        
+                    if not ip:
+                        continue
+                        
+                    current_map[ip] = {"ip": ip, "remark": remark}
+                    success_count += 1
+                    
+                if success_count == 0:
+                    self._send_json({"success": False, "msg": "未能提取到有效的 IP 白名单项"}, status=400)
+                    return
+                    
+                cfg["whitelist"] = list(current_map.values())
+                save_config(cfg)
+                self._send_json({
+                    "success": True,
+                    "msg": f"信任白名单导入成功！共载入 {success_count} 条规则 (当前总计 {len(current_map)} 条)",
+                    "count": success_count,
+                    "total": len(current_map)
+                })
+                return
+
             if path == "/api/traps/add":
                 port = req_data.get("port")
                 name = req_data.get("name", f"TCP/{port}")
@@ -1605,15 +2037,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 traps = cfg.get("trap_ports", [])
                 normalized = []
                 for item in traps:
-                    if isinstance(item, int):
-                        matched = next((x for x in DEFAULT_CONFIG["trap_ports"] if x["port"] == item), None)
-                        if matched:
-                            item = matched
-                        else:
-                            item = {"port": item, "name": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"), "enabled": True, "level": "高危", "category": "custom"}
-                    normalized.append(item)
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        normalized.append(norm)
                 if not any(t.get("port") == port for t in normalized):
-                    normalized.append({"port": port, "name": name, "category": category, "enabled": True, "level": level})
+                    normalized.append({
+                        "family": "ipv4",
+                        "address": "",
+                        "port": port,
+                        "protocol": "tcp",
+                        "strategy": "accept",
+                        "description": name,
+                        "name": name,
+                        "category": category,
+                        "enabled": True,
+                        "level": level
+                    })
                     cfg["trap_ports"] = normalized
                     save_config(cfg)
                     trap_instance.reload()
@@ -1627,20 +2066,64 @@ class RequestHandler(BaseHTTPRequestHandler):
                 traps = cfg.get("trap_ports", [])
                 normalized = []
                 for item in traps:
-                    if isinstance(item, int):
-                        matched = next((x for x in DEFAULT_CONFIG["trap_ports"] if x["port"] == item), None)
-                        if matched:
-                            item = matched
-                        else:
-                            item = {"port": item, "name": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"), "enabled": True, "level": "高危", "category": "custom"}
-                    normalized.append(item)
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        normalized.append(norm)
                 for t in normalized:
                     if t.get("port") == port:
                         t["enabled"] = enabled
+                        t["strategy"] = "accept" if enabled else "reject"
                 cfg["trap_ports"] = normalized
                 save_config(cfg)
                 trap_instance.reload()
                 self._send_json({"success": True, "msg": f"已更新端口 {port} 状态"})
+                return
+
+            if path == "/api/traps/import":
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+                    
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的蜜罐策略数据，请检查格式"}, status=400)
+                    return
+                    
+                cfg = load_config()
+                existing_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
+                current_map = {}
+                if mode == "append":
+                    for item in existing_traps:
+                        norm = normalize_trap_item(item)
+                        if norm:
+                            current_map[norm["port"]] = norm
+                            
+                success_count = 0
+                for item in parsed_items:
+                    norm = normalize_trap_item(item)
+                    if norm:
+                        current_map[norm["port"]] = norm
+                        success_count += 1
+                        
+                if success_count == 0:
+                    self._send_json({"success": False, "msg": "未能提取到任何合法端口策略（端口号必须为 1-65535）"}, status=400)
+                    return
+                    
+                cfg["trap_ports"] = list(current_map.values())
+                save_config(cfg)
+                trap_instance.reload()
+                self._send_json({
+                    "success": True,
+                    "msg": f"蜜罐策略导入成功！共载入 {success_count} 条策略 (当前总计 {len(current_map)} 条)",
+                    "count": success_count,
+                    "total": len(current_map)
+                })
                 return
 
             self._send_json({"error": "Not Found"}, status=404)

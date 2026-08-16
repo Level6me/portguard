@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import base64
 import os
+import base64
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-with open('/home/ubuntu/antigravity-feishu-bot/portsentry_ui/web_server.py', 'rb') as f:
+with open(os.path.join(BASE_DIR, 'web_server.py'), 'rb') as f:
     web_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-with open('/home/ubuntu/antigravity-feishu-bot/portsentry_ui/sentry_daemon.py', 'rb') as f:
+with open(os.path.join(BASE_DIR, 'sentry_daemon.py'), 'rb') as f:
     daemon_b64 = base64.b64encode(f.read()).decode('utf-8')
 
 template = r'''#!/usr/bin/env bash
@@ -155,7 +156,7 @@ echo -e "${CYAN}================================================================
 
 final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64)
 
-with open('/home/ubuntu/antigravity-feishu-bot/portsentry_ui/install.sh', 'w', encoding='utf-8') as f:
+with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)
 
 print('SUCCESS')
