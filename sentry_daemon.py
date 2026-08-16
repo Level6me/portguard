@@ -265,8 +265,24 @@ def init_db():
         timestamp INTEGER NOT NULL
     )
     """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_time ON access_logs(timestamp)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_ip ON access_logs(ip)")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS port_access_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        proto TEXT DEFAULT 'TCP',
+        port_name TEXT,
+        country TEXT,
+        region TEXT,
+        city TEXT,
+        isp TEXT,
+        action TEXT DEFAULT 'INTERCEPTED',
+        access_time TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_time ON port_access_logs(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_ip ON port_access_logs(ip)")
     
     # 自动列自适应补充（迁移旧库）
     try:
@@ -300,6 +316,27 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
         INSERT INTO access_logs (ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, '', '', '', ?, ?)
         """, (ip, method, path, status_code, (user_agent or "")[:200], geo_country, now_str, now_ts))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTED", geo=None):
+    try:
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        now_ts = int(time.time())
+        geo = geo or {}
+        country = geo.get("country", "公网探测" if ip not in ("127.0.0.1", "::1", "localhost") else "本地测试")
+        region = geo.get("region", "")
+        city = geo.get("city", "")
+        isp = geo.get("isp", "")
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+        VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ip, port, port_name, country, region, city, isp, action, now_str, now_ts))
         conn.commit()
         conn.close()
     except Exception:
@@ -372,6 +409,7 @@ def ban_ip(ip, port, port_info):
     whitelist = cfg.get("whitelist", [])
     if ip_in_whitelist(ip, whitelist):
         print(f"[WHITELIST] 忽略安全白名单 IP: {ip} 探测端口 {port}")
+        log_port_access_entry(ip, port, port_info.get("name", f"TCP/{port}"), action="WHITELIST")
         return
         
     # 2. 毫秒级优先执行内核防火墙阻断与黑洞路由
@@ -386,7 +424,7 @@ def ban_ip(ip, port, port_info):
     category = port_info.get("category", "other")
     level = port_info.get("level", "高危")
 
-    # 3. 写入事件与黑名单库
+    # 3. 写入事件与黑名单库与端口访问日志
     conn = get_db()
     c = conn.cursor()
     c.execute("""
@@ -395,6 +433,12 @@ def ban_ip(ip, port, port_info):
     """, (ip, port, port_name, category, level, now_str, now_ts))
     event_id = c.lastrowid
     
+    c.execute("""
+    INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+    VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'INTERCEPTED', ?, ?)
+    """, (ip, port, port_name, now_str, now_ts))
+    port_log_id = c.lastrowid
+
     c.execute("""
     INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp)
     VALUES (?, ?, '分析中...', ?, ?, ?)
@@ -411,6 +455,9 @@ def ban_ip(ip, port, port_info):
             cur.execute("""
             UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?
             """, (geo["country"], geo["region"], geo["city"], geo["isp"], event_id))
+            cur.execute("""
+            UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
+            """, (geo["country"], geo["region"], geo["city"], geo["isp"], port_log_id))
             cur.execute("""
             UPDATE blacklist SET country=? WHERE ip=?
             """, (geo["country"], ip))
