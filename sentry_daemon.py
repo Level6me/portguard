@@ -766,10 +766,10 @@ class GlobalPortSniffer:
     def _sniffer_loop(self):
         sock = None
         try:
-            # 优先采用 Linux 链路层 AF_PACKET 套接字 (捕获全网卡、Docker 转发与全部 TCP 会话)
-            ETH_P_IP = 0x0800
-            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
-            print("[Sniffer] AF_PACKET 链路层全端口嗅探引擎已激活 (100% 捕获全网卡入站连接与服务通信)...")
+            # 优先采用 Linux 链路层 AF_PACKET 套接字 ETH_P_ALL (捕获全网卡 TCP + UDP 与 Docker 转发流量)
+            ETH_P_ALL = 0x0003
+            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+            print("[Sniffer] AF_PACKET 链路层全协议(TCP+UDP)全端口嗅探引擎已激活...")
         except Exception:
             try:
                 # 降级方案: AF_INET RAW 套接字
@@ -795,13 +795,14 @@ class GlobalPortSniffer:
                     continue
                     
                 ip_hdr = raw_data[offset:offset+20]
-                proto = ip_hdr[9]
-                if proto != 6: # 仅处理 TCP
+                proto_num = ip_hdr[9]
+                if proto_num not in (6, 17): # 处理 TCP(6) 与 UDP(17)
                     continue
+                proto_str = "TCP" if proto_num == 6 else "UDP"
                     
                 v_ihl = ip_hdr[0]
                 ihl = (v_ihl & 0x0F) * 4
-                if len(raw_data) < offset + ihl + 20:
+                if len(raw_data) < offset + ihl + 4:
                     continue
                     
                 src_ip = socket.inet_ntoa(ip_hdr[12:16])
@@ -811,15 +812,15 @@ class GlobalPortSniffer:
                 if src_ip in self.local_ips or src_ip.startswith("127.") or src_ip == "0.0.0.0" or src_ip.startswith("172.17.") or src_ip.startswith("172.18."):
                     continue
                     
-                tcp_hdr = raw_data[offset+ihl:offset+ihl+20]
-                src_port, dst_port = struct.unpack("!HH", tcp_hdr[:4])
+                l4_hdr = raw_data[offset+ihl:offset+ihl+4]
+                src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
                 
                 # 过滤外网公共响应包 (目的端口必须有效)
                 if dst_port <= 0:
                     continue
                     
                 now_ts = time.time()
-                cache_key = (src_ip, dst_port)
+                cache_key = (src_ip, dst_port, proto_str)
                 # 2秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)
                 if cache_key in self._recent_cache:
                     if now_ts - self._recent_cache[cache_key] < 2.0:
@@ -832,11 +833,11 @@ class GlobalPortSniffer:
                     self._recent_cache = {k: v for k, v in self._recent_cache.items() if v > cutoff}
                     
                 # 异步记录此端口连接事件
-                self._handle_port_access(src_ip, dst_port)
+                self._handle_port_access(src_ip, dst_port, proto=proto_str)
             except Exception:
                 pass
 
-    def _handle_port_access(self, src_ip, dst_port):
+    def _handle_port_access(self, src_ip, dst_port, proto="TCP"):
         cfg = load_config()
         whitelist = cfg.get("whitelist", [])
         active_ports_map = get_active_system_ports()
@@ -869,8 +870,8 @@ class GlobalPortSniffer:
                 c = conn.cursor()
                 c.execute("""
                 INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-                VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', ?, ?, ?)
-                """, (src_ip, dst_port, desc, action, now_str, now_ts))
+                VALUES (?, ?, ?, ?, '分析中...', '', '', '', ?, ?, ?)
+                """, (src_ip, dst_port, proto, desc, action, now_str, now_ts))
                 new_id = c.lastrowid
                 conn.commit()
                 conn.close()
