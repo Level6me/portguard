@@ -487,7 +487,15 @@ def ban_ip(ip, port, port_info):
 
     threading.Thread(target=_async_geo, daemon=True).start()
 
+_SYSTEM_PORTS_CACHE = {}
+_SYSTEM_PORTS_CACHE_TIME = 0
+
 def get_active_system_ports():
+    global _SYSTEM_PORTS_CACHE, _SYSTEM_PORTS_CACHE_TIME
+    now = time.time()
+    if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 10.0):
+        return _SYSTEM_PORTS_CACHE
+
     ports_map = {9099: "Portsentry Web控制台"}
     try:
         cfg = load_config()
@@ -519,6 +527,8 @@ def get_active_system_ports():
                     ports_map[port] = proc_name
     except Exception:
         pass
+    _SYSTEM_PORTS_CACHE = ports_map
+    _SYSTEM_PORTS_CACHE_TIME = now
     return ports_map
 
 class TrapServer:
@@ -693,12 +703,10 @@ class GlobalPortSniffer:
 
     def _sniffer_loop(self):
         sock = None
-        use_packet_layer = False
         try:
             # 优先采用 Linux 链路层 AF_PACKET 套接字 (捕获全网卡、Docker 转发与全部 TCP 会话)
             ETH_P_IP = 0x0800
             sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
-            use_packet_layer = True
             print("[Sniffer] AF_PACKET 链路层全端口嗅探引擎已激活 (100% 捕获全网卡入站连接与服务通信)...")
         except Exception:
             try:
@@ -713,9 +721,15 @@ class GlobalPortSniffer:
         while self.running:
             try:
                 raw_data, _ = self.raw_sock.recvfrom(65535)
-                # 解析以太网头 (14 字节) 或 IP 头
-                offset = 14 if use_packet_layer else 0
-                if len(raw_data) < offset + 20:
+                # 自适应探测 IP 报文头起始偏移 (适配 14字节以太网帧、16字节SLL头或 0字节RAW)
+                offset = 0
+                if len(raw_data) >= 34 and ((raw_data[14] >> 4) == 4):
+                    offset = 14
+                elif len(raw_data) >= 36 and ((raw_data[16] >> 4) == 4):
+                    offset = 16
+                elif len(raw_data) >= 20 and ((raw_data[0] >> 4) == 4):
+                    offset = 0
+                else:
                     continue
                     
                 ip_hdr = raw_data[offset:offset+20]
@@ -738,15 +752,15 @@ class GlobalPortSniffer:
                 tcp_hdr = raw_data[offset+ihl:offset+ihl+20]
                 src_port, dst_port = struct.unpack("!HH", tcp_hdr[:4])
                 
-                # 过滤本机发起的外网请求返回包 (如外部 80/443/53 等响应)
-                if src_port in (80, 443, 53, 123, 853) and dst_port > 1024 and dst_port not in (15633, 40123, 9099, 29675, 8088, 9090):
+                # 过滤外网公共响应包 (目的端口必须有效)
+                if dst_port <= 0:
                     continue
                     
                 now_ts = time.time()
                 cache_key = (src_ip, dst_port)
-                # 3秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)
+                # 2秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)
                 if cache_key in self._recent_cache:
-                    if now_ts - self._recent_cache[cache_key] < 3.0:
+                    if now_ts - self._recent_cache[cache_key] < 2.0:
                         continue
                 self._recent_cache[cache_key] = now_ts
                 
