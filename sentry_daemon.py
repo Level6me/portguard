@@ -15,8 +15,13 @@ import json
 import urllib.request
 import re
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = "/opt/portsentry-ui/data.db"
 CONFIG_PATH = "/opt/portsentry-ui/config.json"
+
+if not os.path.exists("/opt/portsentry-ui") and not os.access("/opt", os.W_OK):
+    DB_PATH = os.path.join(BASE_DIR, "data.db")
+    CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 DEFAULT_CONFIG = {
     "trap_ports": [
@@ -197,7 +202,9 @@ def get_db():
     return conn
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    dir_name = os.path.dirname(DB_PATH)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
@@ -241,6 +248,25 @@ def init_db():
         create_time TEXT
     )
     """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS access_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER DEFAULT 200,
+        user_agent TEXT,
+        country TEXT,
+        region TEXT,
+        city TEXT,
+        isp TEXT,
+        access_time TEXT NOT NULL,
+        timestamp INTEGER NOT NULL
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_time ON access_logs(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_ip ON access_logs(ip)")
     
     # 自动列自适应补充（迁移旧库）
     try:
@@ -263,9 +289,27 @@ def init_db():
     conn.commit()
     conn.close()
 
+def log_access_entry(ip, method, path, status_code=200, user_agent=""):
+    try:
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        now_ts = int(time.time())
+        geo_country = "本地访问" if ip in ("127.0.0.1", "::1", "localhost") else "公网访问"
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO access_logs (ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, '', '', '', ?, ?)
+        """, (ip, method, path, status_code, (user_agent or "")[:200], geo_country, now_str, now_ts))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
 def load_config():
+    dir_name = os.path.dirname(CONFIG_PATH)
+    if dir_name and not os.path.exists(dir_name):
+        os.makedirs(dir_name, exist_ok=True)
     if not os.path.exists(CONFIG_PATH):
-        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
         return DEFAULT_CONFIG

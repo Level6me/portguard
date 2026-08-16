@@ -12,7 +12,7 @@ import subprocess
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item
+from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry
 
 def parse_loose_json_or_lines(text):
     text = (text or "").strip()
@@ -878,6 +878,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="bottom-spacer"></div>
     </div>
+
+    <!-- Page 6: 访问日志 (Access Logs) -->
+    <div id="tab-access-logs" style="display: none;">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">📑 访问与控制台审计日志</div>
+                    <div class="val-sub">实时记录 Web 控制台接口调用、鉴权请求与放行流量审计</div>
+                </div>
+                <div class="header-action-wrap">
+                    <button class="pill-btn" onclick="exportAccessLogsCSV()">
+                        <span>📥</span>
+                        <span>导出 CSV</span>
+                    </button>
+                    <button class="pill-btn danger" onclick="clearAccessLogs()">
+                        <span>🗑️</span>
+                        <span>清空日志</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>访问时间</th>
+                            <th>客户端 IP</th>
+                            <th>归属地域 / 运营商</th>
+                            <th>请求方法</th>
+                            <th>请求路径 (URI)</th>
+                            <th>状态码</th>
+                            <th>客户端设备 (User-Agent)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="access-logs-tbody">
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入访问日志...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="bottom-spacer"></div>
+    </div>
 </div>
 
 <!-- Floating Glass Dock (Abit 经典底栏) -->
@@ -887,8 +929,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span>态势概览</span>
     </button>
     <button class="dock-btn" id="dock-btn-logs" onclick="switchTab('logs', this)">
-        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
         <span>拦截日志</span>
+    </button>
+    <button class="dock-btn" id="dock-btn-access-logs" onclick="switchTab('access-logs', this)">
+        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+        <span>访问日志</span>
     </button>
     <button class="dock-btn" id="dock-btn-blacklist" onclick="switchTab('blacklist', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1c1.06 1.35 1.69 3.05 1.69 4.9 0 4.42-3.58 8-8 8z"/></svg>
@@ -1029,6 +1075,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <script>
     let allEvents = [];
+    let allAccessLogs = [];
     let allBlacklist = [];
     let allWhitelist = [];
     let allTraps = [];
@@ -1039,6 +1086,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     const PAGE_TITLES = {
         'overview': '安全态势概览',
         'logs': '蜜罐拦截日志',
+        'access-logs': '访问与控制台审计日志',
         'blacklist': '内核黑名单池',
         'traps': '蜜罐策略配置',
         'whitelist': '安全信任白名单'
@@ -1193,6 +1241,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         fetch('/api/whitelist').then(res => res.json()).then(data => {
             allWhitelist = data;
             renderWhitelistTable();
+        });
+
+        fetch('/api/access_logs').then(res => res.json()).then(data => {
+            allAccessLogs = data;
+            renderAccessLogsTable();
         });
     }
 
@@ -1371,6 +1424,62 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             `;
         });
         tbody.innerHTML = html;
+    }
+
+    function renderAccessLogsTable() {
+        const tbody = document.getElementById('access-logs-tbody');
+        if (!allAccessLogs || allAccessLogs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-sec);">暂无系统访问记录</td></tr>';
+            return;
+        }
+        let html = '';
+        allAccessLogs.forEach(l => {
+            const methodTag = l.method === 'POST' ? '<span class="tag warning" style="font-weight:700;">POST</span>' : '<span class="tag accent" style="font-weight:700;">GET</span>';
+            let statusTag = '<span class="tag success" style="font-weight:700;">200 OK</span>';
+            if (l.status_code >= 400 && l.status_code < 500) {
+                statusTag = `<span class="tag warning" style="font-weight:700;">${l.status_code}</span>`;
+            } else if (l.status_code >= 500) {
+                statusTag = `<span class="tag danger" style="font-weight:700;">${l.status_code}</span>`;
+            }
+            const geoText = l.country ? `${l.country} ${l.region || ''} ${l.isp ? '· ' + l.isp : ''}`.trim() : '内部网络 / 本地';
+            const uaShort = (l.user_agent || 'Unknown').slice(0, 48);
+            html += `
+            <tr>
+                <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
+                <td><span class="ip-text" onclick="copyIP('${l.ip}')">${l.ip}</span></td>
+                <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
+                <td>${methodTag}</td>
+                <td><code style="background:var(--card-sec); padding:3px 6px; border-radius:6px; font-size:12px; font-weight:600;">${l.path}</code></td>
+                <td>${statusTag}</td>
+                <td><span style="font-size:11px; color:var(--text-sec);" title="${l.user_agent || ''}">${uaShort}</span></td>
+            </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+    }
+
+    function exportAccessLogsCSV() {
+        if (!allAccessLogs || allAccessLogs.length === 0) return showToast('暂无访问日志可导出', '⚠️');
+        let csv = '\uFEFF访问时间,客户端IP,国家/地区,网络运营商,请求方式,请求路径,响应状态码,客户端UserAgent\n';
+        allAccessLogs.forEach(l => {
+            csv += `"${l.access_time}","${l.ip}","${l.country || ''} ${l.region || ''}","${l.isp || ''}","${l.method}","${l.path}","${l.status_code}","${(l.user_agent || '').replace(/"/g, '""')}"\n`;
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `portsentry_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
+        link.click();
+        showToast('已开始下载访问审计报表 CSV', '📥');
+    }
+
+    function clearAccessLogs() {
+        if (!confirm('确定要清空全部历史访问日志吗？此操作不可恢复。')) return;
+        fetch('/api/access_logs/clear', {
+            method: 'POST'
+        }).then(res => res.json()).then(res => {
+            showToast(res.msg || '访问日志已清空', '🗑️');
+            fetchData(false);
+        });
     }
 
     function filterLogs(cat, btn) {
@@ -1698,6 +1807,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
+            client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
+            user_agent = self.headers.get('User-Agent', '')
+            log_access_entry(client_ip, "GET", path, 200, user_agent)
 
             if path in ("/", "/index.html"):
                 self._send_html(HTML_TEMPLATE)
@@ -1834,6 +1946,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(rows)
                 return
 
+            if path == "/api/access_logs":
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT 200")
+                rows = [dict(r) for r in c.fetchall()]
+                conn.close()
+                self._send_json(rows)
+                return
+
             self._send_json({"error": "Not Found"}, status=404)
         except Exception as e:
             self._send_json({"error": str(e)}, status=500)
@@ -1842,12 +1963,25 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
+            client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
+            user_agent = self.headers.get('User-Agent', '')
+            log_access_entry(client_ip, "POST", path, 200, user_agent)
+
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
             try:
                 req_data = json.loads(body)
             except Exception:
                 req_data = {}
+
+            if path == "/api/access_logs/clear":
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("DELETE FROM access_logs")
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": "访问日志已全部清空"})
+                return
 
             if path == "/api/unban":
                 ip = req_data.get("ip", "").strip()
