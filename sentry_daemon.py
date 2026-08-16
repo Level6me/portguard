@@ -485,6 +485,7 @@ class TrapServer:
                 normalized_traps.append(norm)
             
         MAX_TOTAL_TRAP_SOCKETS = 30000
+        total_bound = 0
         web_port = 9099
         try:
             web_port = int(cfg.get("web_port", 9099))
