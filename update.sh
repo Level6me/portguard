@@ -34,9 +34,9 @@ echo -e "\n${BLUE}[1/4] 正在拉取最新核心程序代码...${NC}"
 TMP_UPDATE_DIR=$(mktemp -d /tmp/portsentry_update_XXXXXX)
 cd "$TMP_UPDATE_DIR"
 
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/main/web_server.py?t=$(date +%s)" -o web_server.py
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/main/sentry_daemon.py?t=$(date +%s)" -o sentry_daemon.py
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh?t=$(date +%s)" -o uninstall.sh
+curl -H "Cache-Control: no-cache" -H "Pragma: no-cache" -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/web_server.py -o web_server.py
+curl -H "Cache-Control: no-cache" -H "Pragma: no-cache" -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/sentry_daemon.py -o sentry_daemon.py
+curl -H "Cache-Control: no-cache" -H "Pragma: no-cache" -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh -o uninstall.sh
 
 if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！${NC}"
