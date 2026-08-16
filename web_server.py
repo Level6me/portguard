@@ -1233,6 +1233,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 
 <script>
+    const PAGE_SIZE = 50;
+    let logsPage = 1;
+    let blacklistPage = 1;
+    let trapsPage = 1;
+    let whitelistPage = 1;
+    let accessLogPage = 1;
+
+    const COUNTRY_CN_MAP = {
+        "United States": "美国", "United Kingdom": "英国", "Germany": "德国", "France": "法国",
+        "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
+        "Canada": "加拿大", "Australia": "澳大利亚", "Brazil": "巴西", "India": "印度",
+        "Singapore": "新加坡", "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Netherlands": "荷兰",
+        "The Netherlands": "荷兰", "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
+        "Indonesia": "印度尼西亚", "Malaysia": "马来西亚", "Philippines": "菲律宾", "Turkey": "土耳其",
+        "Ukraine": "乌克兰", "Poland": "波兰", "Sweden": "瑞典", "Switzerland": "瑞士",
+        "South Africa": "南非", "Egypt": "埃及", "Mexico": "墨西哥", "Argentina": "阿根廷",
+        "Chile": "智利", "Colombia": "哥伦比亚", "Iran": "伊朗", "Israel": "以色列",
+        "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦"
+    };
+
+    function formatGeoCN(item) {
+        if (!item) return '公网节点';
+        let country = item.country || '';
+        country = COUNTRY_CN_MAP[country] || country || '公网节点';
+        let region = item.region || item.city || '';
+        if (region && !country.includes(region)) {
+            return `🌐 ${country} · ${region}`;
+        }
+        return `🌐 ${country}`;
+    }
+
     let allEvents = [];
     let allPortLogs = [];
     let allWebLogs = [];
@@ -1515,37 +1546,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             `;
         });
         box.innerHTML = html;
-    }
-
-    const PAGE_SIZE = 50;
-    let logsPage = 1;
-    let blacklistPage = 1;
-    let trapsPage = 1;
-    let whitelistPage = 1;
-    let accessLogPage = 1;
-
-    const COUNTRY_CN_MAP = {
-        "United States": "美国", "United Kingdom": "英国", "Germany": "德国", "France": "法国",
-        "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
-        "Canada": "加拿大", "Australia": "澳大利亚", "Brazil": "巴西", "India": "印度",
-        "Singapore": "新加坡", "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Netherlands": "荷兰",
-        "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
-        "Indonesia": "印度尼西亚", "Malaysia": "马来西亚", "Philippines": "菲律宾", "Turkey": "土耳其",
-        "Ukraine": "乌克兰", "Poland": "波兰", "Sweden": "瑞典", "Switzerland": "瑞士",
-        "South Africa": "南非", "Egypt": "埃及", "Mexico": "墨西哥", "Argentina": "阿根廷",
-        "Chile": "智利", "Colombia": "哥伦比亚", "Iran": "伊朗", "Israel": "以色列",
-        "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦"
-    };
-
-    function formatGeoCN(item) {
-        if (!item) return '公网节点';
-        let country = item.country || '';
-        country = COUNTRY_CN_MAP[country] || country || '公网节点';
-        let region = item.region || item.city || '';
-        if (region && !country.includes(region)) {
-            return `🌐 ${country} · ${region}`;
-        }
-        return `🌐 ${country}`;
     }
 
     let currentDetailIP = '';
@@ -1915,12 +1915,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
-    let accessLogPage = 1;
-    const ACCESS_LOG_PAGE_SIZE = 50;
-
     function changeAccessLogPage(delta) {
-        const totalLogs = allAccessLogs ? allAccessLogs.length : 0;
-        const totalPages = Math.max(1, Math.ceil(totalLogs / ACCESS_LOG_PAGE_SIZE));
+        const activeLogs = (currentAccessLogMode === 'port') ? allPortLogs : allWebLogs;
+        const totalLogs = activeLogs ? activeLogs.length : 0;
+        const totalPages = Math.max(1, Math.ceil(totalLogs / PAGE_SIZE));
         const target = accessLogPage + delta;
         if (target >= 1 && target <= totalPages) {
             accessLogPage = target;
