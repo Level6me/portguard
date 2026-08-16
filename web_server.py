@@ -612,17 +612,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <h1 class="title" id="page-main-title">安全态势概览</h1>
         </div>
         <div class="header-actions">
-            <button class="pill-btn" onclick="cycleTheme()" id="btn-theme-toggle" title="切换明暗主题">
-                <span>🌓</span>
-                <span id="theme-label" class="btn-text-full">暗黑</span>
+            <button class="pill-btn" onclick="cycleTheme()" id="btn-theme-toggle" title="切换主题: 自动 (跟随系统) / 暗黑 / 明亮">
+                <span id="theme-icon">🌓</span>
+                <span id="theme-label" class="btn-text-full">自动</span>
             </button>
-            <button class="pill-btn danger" onclick="openManualBanModal()" title="手动拉黑 IP">
-                <span>🚫</span>
-                <span class="btn-text-full">手动拉黑</span>
-            </button>
-            <button class="pill-btn accent" onclick="fetchData(true)" title="刷新最新数据">
-                <span>🔄</span>
-                <span class="btn-text-full">刷新</span>
+            <button class="pill-btn accent" onclick="toggleAutoRefresh()" id="btn-auto-refresh" title="点击开启或暂停 5 秒自动刷新">
+                <span id="refresh-icon">⏱️</span>
+                <span id="refresh-label" class="btn-text-full">5s 实时</span>
             </button>
         </div>
     </div>
@@ -917,6 +913,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </tbody>
                 </table>
             </div>
+
+            <!-- 分页控制栏 (50条/页) -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div style="font-size: 12px; color: var(--text-sec);">
+                    共 <b id="access-log-total-cnt" style="color: var(--text);">0</b> 条记录 · 每页 50 条 · 当前第 <b id="access-log-page-info" style="color: var(--accent);">1 / 1</b> 页
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="pill-btn" onclick="changeAccessLogPage(-1)" id="btn-access-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                    <div id="access-log-page-nums" style="display: flex; gap: 4px;"></div>
+                    <button class="pill-btn" onclick="changeAccessLogPage(1)" id="btn-access-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                </div>
+            </div>
         </div>
         <div class="bottom-spacer"></div>
     </div>
@@ -1184,18 +1192,97 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         filterLogs(cat, document.getElementById(`seg-${cat}`) || document.getElementById('seg-all'));
     }
 
-    function cycleTheme() {
+    let currentThemeMode = localStorage.getItem('portsentry_theme') || 'auto';
+    let autoRefreshTimer = null;
+    let isAutoRefreshEnabled = true;
+
+    function applyTheme(mode, notify = false) {
+        currentThemeMode = mode;
+        localStorage.setItem('portsentry_theme', mode);
         const root = document.documentElement;
-        const current = root.getAttribute('data-theme');
-        const next = (current === 'light') ? 'dark' : 'light';
-        root.setAttribute('data-theme', next);
-        document.getElementById('theme-label').innerText = (next === 'light') ? '明亮' : '暗黑';
-        showToast(`已切换至${next === 'light' ? '明亮' : '暗黑'}模式`);
-        if (trendChartInstance) {
+        let effectiveTheme = mode;
+        if (mode === 'auto') {
+            const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            effectiveTheme = systemDark ? 'dark' : 'light';
+        }
+        root.setAttribute('data-theme', effectiveTheme);
+
+        const iconEl = document.getElementById('theme-icon');
+        const labelEl = document.getElementById('theme-label');
+        if (iconEl && labelEl) {
+            if (mode === 'auto') {
+                iconEl.innerText = '🌓';
+                labelEl.innerText = '自动';
+            } else if (mode === 'dark') {
+                iconEl.innerText = '🌙';
+                labelEl.innerText = '暗黑';
+            } else {
+                iconEl.innerText = '☀️';
+                labelEl.innerText = '明亮';
+            }
+        }
+
+        if (trendChartInstance && portChartInstance) {
             trendChartInstance.destroy();
             portChartInstance.destroy();
             initCharts();
             fetchData(false);
+        }
+        if (notify) {
+            const desc = mode === 'auto' ? '跟随系统 (自动)' : (mode === 'dark' ? '暗黑模式' : '明亮模式');
+            showToast(`主题已设为: ${desc}`, mode === 'auto' ? '🌓' : (mode === 'dark' ? '🌙' : '☀️'));
+        }
+    }
+
+    function cycleTheme() {
+        if (currentThemeMode === 'auto') {
+            applyTheme('dark', true);
+        } else if (currentThemeMode === 'dark') {
+            applyTheme('light', true);
+        } else {
+            applyTheme('auto', true);
+        }
+    }
+
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+            if (currentThemeMode === 'auto') {
+                applyTheme('auto', false);
+            }
+        });
+    }
+
+    function startAutoRefresh() {
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        autoRefreshTimer = setInterval(() => {
+            if (isAutoRefreshEnabled) {
+                fetchData(false);
+            }
+        }, 5000);
+    }
+
+    function toggleAutoRefresh() {
+        isAutoRefreshEnabled = !isAutoRefreshEnabled;
+        const btn = document.getElementById('btn-auto-refresh');
+        const icon = document.getElementById('refresh-icon');
+        const label = document.getElementById('refresh-label');
+        
+        if (isAutoRefreshEnabled) {
+            if (btn) btn.className = 'pill-btn accent';
+            if (icon) icon.innerText = '⏱️';
+            if (label) label.innerText = '5s 实时';
+            showToast('已开启 5 秒自动实时刷新', '⚡');
+            fetchData(false);
+            startAutoRefresh();
+        } else {
+            if (btn) btn.className = 'pill-btn';
+            if (icon) icon.innerText = '⏸️';
+            if (label) label.innerText = '已暂停';
+            showToast('已暂停自动刷新', '⏸️');
+            if (autoRefreshTimer) {
+                clearInterval(autoRefreshTimer);
+                autoRefreshTimer = null;
+            }
         }
     }
 
@@ -1427,14 +1514,63 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    let accessLogPage = 1;
+    const ACCESS_LOG_PAGE_SIZE = 50;
+
+    function changeAccessLogPage(delta) {
+        const totalLogs = allAccessLogs ? allAccessLogs.length : 0;
+        const totalPages = Math.max(1, Math.ceil(totalLogs / ACCESS_LOG_PAGE_SIZE));
+        const target = accessLogPage + delta;
+        if (target >= 1 && target <= totalPages) {
+            accessLogPage = target;
+            renderAccessLogsTable();
+        }
+    }
+
+    function setAccessLogPage(p) {
+        accessLogPage = p;
+        renderAccessLogsTable();
+    }
+
     function renderAccessLogsTable() {
         const tbody = document.getElementById('access-logs-tbody');
+        const totalLogs = allAccessLogs ? allAccessLogs.length : 0;
+        const totalCntEl = document.getElementById('access-log-total-cnt');
+        if (totalCntEl) totalCntEl.innerText = totalLogs;
+
+        const totalPages = Math.max(1, Math.ceil(totalLogs / ACCESS_LOG_PAGE_SIZE));
+        if (accessLogPage > totalPages) accessLogPage = totalPages;
+        if (accessLogPage < 1) accessLogPage = 1;
+
+        const pageInfoEl = document.getElementById('access-log-page-info');
+        if (pageInfoEl) pageInfoEl.innerText = `${accessLogPage} / ${totalPages}`;
+        
+        const prevBtn = document.getElementById('btn-access-prev');
+        const nextBtn = document.getElementById('btn-access-next');
+        if (prevBtn) prevBtn.disabled = (accessLogPage <= 1);
+        if (nextBtn) nextBtn.disabled = (accessLogPage >= totalPages);
+
+        const pageNumsEl = document.getElementById('access-log-page-nums');
+        if (pageNumsEl) {
+            let pageNumHtml = '';
+            for (let p = Math.max(1, accessLogPage - 2); p <= Math.min(totalPages, accessLogPage + 2); p++) {
+                const activeClass = (p === accessLogPage) ? 'accent' : '';
+                pageNumHtml += `<button class="pill-btn ${activeClass}" onclick="setAccessLogPage(${p})" style="padding: 4px 10px; font-size: 11px; font-weight: 700; ${p === accessLogPage ? 'background: var(--accent); color: #fff;' : ''}">${p}</button>`;
+            }
+            pageNumsEl.innerHTML = pageNumHtml;
+        }
+
         if (!allAccessLogs || allAccessLogs.length === 0) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-sec);">暂无系统访问记录</td></tr>';
             return;
         }
+
+        const startIdx = (accessLogPage - 1) * ACCESS_LOG_PAGE_SIZE;
+        const endIdx = startIdx + ACCESS_LOG_PAGE_SIZE;
+        const pageLogs = allAccessLogs.slice(startIdx, endIdx);
+
         let html = '';
-        allAccessLogs.forEach(l => {
+        pageLogs.forEach(l => {
             const methodTag = l.method === 'POST' ? '<span class="tag warning" style="font-weight:700;">POST</span>' : '<span class="tag accent" style="font-weight:700;">GET</span>';
             let statusTag = '<span class="tag success" style="font-weight:700;">200 OK</span>';
             if (l.status_code >= 400 && l.status_code < 500) {
@@ -1776,9 +1912,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        applyTheme(currentThemeMode, false);
         initCharts();
         fetchData(false);
-        setInterval(() => fetchData(false), 6000);
+        startAutoRefresh();
     });
 </script>
 </body>
@@ -1950,7 +2087,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/access_logs":
                 conn = get_db()
                 c = conn.cursor()
-                c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT 200")
+                c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT 2000")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 self._send_json(rows)
