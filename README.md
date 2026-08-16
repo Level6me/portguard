@@ -38,8 +38,9 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install
 
 ---
 
-## ⚙️ 运维管理常用命令
+## ⚙️ 运维管理与一键卸载
 
+### 常用运维命令
 ```bash
 # 查看防御服务状态
 systemctl status portsentry-ui.service
@@ -53,6 +54,18 @@ systemctl restart portsentry-ui.service
 # 停止防御系统
 systemctl stop portsentry-ui.service
 ```
+
+### 🗑️ 一键完全卸载命令
+在终端执行以下**一行命令**即可将 Portsentry 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash
+```
+
+> **或者使用已安装目录自带的卸载脚本：**
+> ```bash
+> sudo bash /opt/portsentry-ui/uninstall.sh
+> ```
 
 ---
 

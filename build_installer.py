@@ -9,6 +9,9 @@ with open(os.path.join(BASE_DIR, 'web_server.py'), 'rb') as f:
 with open(os.path.join(BASE_DIR, 'sentry_daemon.py'), 'rb') as f:
     daemon_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+with open(os.path.join(BASE_DIR, 'uninstall.sh'), 'rb') as f:
+    uninstall_b64 = base64.b64encode(f.read()).decode('utf-8')
+
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
 # Portsentry Defense & Apple-Style WebUI - 独立自包含一行一键生产部署脚本
@@ -62,7 +65,11 @@ chmod 644 "${INSTALL_DIR}/web_server.py"
 echo "__DAEMON_B64__" | base64 -d > "${INSTALL_DIR}/sentry_daemon.py"
 chmod 644 "${INSTALL_DIR}/sentry_daemon.py"
 
-echo -e "${GREEN}[✓] 核心代码已成功解包并写入完毕！${NC}"
+# 释放 uninstall.sh
+echo "__UNINSTALL_B64__" | base64 -d > "${INSTALL_DIR}/uninstall.sh"
+chmod 755 "${INSTALL_DIR}/uninstall.sh"
+
+echo -e "${GREEN}[✓] 核心代码与卸载工具已成功解包并写入完毕！${NC}"
 
 echo -e "\n${BLUE}[3/5] 正在生成智能防误封白名单与诱饵策略...${NC}"
 CURRENT_SSH_IP=$(echo "${SSH_CLIENT:-}" | awk '{print $1}')
@@ -151,10 +158,11 @@ echo -e "💡 常用维护命令:"
 echo -e "  查看服务状态: ${CYAN}systemctl status portsentry-ui.service${NC}"
 echo -e "  重启防御服务: ${CYAN}systemctl restart portsentry-ui.service${NC}"
 echo -e "  查看拦截日志: ${CYAN}journalctl -u portsentry-ui.service -f${NC}"
+echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash${NC}"
 echo -e "${CYAN}================================================================${NC}\n"
 '''
 
-final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64)
+final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64).replace("__UNINSTALL_B64__", uninstall_b64)
 
 with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)
