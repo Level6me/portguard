@@ -33,11 +33,14 @@ for arg in "$@"; do
 done
 
 if [ "$FORCE_YES" = false ]; then
-    echo -e "${YELLOW}此操作将停止 Portsentry 蜜罐防御守护进程、注销 systemd 服务并彻底删除 ${INSTALL_DIR} 目录。${NC}"
-    read -r -p "确认完全卸载 Portsentry 防御系统吗？(y/N): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        echo -e "${CYAN}[INFO] 卸载操作已取消。${NC}"
-        exit 0
+    # 仅在标准输入连接到交互式终端时进行提示，避免管道执行 (curl | bash) 时误判取消
+    if [ -t 0 ]; then
+        echo -e "${YELLOW}此操作将停止 Portsentry 蜜罐防御守护进程、注销 systemd 服务并彻底删除 ${INSTALL_DIR} 目录。${NC}"
+        read -r -p "确认完全卸载 Portsentry 防御系统吗？(y/N): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo -e "${CYAN}[INFO] 卸载操作已取消。${NC}"
+            exit 0
+        fi
     fi
 fi
 
