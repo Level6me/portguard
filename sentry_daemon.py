@@ -536,11 +536,28 @@ def get_active_system_ports():
     if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 10.0):
         return _SYSTEM_PORTS_CACHE
 
-    ports_map = {9099: "Portsentry Web控制台"}
+    ports_map = {
+        9099: "Portsentry Web控制台",
+        22: "SSH 远程管理",
+        80: "HTTP 网站服务 (OpenResty/Nginx)",
+        443: "HTTPS 加密网站服务",
+        15633: "1Panel 运维控制面板",
+        4212: "Trojan 安全隧道服务",
+        8085: "Trojan 业务端口",
+        29675: "SSHD 远程管理服务",
+        40123: "受保护自定义业务端口"
+    }
     try:
         cfg = load_config()
         web_p = int(cfg.get("web_port", 9099))
         ports_map[web_p] = "Portsentry Web控制台"
+        # 用户自定义保护/业务端口
+        custom_biz = cfg.get("business_ports", [])
+        for bp in custom_biz:
+            if isinstance(bp, int):
+                ports_map[bp] = f"自定义业务端口 ({bp})"
+            elif isinstance(bp, dict) and "port" in bp:
+                ports_map[int(bp["port"])] = bp.get("name", f"自定义业务 ({bp['port']})")
     except Exception:
         pass
         
@@ -555,15 +572,20 @@ def get_active_system_ports():
             parts = line.split()
             if len(parts) >= 5:
                 local_addr = parts[4]
-                p_str = local_addr.split(":")[-1]
+                # 兼容 IPv6 [::]:port 以及 *::port 格式
+                clean_addr = local_addr.replace("[", "").replace("]", "")
+                p_str = clean_addr.split(":")[-1].strip()
                 if p_str.isdigit():
                     port = int(p_str)
                     proc_name = "系统服务"
-                    if len(parts) >= 6 and 'users:(("' in line:
+                    if "users:" in line:
                         try:
                             proc_name = line.split('users:(("')[1].split('"')[0]
                         except Exception:
-                            pass
+                            try:
+                                proc_name = line.split("users:((")[1].split(",")[0].replace('"', '')
+                            except Exception:
+                                pass
                     ports_map[port] = proc_name
     except Exception:
         pass
