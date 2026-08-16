@@ -947,8 +947,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="modal-sheet">
         <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🍯 添加自定义诱饵端口</h3>
         <div class="form-group">
-            <label class="form-label">端口号 (1-65535)</label>
-            <input type="number" class="form-control" id="trap-port-val" placeholder="例如 8088">
+            <label class="form-label">端口号或端口范围 (例如 8088 或 1000-3000)</label>
+            <input type="text" class="form-control" id="trap-port-val" placeholder="单个端口如 8088，或范围如 1000-3000">
         </div>
         <div class="form-group">
             <label class="form-label">模拟服务说明</label>
@@ -1440,19 +1440,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function submitAddTrap() {
-        const port = parseInt(document.getElementById('trap-port-val').value);
+        const rawPort = document.getElementById('trap-port-val').value.trim();
         const name = document.getElementById('trap-name-val').value.trim();
         const category = document.getElementById('trap-cat-val').value;
         const level = document.getElementById('trap-level-val').value;
-        if (!port || port < 1 || port > 65535) return showToast('请输入合法的端口号 (1-65535)', '⚠️');
+        if (!rawPort) return showToast('请输入端口号或端口范围 (例如 8088 或 1000-3000)', '⚠️');
+        
         fetch('/api/traps/add', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port, name, level, category, enabled: true })
+            body: JSON.stringify({ port: rawPort, name, level, category, enabled: true })
         }).then(res => res.json()).then(res => {
-            showToast(res.msg, '🍯');
-            closeModals();
-            fetchData(false);
+            if (res.success) {
+                showToast(res.msg, '🍯');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '添加失败，请检查端口格式', '❌');
+            }
         });
     }
 
@@ -1460,7 +1465,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         fetch('/api/traps/toggle', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port, enabled })
+            body: JSON.stringify({ port: port, enabled: enabled })
         }).then(res => res.json()).then(res => {
             showToast(res.msg || `端口 ${port} 状态已更新`, '⚙️');
             fetchData(false);
@@ -1485,15 +1490,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (type === 'traps') {
             titleEl.innerText = '🍯 智能导入蜜罐策略';
             tipEl.innerHTML = `
-                支持导入标准 JSON 策略数组，<b>向下兼容以下手输格式</b>：<br>
-                <code>[{"family":"ipv4","address":"","port":"80","protocol":"tcp","strategy":"accept","description":"网页"}]</code><br>
-                • <code>port/prot</code>: 诱饵端口号 (1-65535)<br>
+                支持导入标准 JSON 策略数组，<b>向下兼容手输格式与端口范围</b>：<br>
+                <code>[{"family":"ipv4","address":"","port":"1000-3000","protocol":"tcp","strategy":"accept","description":"自定义范围探针"}]</code><br>
+                • <code>port/prot</code>: 单个端口号 (如 <code>"80"</code>) 或端口范围 (如 <code>"1000-3000"</code>)<br>
                 • <code>protocol</code>: 协议 (tcp/udp)<br>
                 • <code>strategy</code>: 开关状态 (accept/enabled/启用 ➔ 启用; reject/disabled/停用 ➔ 停用)<br>
-                • <code>description/desc</code>: 模拟服务说明描述 (如 "网页", "FTP")<br>
+                • <code>description/desc</code>: 模拟服务说明描述 (如 "网页", "高危探针段")<br>
                 <i>系统会自动容错清洗末尾多余逗号 (<code>, ]</code>) 与宽松语法！</i>
             `;
-            textVal.placeholder = `粘贴蜜罐策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "80",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "网页"\n  }\n]`;
+            textVal.placeholder = `粘贴蜜罐策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "1000-3000",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "自定义高危端口段"\n  }\n]`;
         } else if (type === 'blacklist') {
             titleEl.innerText = '🚫 批量导入内核黑名单';
             tipEl.innerHTML = `
@@ -2043,13 +2048,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/traps/add":
-                port = req_data.get("port")
-                name = req_data.get("name", f"TCP/{port}")
+                raw_port = req_data.get("port")
+                name = req_data.get("name", "").strip()
                 level = req_data.get("level", "高危")
                 category = req_data.get("category", "custom")
-                if not port:
+                if not raw_port:
                     self._send_json({"success": False, "msg": "端口不能为空"}, status=400)
                     return
+                    
+                temp_item = {
+                    "port": raw_port,
+                    "name": name,
+                    "description": name,
+                    "category": category,
+                    "level": level,
+                    "enabled": True,
+                    "strategy": "accept"
+                }
+                norm_new = normalize_trap_item(temp_item)
+                if not norm_new:
+                    self._send_json({"success": False, "msg": "端口格式不合法，请输入单个端口 (1-65535) 或端口范围 (例如 1000-3000)"}, status=400)
+                    return
+                    
                 cfg = load_config()
                 traps = cfg.get("trap_ports", [])
                 normalized = []
@@ -2057,27 +2077,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                     norm = normalize_trap_item(item)
                     if norm:
                         normalized.append(norm)
-                if not any(t.get("port") == port for t in normalized):
-                    normalized.append({
-                        "family": "ipv4",
-                        "address": "",
-                        "port": port,
-                        "protocol": "tcp",
-                        "strategy": "accept",
-                        "description": name,
-                        "name": name,
-                        "category": category,
-                        "enabled": True,
-                        "level": level
-                    })
+                        
+                port_key = str(norm_new["port"])
+                if not any(str(t.get("port")) == port_key for t in normalized):
+                    normalized.append(norm_new)
                     cfg["trap_ports"] = normalized
                     save_config(cfg)
                     trap_instance.reload()
-                self._send_json({"success": True, "msg": f"已激活诱捕端口: {port}"})
+                self._send_json({"success": True, "msg": f"已激活诱捕端口/策略: {port_key}"})
                 return
 
             if path == "/api/traps/toggle":
-                port = req_data.get("port")
+                port_key = str(req_data.get("port", "")).strip()
                 enabled = req_data.get("enabled", True)
                 cfg = load_config()
                 traps = cfg.get("trap_ports", [])
@@ -2087,13 +2098,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if norm:
                         normalized.append(norm)
                 for t in normalized:
-                    if t.get("port") == port:
+                    if str(t.get("port")) == port_key:
                         t["enabled"] = enabled
                         t["strategy"] = "accept" if enabled else "reject"
                 cfg["trap_ports"] = normalized
                 save_config(cfg)
                 trap_instance.reload()
-                self._send_json({"success": True, "msg": f"已更新端口 {port} 状态"})
+                self._send_json({"success": True, "msg": f"已更新端口策略 {port_key} 状态"})
                 return
 
             if path == "/api/traps/import":

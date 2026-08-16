@@ -52,6 +52,32 @@ DEFAULT_CONFIG = {
 
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
 
+def parse_port_range(port_val):
+    """解析单个端口或端口范围，返回 (start_port, end_port, display_str) 或 None"""
+    if isinstance(port_val, int):
+        if 1 <= port_val <= 65535:
+            return (port_val, port_val, port_val)
+        return None
+    s = str(port_val).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        p = int(s)
+        if 1 <= p <= 65535:
+            return (p, p, p)
+        return None
+    m = re.match(r'^(\d+)\s*[-:~]\s*(\d+)$', s)
+    if m:
+        p1 = int(m.group(1))
+        p2 = int(m.group(2))
+        start = min(p1, p2)
+        end = max(p1, p2)
+        if 1 <= start <= 65535 and 1 <= end <= 65535:
+            if start == end:
+                return (start, end, start)
+            return (start, end, f"{start}-{end}")
+    return None
+
 def normalize_trap_item(item):
     if isinstance(item, int):
         matched = next((x for x in DEFAULT_CONFIG["trap_ports"] if x["port"] == item), None)
@@ -61,6 +87,8 @@ def normalize_trap_item(item):
             "family": "ipv4",
             "address": "",
             "port": item,
+            "port_start": item,
+            "port_end": item,
             "protocol": "tcp",
             "strategy": "accept",
             "description": PORT_DESCRIPTIONS.get(item, f"TCP/{item}"),
@@ -77,12 +105,11 @@ def normalize_trap_item(item):
     raw_port = item.get("port", item.get("prot", item.get("dst_port")))
     if raw_port is None or str(raw_port).strip() == "":
         return None
-    try:
-        port = int(str(raw_port).strip())
-        if port < 1 or port > 65535:
-            return None
-    except Exception:
+    
+    p_info = parse_port_range(raw_port)
+    if not p_info:
         return None
+    start_p, end_p, display_port = p_info
         
     # 提取协议 (protocol / proto)
     protocol = str(item.get("protocol", item.get("proto", "tcp"))).strip().lower()
@@ -109,33 +136,39 @@ def normalize_trap_item(item):
     # 提取描述 (description / desc / name / remark)
     desc = item.get("description", item.get("desc", item.get("name", item.get("remark", ""))))
     if not desc:
-        desc = PORT_DESCRIPTIONS.get(port, f"{protocol.upper()}/{port}")
+        if start_p == end_p:
+            desc = PORT_DESCRIPTIONS.get(start_p, f"{protocol.upper()}/{start_p}")
+        else:
+            desc = f"{protocol.upper()} 端口段 ({start_p}-{end_p})"
     desc = str(desc).strip()
     
     # 类别判定
     cat = item.get("category", "")
     if not cat:
-        if port in (80, 443, 8080, 8888, 8000, 8848, 8088):
-            cat = "web"
-        elif port in (3389, 5900, 5901, 22):
-            cat = "rdp"
-        elif port in (1433, 3306, 6379, 27017, 5432, 9200):
-            cat = "db"
-        elif port in (445, 135, 139):
-            cat = "smb"
-        elif port in (21, 20):
-            cat = "ftp"
-        elif port in (23,):
-            cat = "telnet"
+        if start_p == end_p:
+            if start_p in (80, 443, 8080, 8888, 8000, 8848, 8088):
+                cat = "web"
+            elif start_p in (3389, 5900, 5901, 22):
+                cat = "rdp"
+            elif start_p in (1433, 3306, 6379, 27017, 5432, 9200):
+                cat = "db"
+            elif start_p in (445, 135, 139):
+                cat = "smb"
+            elif start_p in (21, 20):
+                cat = "ftp"
+            elif start_p in (23,):
+                cat = "telnet"
+            else:
+                cat = "custom"
         else:
             cat = "custom"
             
     # 威胁等级判定
     level = item.get("level", "")
     if not level:
-        if port in (445, 3389, 6379, 1433):
+        if start_p == end_p and start_p in (445, 3389, 6379, 1433):
             level = "极高危"
-        elif port in (139, 8888, 8080):
+        elif start_p == end_p and start_p in (139, 8888, 8080):
             level = "中危"
         else:
             level = "高危"
@@ -146,7 +179,9 @@ def normalize_trap_item(item):
     return {
         "family": family,
         "address": address,
-        "port": port,
+        "port": display_port,
+        "port_start": start_p,
+        "port_end": end_p,
         "protocol": protocol,
         "strategy": strategy,
         "description": desc,
@@ -386,24 +421,45 @@ class TrapServer:
             if norm:
                 normalized_traps.append(norm)
             
+        MAX_TOTAL_TRAP_SOCKETS = 8192
+        total_bound = 0
+
         for item in normalized_traps:
             if not item.get("enabled", True):
                 continue
-            port = item["port"]
-            if port in active_ports:
-                print(f"[Trap] 避开已占用端口: {port}")
-                continue
+            start_p = item.get("port_start", item.get("port"))
+            end_p = item.get("port_end", item.get("port"))
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(("0.0.0.0", port))
-                s.listen(128)
-                s.setblocking(False)
-                self.sockets.append((s, port))
-                self.trap_map[port] = item
-                print(f"[Trap] 激活诱捕蜜罐: {port} - {item.get('name')}")
-            except Exception as e:
-                print(f"[Trap] 监听端口 {port} 异常: {e}")
+                start_p = int(start_p)
+                end_p = int(end_p)
+            except Exception:
+                continue
+
+            bound_count_for_item = 0
+            for port in range(start_p, end_p + 1):
+                if port in active_ports:
+                    continue
+                if port in self.trap_map:
+                    continue
+                if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
+                    print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
+                    break
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.bind(("0.0.0.0", port))
+                    s.listen(64)
+                    s.setblocking(False)
+                    self.sockets.append((s, port))
+                    self.trap_map[port] = item
+                    total_bound += 1
+                    bound_count_for_item += 1
+                except Exception:
+                    pass
+
+            display_port = item.get("port")
+            if bound_count_for_item > 0:
+                print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
 
     def _loop(self):
         cfg = load_config()
