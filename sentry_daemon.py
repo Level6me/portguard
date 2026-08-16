@@ -488,23 +488,38 @@ def ban_ip(ip, port, port_info):
     threading.Thread(target=_async_geo, daemon=True).start()
 
 def get_active_system_ports():
-    ports = {9099}
+    ports_map = {9099: "Portsentry Web控制台"}
     try:
         cfg = load_config()
-        ports.add(int(cfg.get("web_port", 9099)))
+        web_p = int(cfg.get("web_port", 9099))
+        ports_map[web_p] = "Portsentry Web控制台"
     except Exception:
         pass
+        
     try:
-        res = subprocess.run("ss -tulpn | awk '{print $5}'", shell=True, capture_output=True, text=True)
-        for line in res.stdout.splitlines():
+        # 兼容 Python 3.6+，排除自身 python3 进程，精准获取系统全部真实业务服务与进程名
+        p = subprocess.Popen("ss -tulpn | grep -v python3", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        stdout, _ = p.communicate(timeout=3)
+        for line in stdout.splitlines():
             line = line.strip()
-            if ":" in line:
-                p_str = line.split(":")[-1]
+            if not ("LISTEN" in line or "UNCONN" in line):
+                continue
+            parts = line.split()
+            if len(parts) >= 5:
+                local_addr = parts[4]
+                p_str = local_addr.split(":")[-1]
                 if p_str.isdigit():
-                    ports.add(int(p_str))
+                    port = int(p_str)
+                    proc_name = "系统服务"
+                    if len(parts) >= 6 and 'users:(("' in line:
+                        try:
+                            proc_name = line.split('users:(("')[1].split('"')[0]
+                        except Exception:
+                            pass
+                    ports_map[port] = proc_name
     except Exception:
         pass
-    return ports
+    return ports_map
 
 class TrapServer:
     def __init__(self):
@@ -542,7 +557,8 @@ class TrapServer:
         
         cfg = load_config()
         raw_trap_ports = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
-        active_ports = get_active_system_ports()
+        active_ports_map = get_active_system_ports()
+        active_ports = set(active_ports_map.keys())
         
         normalized_traps = []
         for item in raw_trap_ports:
@@ -644,9 +660,27 @@ class GlobalPortSniffer:
         self.running = False
         self.raw_sock = None
         self._recent_cache = {} # (ip, port) -> timestamp (防抖降噪)
+        self.local_ips = {"127.0.0.1", "0.0.0.0"}
+        self._refresh_local_ips()
+        
+    def _refresh_local_ips(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            self.local_ips.add(s.getsockname()[0])
+            s.close()
+        except Exception:
+            pass
+        try:
+            res = socket.gethostbyname_ex(socket.gethostname())
+            for ip in res[2]:
+                self.local_ips.add(ip)
+        except Exception:
+            pass
         
     def start(self):
         self.running = True
+        self._refresh_local_ips()
         threading.Thread(target=self._sniffer_loop, daemon=True).start()
         
     def stop(self):
@@ -677,8 +711,8 @@ class GlobalPortSniffer:
                     continue
                 src_ip = socket.inet_ntoa(raw_data[12:16])
                 
-                # 过滤本机发出的包或环回流量
-                if src_ip.startswith("127.") or src_ip == "0.0.0.0":
+                # 过滤本机发出的包或出站连接
+                if src_ip in self.local_ips or src_ip.startswith("127.") or src_ip == "0.0.0.0":
                     continue
                     
                 tcp_hdr = raw_data[ihl:ihl+20]
@@ -712,20 +746,24 @@ class GlobalPortSniffer:
     def _handle_port_access(self, src_ip, dst_port):
         cfg = load_config()
         whitelist = cfg.get("whitelist", [])
-        active_ports = get_active_system_ports()
+        active_ports_map = get_active_system_ports()
         
-        # 判断动作与端口属性
+        # 1. 优先白名单放行
         if ip_in_whitelist(src_ip, whitelist):
             action = "WHITELIST"
-            desc = "安全白名单放行"
+            proc = active_ports_map.get(dst_port, "")
+            desc = f"白名单访问: {proc} (端口 {dst_port})" if proc else f"安全白名单访问 (端口 {dst_port})"
+        # 2. 正常系统业务访问（如 SSH 29675、Web 9099、OpenResty 80/443、1Panel 等）
+        elif dst_port in active_ports_map:
+            action = "BUSINESS"
+            proc = active_ports_map[dst_port]
+            desc = f"正常业务连接: {proc} (端口 {dst_port})"
+        # 3. 命中活跃诱饵蜜罐
         elif dst_port in trap_instance.trap_map:
-            # 蜜罐端口会由 TrapServer 触发拦截
             action = "INTERCEPTED"
             trap_meta = trap_instance.trap_map.get(dst_port, {})
             desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
-        elif dst_port in active_ports:
-            action = "BUSINESS"
-            desc = f"正常业务连接 (端口 {dst_port})"
+        # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
             desc = f"常规端口探测 (端口 {dst_port})"
