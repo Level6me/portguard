@@ -2598,14 +2598,16 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 def run_server():
     init_db()
-    trap_instance.start()
-    
     cfg = load_config()
     bind_ip = cfg.get("web_bind", "0.0.0.0")
-    bind_port = cfg.get("web_port", 9099)
+    bind_port = int(cfg.get("web_port", 9099))
     
+    HTTPServer.allow_reuse_address = True
     httpd = HTTPServer((bind_ip, bind_port), RequestHandler)
     print(f"[Portsentry-UI Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
+    
+    trap_instance.start()
+    
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -422,7 +422,12 @@ def ban_ip(ip, port, port_info):
     threading.Thread(target=_async_geo, daemon=True).start()
 
 def get_active_system_ports():
-    ports = set()
+    ports = {9099}
+    try:
+        cfg = load_config()
+        ports.add(int(cfg.get("web_port", 9099)))
+    except Exception:
+        pass
     try:
         res = subprocess.run("ss -tulpn | awk '{print $5}'", shell=True, capture_output=True, text=True)
         for line in res.stdout.splitlines():
@@ -480,7 +485,11 @@ class TrapServer:
                 normalized_traps.append(norm)
             
         MAX_TOTAL_TRAP_SOCKETS = 30000
-        total_bound = 0
+        web_port = 9099
+        try:
+            web_port = int(cfg.get("web_port", 9099))
+        except Exception:
+            pass
 
         for item in normalized_traps:
             if not item.get("enabled", True):
@@ -495,7 +504,7 @@ class TrapServer:
 
             bound_count_for_item = 0
             for port in range(start_p, end_p + 1):
-                if port in active_ports or port in self.trap_map:
+                if port == web_port or port in active_ports or port in self.trap_map:
                     continue
                 if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
                     print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
