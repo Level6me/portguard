@@ -948,6 +948,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
+            <!-- 筛选与搜索工具栏 -->
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                <div class="segmented-control" id="access-action-segments">
+                    <button class="segment-btn active" id="seg-acc-all" onclick="filterAccessLogs('all', this)">全部</button>
+                    <button class="segment-btn" id="seg-acc-biz" onclick="filterAccessLogs('BUSINESS', this)">⚡ 正常业务</button>
+                    <button class="segment-btn" id="seg-acc-white" onclick="filterAccessLogs('WHITELIST', this)">🛡️ 信任放行</button>
+                    <button class="segment-btn" id="seg-acc-block" onclick="filterAccessLogs('INTERCEPTED', this)">🚫 诱捕阻断</button>
+                    <button class="segment-btn" id="seg-acc-probe" onclick="filterAccessLogs('PROBE', this)">🔍 外部探测</button>
+                </div>
+                <div class="search-box">
+                    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                    <input type="text" id="access-search-input" placeholder="过滤 IP / 端口 / 服务 / 路径 / 归属地..." oninput="renderAccessLogsTable()">
+                </div>
+            </div>
+
             <div class="table-wrap">
                 <table>
                     <thead id="access-logs-thead">
@@ -1980,10 +1995,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderAccessLogsTable();
     }
 
+    let currentAccessActionFilter = 'all';
+
+    function filterAccessLogs(act, btn) {
+        currentAccessActionFilter = act;
+        const container = document.getElementById('access-action-segments');
+        if (container) {
+            container.querySelectorAll('.segment-btn').forEach(b => b.classList.remove('active'));
+        }
+        if (btn) btn.classList.add('active');
+        accessLogPage = 1;
+        renderAccessLogsTable();
+    }
+
     function renderAccessLogsTable() {
         const tbody = document.getElementById('access-logs-tbody');
         const activeLogs = (currentAccessLogMode === 'port') ? allPortLogs : allWebLogs;
-        const list = activeLogs || [];
+        let list = activeLogs || [];
+        
+        // 动作过滤
+        if (currentAccessLogMode === 'port' && currentAccessActionFilter !== 'all') {
+            list = list.filter(l => (l.action || '') === currentAccessActionFilter);
+        }
+        
+        // 搜索关键词过滤
+        const searchInput = document.getElementById('access-search-input');
+        const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
+        if (query) {
+            list = list.filter(l => {
+                const ip = (l.ip || '').toLowerCase();
+                const port = String(l.port || '');
+                const portName = (l.port_name || '').toLowerCase();
+                const path = (l.path || '').toLowerCase();
+                const country = (l.country || '').toLowerCase();
+                const region = (l.region || '').toLowerCase();
+                const city = (l.city || '').toLowerCase();
+                const isp = (l.isp || '').toLowerCase();
+                const ua = (l.user_agent || '').toLowerCase();
+                return ip.includes(query) || port.includes(query) || portName.includes(query) || path.includes(query) || country.includes(query) || region.includes(query) || city.includes(query) || isp.includes(query) || ua.includes(query);
+            });
+        }
+
         const totalCount = list.length;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
         if (accessLogPage > totalPages) accessLogPage = totalPages;
@@ -1993,7 +2045,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         if (totalCount === 0) {
             const emptyColspan = (currentAccessLogMode === 'port') ? 6 : 7;
-            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">暂无${currentAccessLogMode === 'port' ? '端口网络访问' : 'Web控制台访问'}记录</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口网络访问' : 'Web控制台访问'}记录</td></tr>`;
             return;
         }
 

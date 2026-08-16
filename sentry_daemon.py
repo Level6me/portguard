@@ -305,19 +305,59 @@ def init_db():
     conn.commit()
     conn.close()
 
+_WEB_PORT_LOG_CACHE = {}
+
 def log_access_entry(ip, method, path, status_code=200, user_agent=""):
     try:
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
-        geo_country = "本地访问" if ip in ("127.0.0.1", "::1", "localhost") else "公网访问"
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("""
         INSERT INTO access_logs (ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, '', '', '', ?, ?)
-        """, (ip, method, path, status_code, (user_agent or "")[:200], geo_country, now_str, now_ts))
+        VALUES (?, ?, ?, ?, ?, '分析中...', '', '', '', ?, ?)
+        """, (ip, method, path, status_code, (user_agent or "")[:200], now_str, now_ts))
+        web_log_id = cursor.lastrowid
+        
+        # 同时以 5 秒防抖在 port_access_logs 中记录 Web 控制台业务连接
+        global _WEB_PORT_LOG_CACHE
+        last_t = _WEB_PORT_LOG_CACHE.get(ip, 0)
+        port_log_id = None
+        if (now_ts - last_t) >= 5:
+            _WEB_PORT_LOG_CACHE[ip] = now_ts
+            cfg = load_config()
+            web_port = int(cfg.get("web_port", 9099))
+            is_white = ip_in_whitelist(ip, cfg.get("whitelist", []))
+            act = "WHITELIST" if is_white else "BUSINESS"
+            desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: Portsentry Web控制台 (端口 {web_port})"
+            cursor.execute("""
+            INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+            VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', ?, ?, ?)
+            """, (ip, web_port, desc, act, now_str, now_ts))
+            port_log_id = cursor.lastrowid
+            
         conn.commit()
         conn.close()
+        
+        # 异步解析地理位置
+        if ip not in ("127.0.0.1", "::1", "localhost"):
+            def _async_geo_web(w_id, p_id, client_ip):
+                try:
+                    g = resolve_ip_geo(client_ip)
+                    c2 = get_db()
+                    cur2 = c2.cursor()
+                    cur2.execute("""
+                    UPDATE access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
+                    """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), w_id))
+                    if p_id:
+                        cur2.execute("""
+                        UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
+                        """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), p_id))
+                    c2.commit()
+                    c2.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_async_geo_web, args=(web_log_id, port_log_id, ip), daemon=True).start()
     except Exception:
         pass
 
