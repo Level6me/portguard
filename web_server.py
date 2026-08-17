@@ -2522,6 +2522,17 @@ except Exception:
     pass
 
 class RequestHandler(BaseHTTPRequestHandler):
+    def send_response(self, code, message=None):
+        # 在响应层统一记录访问日志：真实状态码、覆盖 GET/POST/HEAD/OPTIONS/404/400 等全部请求
+        super().send_response(code, message)
+        try:
+            client_ip = self.client_address[0]  # 直连来源 IP，不信任可伪造的 X-Forwarded-For
+            user_agent = self.headers.get('User-Agent', '')
+            parsed = urlparse(self.path)
+            log_access_entry(client_ip, self.command, parsed.path, code, user_agent)
+        except Exception:
+            pass
+
     def _send_json(self, data, status=200):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -2544,9 +2555,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
-            client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
-            user_agent = self.headers.get('User-Agent', '')
-            log_access_entry(client_ip, "GET", path, 200, user_agent)
 
             if path in ("/", "/index.html"):
                 self._send_html(HTML_TEMPLATE)
@@ -2709,9 +2717,6 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
-            client_ip = self.headers.get('X-Forwarded-For', self.client_address[0]).split(',')[0].strip()
-            user_agent = self.headers.get('User-Agent', '')
-            log_access_entry(client_ip, "POST", path, 200, user_agent)
 
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"

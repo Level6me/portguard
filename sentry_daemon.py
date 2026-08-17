@@ -404,7 +404,7 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
                     c2.close()
                 except Exception:
                     pass
-            threading.Thread(target=_async_geo_web, args=(web_log_id, port_log_id, ip), daemon=True).start()
+            _EXECUTOR.submit(_async_geo_web, web_log_id, port_log_id, ip)
     except Exception:
         pass
 
@@ -850,7 +850,7 @@ class TrapServer:
                                 
                                 port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
                                 print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
-                                threading.Thread(target=ban_ip, args=(client_ip, port, port_info), daemon=True).start()
+                                _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
                             except Exception:
                                 pass
                 else:
@@ -867,7 +867,7 @@ class TrapServer:
                                     
                                     port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
                                     print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
-                                    threading.Thread(target=ban_ip, args=(client_ip, port, port_info), daemon=True).start()
+                                    _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
                                 except Exception:
                                     pass
             except Exception as e:
