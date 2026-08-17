@@ -1083,16 +1083,16 @@ class GlobalPortSniffer:
         cfg = load_config()
         whitelist = cfg.get("whitelist", [])
         active_ports_map = get_active_system_ports()
+        trap_meta = is_trap_port(dst_port, cfg)
         
         # 1. 优先白名单放行
         if ip_in_whitelist(src_ip, whitelist):
             action = "WHITELIST"
             proc = active_ports_map.get(dst_port, "")
             desc = f"白名单访问: {proc} (端口 {dst_port})" if proc else f"安全白名单访问 (端口 {dst_port})"
-        # 2. 命中活跃诱饵蜜罐 (必须优先于 active_ports_map，因为蜜罐自身的监听端口也会出现在系统的监听列表中)
-        elif dst_port in trap_instance.trap_map:
+        # 2. 命中活跃诱饵蜜罐 (无论系统防火墙是否提前拦截，优先判定蜜罐探针并联动拉黑)
+        elif trap_meta:
             action = "INTERCEPTED"
-            trap_meta = trap_instance.trap_map.get(dst_port, {})
             desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
             port_info = {
                 "name": desc,
@@ -1101,7 +1101,7 @@ class GlobalPortSniffer:
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
         # 3. 正常系统业务访问（如 SSH 29675、Web 9099、OpenResty 80/443、1Panel 等）
-        elif dst_port in active_ports_map and dst_port not in trap_instance.trap_map:
+        elif dst_port in active_ports_map and not trap_meta:
             action = "BUSINESS"
             proc = active_ports_map[dst_port]
             desc = f"正常业务连接: {proc} (端口 {dst_port})"
