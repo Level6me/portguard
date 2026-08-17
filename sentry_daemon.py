@@ -926,7 +926,7 @@ class TrapServer:
             if norm:
                 normalized_traps.append(norm)
             
-        MAX_TOTAL_TRAP_SOCKETS = 30000
+        MAX_TOTAL_TRAP_SOCKETS = 256
         total_bound = 0
         web_port = 9099
         try:
@@ -943,6 +943,11 @@ class TrapServer:
                 start_p = int(start_p)
                 end_p = int(end_p)
             except Exception:
+                continue
+
+            # 对于超大端口范围（如 1-65535），禁止暴力绑定数万套接字，交由底层超轻量抓包感知引擎统一捕获
+            if (end_p - start_p) > 50:
+                print(f"[Trap] 检测到大端口范围 ({start_p}-{end_p})，交由底层网络感知引擎捕获，跳过 socket 占用")
                 continue
 
             bound_count_for_item = 0
@@ -997,7 +1002,7 @@ class TrapServer:
                                 print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
                                 _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
                             except Exception:
-                                pass
+                                time.sleep(0.01)
                 else:
                     # 回退到 select (仅在无 epoll 平台)
                     sock_list = [s for s, _ in list(self.sockets.values())[:1000]]
@@ -1017,7 +1022,7 @@ class TrapServer:
                                     print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
                                     _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
                                 except Exception:
-                                    pass
+                                    time.sleep(0.01)
             except Exception as e:
                 time.sleep(0.5)
 

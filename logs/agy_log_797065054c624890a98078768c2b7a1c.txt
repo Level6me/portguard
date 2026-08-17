@@ -142,3 +142,7 @@ ERROR: logging before google.Init: I0817 21:01:05.427338     656 http_helpers.go
 ERROR: logging before google.Init: I0817 21:01:09.839477     692 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xe43eb5eeec910fc9 ResponseID: EwaDapqQMoSD2roP09Gw-AE
 ERROR: logging before google.Init: I0817 21:01:12.507061     702 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1da53c113d0a3589 ResponseID: FgaDavz3I8-p0-kP5LupqAI
 ERROR: logging before google.Init: I0817 21:01:14.494320     827 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x5f7225dbe9b5aea9 ResponseID: GAaDat2_PIzY2roPsNC0iQg
+ERROR: logging before google.Init: I0817 21:01:23.886735     874 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x48114c98f74048d3 ResponseID: IgaDatKcIOSx2roPht_l0A8
+ERROR: logging before google.Init: I0817 21:01:28.820663     911 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x6b15a7ff0976f518 ResponseID: JgaDatj5DKuD0-kP-cX0oQc
+ERROR: logging before google.Init: I0817 21:01:31.071747       1 manager.go:739] CLI store manager shutting down
+ERROR: logging before google.Init: I0817 21:01:31.072277       1 conversation_manager.go:633] Stopping conversation stream
