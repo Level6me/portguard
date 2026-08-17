@@ -136,3 +136,10 @@ ERROR: logging before google.Init: I0817 20:58:18.392000     693 http_helpers.go
 ERROR: logging before google.Init: I0817 20:58:21.337189     702 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1776c8d22b034d56 ResponseID: awWDarn5Eou50-kPkoOTUQ
 ERROR: logging before google.Init: I0817 20:58:31.179133     781 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xac05e27c326d619d ResponseID: bwWDao6RNKi-0-kP5-eRaQ
 ERROR: logging before google.Init: I0817 20:58:37.715359     857 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1952f24dc2564ead ResponseID: ewWDas7uGIns2roP4ZrbiQQ
+ERROR: logging before google.Init: I0817 20:58:47.947667     909 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xcf408037c4ca4634 ResponseID: hQWDape1CObc2roP2YykwAQ
+ERROR: logging before google.Init: I0817 20:58:51.850567       1 manager.go:739] CLI store manager shutting down
+ERROR: logging before google.Init: I0817 20:58:51.850980       1 conversation_manager.go:633] Stopping conversation stream
+ERROR: logging before google.Init: I0817 20:58:51.851208     264 server.go:1123] Stream goroutine exited for 459f153c-af03-4539-bcae-c85f20380b4f, sending completion signal
+ERROR: logging before google.Init: I0817 20:58:51.851229     264 conversation_manager.go:761] Stream completed for 459f153c-af03-4539-bcae-c85f20380b4f, clearing ResponsePending
+ERROR: logging before google.Init: I0817 20:58:51.851556    1005 server.go:2637] Language server shutting down
+ERROR: logging before google.Init: I0817 20:58:51.851571    1005 server.go:2642] Waiting for migrations to complete to prevent partial migration state...
