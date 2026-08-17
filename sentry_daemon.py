@@ -993,12 +993,22 @@ class TrapServer:
                 time.sleep(0.5)
 
 def is_trap_port(port, cfg=None):
-    """判定指定端口是否属于已配置的诱捕蜜罐端口。"""
+    """判定指定端口是否属于已配置的诱捕蜜罐端口（严格排除核心业务与系统服务端口）。"""
+    try:
+        port = int(port)
+    except Exception:
+        return None
+    # 核心系统与业务端口绝对不可作为诱捕蜜罐
+    if port in KNOWN_SYSTEM_SERVICES:
+        return None
+    if cfg is None:
+        cfg = load_config()
+    web_port = int(cfg.get("web_port", 9099) or 9099)
+    if port == web_port:
+        return None
     if port in trap_instance.trap_map:
         return trap_instance.trap_map[port]
     try:
-        if cfg is None:
-            cfg = load_config()
         raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
         for item in raw_traps:
             norm = normalize_trap_item(item)

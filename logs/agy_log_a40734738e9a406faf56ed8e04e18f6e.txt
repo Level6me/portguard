@@ -134,3 +134,12 @@ ERROR: logging before google.Init: I0817 20:06:01.185526     826 http_helpers.go
 ERROR: logging before google.Init: I0817 20:06:17.523679     850 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xaccb3f1007cca977 ResponseID: NvmCau-OKoSD2roP09Gw-AE
 ERROR: logging before google.Init: I0817 20:06:20.201588     874 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x3758b9ab2a16be7f ResponseID: OvmCas-lB8Kv2roPmKiyoQU
 ERROR: logging before google.Init: I0817 20:06:23.085855     977 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xd3042e8a5054b62d ResponseID: PfmCasH3A_TIrfcPtbqtiAM
+ERROR: logging before google.Init: I0817 20:06:33.035213    1020 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x5e6986518fbe5e75 ResponseID: R_mCap6SNMuA2roPoLjCqAc
+ERROR: logging before google.Init: I0817 20:06:35.419050    1061 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xb36a368e32aaf003 ResponseID: SfmCas7EKPXH0-kPqKukSA
+ERROR: logging before google.Init: I0817 20:06:40.139226    1106 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x42229e4abbc5663f ResponseID: TfmCao3TI4ye2roP583L6A8
+ERROR: logging before google.Init: I0817 20:06:42.326546       1 manager.go:739] CLI store manager shutting down
+ERROR: logging before google.Init: I0817 20:06:42.326966       1 conversation_manager.go:633] Stopping conversation stream
+ERROR: logging before google.Init: I0817 20:06:42.327309     252 server.go:1123] Stream goroutine exited for 459f153c-af03-4539-bcae-c85f20380b4f, sending completion signal
+ERROR: logging before google.Init: I0817 20:06:42.327332     252 conversation_manager.go:761] Stream completed for 459f153c-af03-4539-bcae-c85f20380b4f, clearing ResponsePending
+ERROR: logging before google.Init: I0817 20:06:42.327672    1134 server.go:2637] Language server shutting down
+ERROR: logging before google.Init: I0817 20:06:42.327688    1134 server.go:2642] Waiting for migrations to complete to prevent partial migration state...

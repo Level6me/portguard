@@ -772,6 +772,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
                 </div>
                 <div class="header-action-wrap">
+                    <button class="pill-btn accent" onclick="batchBanAllProbes()" title="自动分析访问日志，将所有非白名单的历史扫描与探测 IP 批量拉黑并下发防火墙">
+                        <span>⚡</span>
+                        <span>一键拉黑历史探测IP</span>
+                    </button>
                     <button class="pill-btn" onclick="openImportModal('blacklist')">
                         <span>📥</span>
                         <span>导入黑名单</span>
@@ -1003,6 +1007,97 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="bottom-spacer"></div>
     </div>
+
+    <!-- Page 7: 系统防御与全局策略设置 (Settings) -->
+    <div id="tab-settings" style="display: none;">
+        <div class="card" style="max-width: 900px; margin: 0 auto;">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">⚙️ 系统防御参数与全局策略设置</div>
+                    <div class="val-sub">自定义诱捕封禁灵敏度、时间窗口、自动解封周期与内核联动方式</div>
+                </div>
+            </div>
+
+            <div style="padding: 22px; display: flex; flex-direction: column; gap: 20px;">
+                <!-- 1. 封禁灵敏度与阈值 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-weight: 700; font-size: 14px; color: var(--text);">🎯 诱捕探测判定与自动拉黑阈值</span>
+                        <span class="badge badge-high" id="badge-threshold-status">主动严防</span>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
+                        当外部 IP 在指定时间窗口内对蜜罐端口发起探测达到设定次数后，系统将自动触发内核防火墙阻断并将其永久或定期拉黑。
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
+                        <div>
+                            <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数 (阈值)</label>
+                            <select id="setting-trap-threshold" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
+                                <option value="1">1 次 (零容忍立即封禁 - 推荐全网防扫)</option>
+                                <option value="2">2 次 (严苛防御模式)</option>
+                                <option value="3">3 次 (标准默认模式 - 防单次误触)</option>
+                                <option value="5">5 次 (宽松模式)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
+                            <select id="setting-trap-window" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
+                                <option value="15">15 秒</option>
+                                <option value="30">30 秒 (标准默认)</option>
+                                <option value="60">60 秒 (长窗口感知)</option>
+                                <option value="300">300 秒 (5分钟慢速扫描捕获)</option>
+                                <option value="600">600 秒 (10分钟超长感知)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 封禁时长与自动解封周期 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+                    <div style="font-weight: 700; font-size: 14px; color: var(--text); margin-bottom: 8px;">⏳ 黑名单封禁周期与自动解封</div>
+                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
+                        被拉黑的恶意攻击 IP 的持续封禁天数。设为永久封禁时，除非管理员手动解封，否则永远阻断。
+                    </div>
+                    <div>
+                        <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
+                        <select id="setting-auto-clean" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
+                            <option value="7">7 天 (临时阻断)</option>
+                            <option value="30">30 天 (标准推荐)</option>
+                            <option value="90">90 天 (长期封锁)</option>
+                            <option value="180">180 天 (半年封锁)</option>
+                            <option value="0">永久封禁 (永不自动解封)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 3. 内核阻断机制 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+                    <div style="font-weight: 700; font-size: 14px; color: var(--text); margin-bottom: 8px;">🛡️ Linux 内核底层阻断联动机制</div>
+                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
+                        启用双层内核防御联动，确保恶意流量在数据链路层或路由层瞬间丢弃，不占用任何系统带宽与 CPU。
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <label style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-ban-iptables" checked style="width: 17px; height: 17px; accent-color: var(--accent);">
+                            <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链最顶层直接丢弃数据包）</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-ban-blackhole" checked style="width: 17px; height: 17px; accent-color: var(--accent);">
+                            <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接阻断，极低 CPU 消耗）</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 保存设置按钮 -->
+                <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px;">
+                    <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 10px 28px; font-size: 14px; font-weight: 700;">
+                        <span>💾</span>
+                        <span>保存并动态应用设置</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="bottom-spacer"></div>
+    </div>
 </div>
 
 <!-- Floating Glass Dock (Abit 经典底栏) -->
@@ -1030,6 +1125,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <button class="dock-btn" id="dock-btn-whitelist" onclick="switchTab('whitelist', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
         <span>信任白名单</span>
+    </button>
+    <button class="dock-btn" id="dock-btn-settings" onclick="switchTab('settings', this)">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>系统设置</span>
     </button>
 </div>
 
@@ -1351,7 +1450,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'access-logs': '端口与控制台访问日志',
         'blacklist': '内核黑名单池',
         'traps': '蜜罐策略配置',
-        'whitelist': '安全信任白名单'
+        'whitelist': '安全信任白名单',
+        'settings': '系统防御全局设置'
     };
 
     const CATEGORY_LABELS = {
@@ -1429,7 +1529,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function switchTab(tabKey, btn) {
-        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
+        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist', 'settings'].forEach(t => {
             const el = document.getElementById(`tab-${t}`);
             if (el) el.style.display = (t === tabKey) ? 'block' : 'none';
         });
@@ -1438,7 +1538,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (targetBtn) targetBtn.classList.add('active');
         document.getElementById('page-main-title').innerText = PAGE_TITLES[tabKey] || '控制台';
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        fetchData(false);
+        if (tabKey === 'settings') {
+            loadSystemSettings();
+        } else {
+            fetchData(false);
+        }
     }
 
     function jumpToLogsFilter(cat) {
@@ -2542,11 +2646,113 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         navigator.clipboard.writeText(text).then(() => showToast(`已复制 IP: ${text}`, '📋'));
     }
 
+    async function loadSystemSettings() {
+        try {
+            const res = await fetch('/api/settings');
+            const data = await res.json();
+            if (document.getElementById('setting-trap-threshold')) {
+                document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 3);
+            }
+            if (document.getElementById('setting-trap-window')) {
+                document.getElementById('setting-trap-window').value = String(data.trap_window_seconds || 30);
+            }
+            if (document.getElementById('setting-auto-clean')) {
+                document.getElementById('setting-auto-clean').value = String(data.auto_clean_days !== undefined ? data.auto_clean_days : 30);
+            }
+            if (document.getElementById('setting-ban-iptables')) {
+                document.getElementById('setting-ban-iptables').checked = data.ban_action_iptables !== false;
+            }
+            if (document.getElementById('setting-ban-blackhole')) {
+                document.getElementById('setting-ban-blackhole').checked = data.ban_action_blackhole !== false;
+            }
+            updateThresholdBadge();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    function updateThresholdBadge() {
+        const sel = document.getElementById('setting-trap-threshold');
+        if (!sel) return;
+        const val = parseInt(sel.value || '3');
+        const badge = document.getElementById('badge-threshold-status');
+        if (!badge) return;
+        if (val === 1) {
+            badge.innerText = '⚡ 零容忍立即封禁';
+            badge.className = 'badge badge-high';
+        } else if (val === 2) {
+            badge.innerText = '🛡️ 严苛防御模式';
+            badge.className = 'badge badge-high';
+        } else {
+            badge.innerText = '⚖️ 标准防误触模式';
+            badge.className = 'badge badge-low';
+        }
+    }
+
+    async function saveSystemSettings() {
+        const threshold = parseInt(document.getElementById('setting-trap-threshold').value || '3');
+        const windowSec = parseInt(document.getElementById('setting-trap-window').value || '30');
+        const cleanDays = parseInt(document.getElementById('setting-auto-clean').value || '30');
+        const iptables = document.getElementById('setting-ban-iptables').checked;
+        const blackhole = document.getElementById('setting-ban-blackhole').checked;
+
+        try {
+            showToast('正在保存系统设置...', '⏳');
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trap_threshold: threshold,
+                    trap_window_seconds: windowSec,
+                    auto_clean_days: cleanDays,
+                    ban_action_iptables: iptables,
+                    ban_action_blackhole: blackhole
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '系统设置已成功保存并立即生效！', '🎉');
+                updateThresholdBadge();
+            } else {
+                showToast(data.msg || '保存失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
+    async function batchBanAllProbes() {
+        if (!confirm('确定要分析访问日志，将所有非白名单的历史扫描探测 IP 一键批量拉黑并下发防火墙阻断吗？')) {
+            return;
+        }
+        try {
+            showToast('正在批量分析与拉黑探测 IP...', '⏳');
+            const res = await fetch('/api/blacklist/batch_ban_all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || `批量拉黑完成！共拉黑 ${data.count || 0} 个恶意 IP`, '🎉');
+                fetchData(false);
+            } else {
+                showToast(data.msg || '操作失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         applyTheme(currentThemeMode, false);
         initCharts();
         fetchData(false);
         startAutoRefresh();
+        const thresholdSelect = document.getElementById('setting-trap-threshold');
+        if (thresholdSelect) {
+            thresholdSelect.addEventListener('change', updateThresholdBadge);
+        }
     });
 </script>
 </body>
@@ -2667,6 +2873,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "data": data_points
                     }
                 })
+            if path == "/api/settings":
+                cfg = load_config()
+                self._send_json({
+                    "trap_threshold": int(cfg.get("trap_threshold", 3) or 3),
+                    "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
+                    "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
+                    "defense_mode": cfg.get("defense_mode", "strict"),
+                    "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
+                    "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
+                    "web_port": int(cfg.get("web_port", 9099) or 9099)
+                })
                 return
 
             if path == "/api/events":
@@ -2675,6 +2892,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 c.execute("SELECT id, ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, status FROM events ORDER BY id DESC LIMIT 200")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
+                for r in rows:
+                    if r.get("country") in ("分析中...", "", None):
+                        cached = _GEO_CACHE.get(r["ip"])
+                        if cached:
+                            r["country"] = cached.get("country", "公网节点")
+                            r["region"] = cached.get("region", "")
+                            r["city"] = cached.get("city", "")
+                            r["isp"] = cached.get("isp", "")
+                        else:
+                            _EXECUTOR.submit(resolve_ip_geo, r["ip"])
                 self._send_json(rows)
                 return
 
@@ -2842,6 +3069,69 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn.close()
                 
                 self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}"})
+                return
+
+            if path == "/api/settings":
+                cfg = load_config()
+                if "trap_threshold" in req_data:
+                    cfg["trap_threshold"] = int(req_data["trap_threshold"])
+                if "trap_window_seconds" in req_data:
+                    cfg["trap_window_seconds"] = int(req_data["trap_window_seconds"])
+                if "auto_clean_days" in req_data:
+                    cfg["auto_clean_days"] = int(req_data["auto_clean_days"])
+                if "ban_action_iptables" in req_data:
+                    cfg["ban_action_iptables"] = bool(req_data["ban_action_iptables"])
+                if "ban_action_blackhole" in req_data:
+                    cfg["ban_action_blackhole"] = bool(req_data["ban_action_blackhole"])
+                save_config(cfg)
+                self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
+                return
+
+            if path == "/api/blacklist/batch_ban_all":
+                cfg = load_config()
+                whitelist = cfg.get("whitelist", [])
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT DISTINCT ip, port FROM port_access_logs WHERE (action = 'PROBE' OR action = 'WATCH' OR action = 'INTERCEPTED') AND ip NOT IN ('127.0.0.1', '::1', '0.0.0.0')")
+                rows = c.fetchall()
+                
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                auto_clean_days = int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30)
+                ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
+                
+                count = 0
+                for ip, port in rows:
+                    v = validate_ip(ip)
+                    if not v or ip_in_whitelist(v, whitelist):
+                        continue
+                    c.execute("SELECT ip FROM blacklist WHERE ip = ?", (v,))
+                    if c.fetchone():
+                        continue
+                    geo = resolve_ip_geo(v)
+                    country = geo.get("country", "公网探测")
+                    
+                    if cfg.get("ban_action_iptables", True):
+                        run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
+                    if cfg.get("ban_action_blackhole", True):
+                        run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
+                        
+                    c.execute("""
+                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
+                    VALUES (?, ?, ?, '高危', ?, ?, ?)
+                    """, (v, f"未开放端口全网扫描 (端口 {port})", country, now_str, now_ts, ban_expire))
+                    
+                    c.execute("""
+                    INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
+                    VALUES (?, ?, 'TCP', '全网端口嗅探扫描', 'scan', '高危', ?, ?, ?, ?, ?, ?, 'BANNED')
+                    """, (v, port, country, geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), now_str, now_ts))
+                    count += 1
+                    
+                conn.commit()
+                conn.close()
+                if cfg.get("ban_action_iptables", True):
+                    run_firewall_cmd("iptables-save")
+                self._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个历史探测 IP 批量拉黑并下发防火墙！"})
                 return
 
             if path == "/api/blacklist/import":
