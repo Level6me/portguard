@@ -2839,6 +2839,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "data": data_points
                     }
                 })
+                return
             if path == "/api/settings":
                 cfg = load_config()
                 self._send_json({
