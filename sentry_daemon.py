@@ -14,12 +14,14 @@ import subprocess
 import json
 import urllib.request
 import re
+import ipaddress
+from concurrent.futures import ThreadPoolExecutor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = "/opt/portsentry-ui/data.db"
 CONFIG_PATH = "/opt/portsentry-ui/config.json"
 
-if not os.path.exists("/opt/portsentry-ui") and not os.access("/opt", os.W_OK):
+if not os.access("/opt", os.W_OK) or (os.path.exists("/opt/portsentry-ui") and not os.access("/opt/portsentry-ui", os.W_OK)):
     DB_PATH = os.path.join(BASE_DIR, "data.db")
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
@@ -43,8 +45,7 @@ DEFAULT_CONFIG = {
         {"ip": "::1", "remark": "IPv6 本地回环"},
         {"ip": "10.0.0.0/8", "remark": "私网 A 类地址"},
         {"ip": "172.16.0.0/12", "remark": "私网 B 类地址"},
-        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"},
-        {"ip": "43.155.173.146", "remark": "腾讯云节点"}
+        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"}
     ],
     "web_port": 9099,
     "web_bind": "0.0.0.0",
@@ -52,10 +53,39 @@ DEFAULT_CONFIG = {
     "defense_mode": "strict",
     "ban_action_iptables": True,
     "ban_action_blackhole": True,
-    "auto_clean_days": 30
+    "auto_clean_days": 30,
+    "trap_threshold": 3,
+    "trap_window_seconds": 30
 }
 
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
+
+# 全局线程池：限制并发，避免扫描风暴下线程爆炸
+_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sentry")
+
+
+def validate_ip(ip):
+    """严格校验 IPv4 / IPv6 地址，拒绝任何带端口、路径或 shell 元字符的输入。"""
+    if not ip or not isinstance(ip, str):
+        return None
+    ip = ip.strip()
+    if not ip:
+        return None
+    # 明确拒绝 shell 元字符与 URL 形态
+    if re.search(r"[;&|`$()<>\"'\\ \t\n\r]", ip):
+        return None
+    try:
+        return str(ipaddress.ip_address(ip))
+    except ValueError:
+        return None
+
+
+def run_firewall_cmd(*args):
+    """参数数组方式执行 iptables / ip 命令，杜绝 shell 注入。"""
+    try:
+        subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 def parse_port_range(port_val):
     """解析单个端口或端口范围，返回 (start_port, end_port, display_str) 或 None"""
@@ -209,7 +239,10 @@ def get_db():
 def init_db():
     dir_name = os.path.dirname(DB_PATH)
     if dir_name:
-        os.makedirs(dir_name, exist_ok=True)
+        try:
+            os.makedirs(dir_name, exist_ok=True)
+        except Exception:
+            pass
     conn = get_db()
     cursor = conn.cursor()
     try:
@@ -246,7 +279,8 @@ def init_db():
         country TEXT,
         level TEXT,
         ban_time TEXT,
-        timestamp INTEGER
+        timestamp INTEGER,
+        ban_expire INTEGER
     )
     """)
     
@@ -300,6 +334,10 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE blacklist ADD COLUMN level TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN ban_expire INTEGER")
     except Exception:
         pass
     try:
@@ -392,13 +430,53 @@ def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTE
         pass
 
 def load_config():
-    dir_name = os.path.dirname(CONFIG_PATH)
-    if dir_name and not os.path.exists(dir_name):
-        os.makedirs(dir_name, exist_ok=True)
-    if not os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+    try:
+        dir_name = os.path.dirname(CONFIG_PATH)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name, exist_ok=True)
+        if not os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+            return DEFAULT_CONFIG
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+            return {**DEFAULT_CONFIG, **cfg}
+    except Exception:
         return DEFAULT_CONFIG
+
+
+def cleanup_expired_bans():
+    """定期清理过期封禁：解除 iptables / 黑洞路由并删除黑名单记录。"""
+    try:
+        cfg = load_config()
+        auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
+        if auto_clean_days <= 0:
+            return
+        now_ts = int(time.time())
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT ip, ban_expire FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
+        expired = [row["ip"] for row in c.fetchall()]
+        for ip in expired:
+            valid = validate_ip(ip)
+            if not valid:
+                continue
+            run_firewall_cmd("iptables", "-D", "INPUT", "-s", valid, "-j", "DROP")
+            run_firewall_cmd("ip", "route", "del", "blackhole", f"{valid}/32")
+            c.execute("DELETE FROM blacklist WHERE ip = ?", (valid,))
+        if expired:
+            c.execute("UPDATE events SET status='EXPIRED' WHERE ip IN (%s)" % ",".join("?" * len(expired)), expired)
+            conn.commit()
+            print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
+        conn.close()
+    except Exception as e:
+        print(f"[CLEANUP] 清理失败: {e}")
+
+
+def cleanup_loop():
+    while True:
+        time.sleep(3600)
+        cleanup_expired_bans()
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             cfg = json.load(f)
@@ -450,28 +528,48 @@ def translate_country_cn(name):
         return "未知地域"
     return GEO_COUNTRY_CN.get(name.strip(), name.strip())
 
+_GEO_CACHE = {}
+_GEO_CACHE_LOCK = threading.Lock()
+
 def resolve_ip_geo(ip):
+    # 结果缓存：同一 IP 只查一次，降低外部 API 压力与限流
+    with _GEO_CACHE_LOCK:
+        if ip in _GEO_CACHE:
+            return _GEO_CACHE[ip]
     try:
-        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
+        url = f"https://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
         req = urllib.request.Request(url, headers={"User-Agent": "PortsentryUI/2.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             if data.get("status") == "success":
                 c = translate_country_cn(data.get("country", ""))
-                return {
+                result = {
                     "country": c,
                     "region": data.get("regionName", ""),
                     "city": data.get("city", ""),
                     "isp": data.get("isp", "")
                 }
+                with _GEO_CACHE_LOCK:
+                    _GEO_CACHE[ip] = result
+                return result
     except Exception:
         pass
-    return {"country": "公网节点", "region": "", "city": "", "isp": ""}
+    result = {"country": "公网节点", "region": "", "city": "", "isp": ""}
+    with _GEO_CACHE_LOCK:
+        _GEO_CACHE[ip] = result
+    return result
 
 def ban_ip(ip, port, port_info):
     cfg = load_config()
     now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     now_ts = int(time.time())
+
+    # 严格校验 IP：非法输入只记录日志，绝不拼入任何命令
+    valid_ip = validate_ip(ip)
+    if not valid_ip:
+        print(f"[SKIP] 非法 IP 输入被拒绝: {ip!r}")
+        return
+    ip = valid_ip
     
     # 1. 白名单拦截保护
     whitelist = cfg.get("whitelist", [])
@@ -479,20 +577,60 @@ def ban_ip(ip, port, port_info):
         print(f"[WHITELIST] 忽略安全白名单 IP: {ip} 探测端口 {port}")
         log_port_access_entry(ip, port, port_info.get("name", f"TCP/{port}"), action="WHITELIST")
         return
+
+    # 2. 蜜罐阈值判定：窗口内探测次数不足时不执行防火墙封禁，仅记录观察（防误封单次连接）
+    threshold = int(cfg.get("trap_threshold", 3) or 3)
+    window = int(cfg.get("trap_window_seconds", 30) or 30)
+    try:
+        conn_tmp = get_db()
+        cur_tmp = conn_tmp.cursor()
+        cur_tmp.execute(
+            "SELECT COUNT(*) AS cnt FROM events WHERE ip=? AND timestamp >= ? AND status != 'WHITELIST'",
+            (ip, now_ts - window)
+        )
+        hit_count = int(cur_tmp.fetchone()["cnt"] or 0) + 1
+        conn_tmp.close()
+    except Exception:
+        hit_count = threshold
+
+    if hit_count < threshold:
+        print(f"[WATCH] IP {ip} 窗口内第 {hit_count} 次探测 (阈值 {threshold})，暂不封禁")
+        try:
+            conn_w = get_db()
+            cw = conn_w.cursor()
+            cw.execute(
+                "INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status, hit_count) "
+                "VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'WATCH', ?)",
+                (ip, port, port_info.get("name", f"TCP/{port}"), port_info.get("category", "other"),
+                 port_info.get("level", "高危"), now_str, now_ts, hit_count)
+            )
+            cw.execute(
+                "INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) "
+                "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
+                (ip, port, port_info.get("name", f"TCP/{port}"), now_str, now_ts)
+            )
+            conn_w.commit()
+            conn_w.close()
+        except Exception:
+            pass
+        return
         
-    # 2. 毫秒级优先执行内核防火墙阻断与黑洞路由
+    # 3. 达到阈值：毫秒级优先执行内核防火墙阻断与黑洞路由（参数数组，无 shell）
     if cfg.get("ban_action_iptables", True):
-        subprocess.run(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null || true", shell=True)
-        subprocess.run("iptables-save > /etc/sysconfig/iptables 2>/dev/null || true", shell=True)
+        run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
+        run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
+        run_firewall_cmd("iptables-save")
         
     if cfg.get("ban_action_blackhole", True):
-        subprocess.run(f"ip route add blackhole {ip}/32 2>/dev/null || true", shell=True)
+        run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
         
     port_name = port_info.get("name", f"TCP/{port}")
     category = port_info.get("category", "other")
     level = port_info.get("level", "高危")
+    auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
+    ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
-    # 3. 写入事件与黑名单库与端口访问日志
+    # 4. 写入事件与黑名单库与端口访问日志
     conn = get_db()
     c = conn.cursor()
     c.execute("""
@@ -508,13 +646,13 @@ def ban_ip(ip, port, port_info):
     port_log_id = c.lastrowid
 
     c.execute("""
-    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp)
-    VALUES (?, ?, '分析中...', ?, ?, ?)
-    """, (ip, f"探测蜜罐端口 {port} ({port_name})", level, now_str, now_ts))
+    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
+    VALUES (?, ?, '分析中...', ?, ?, ?, ?)
+    """, (ip, f"探测蜜罐端口 {port} ({port_name})", level, now_str, now_ts, ban_expire))
     conn.commit()
     conn.close()
     
-    # 4. 后台异步解析地理位置并回填
+    # 5. 后台异步解析地理位置并回填（线程池 + 缓存，避免风暴与限流）
     def _async_geo():
         geo = resolve_ip_geo(ip)
         try:
@@ -534,7 +672,7 @@ def ban_ip(ip, port, port_info):
         except Exception:
             pass
 
-    threading.Thread(target=_async_geo, daemon=True).start()
+    _EXECUTOR.submit(_async_geo)
 
 _SYSTEM_PORTS_CACHE = {}
 _SYSTEM_PORTS_CACHE_TIME = 0
@@ -898,11 +1036,11 @@ class GlobalPortSniffer:
                         c2.close()
                     except Exception:
                         pass
-                threading.Thread(target=_geo_backfill, args=(new_id, src_ip), daemon=True).start()
+                _EXECUTOR.submit(_geo_backfill, new_id, src_ip)
             except Exception:
                 pass
                 
-        threading.Thread(target=_async_write, daemon=True).start()
+        _EXECUTOR.submit(_async_write)
 
 trap_instance = TrapServer()
 sniffer_instance = GlobalPortSniffer()
@@ -911,5 +1049,6 @@ if __name__ == "__main__":
     init_db()
     trap_instance.start()
     sniffer_instance.start()
+    _EXECUTOR.submit(cleanup_loop)
     while True:
         time.sleep(3600)

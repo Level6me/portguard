@@ -15,6 +15,9 @@ with open(os.path.join(BASE_DIR, 'uninstall.sh'), 'rb') as f:
 with open(os.path.join(BASE_DIR, 'update.sh'), 'rb') as f:
     update_b64 = base64.b64encode(f.read()).decode('utf-8')
 
+with open(os.path.join(BASE_DIR, 'chart.min.js'), 'rb') as f:
+    chart_b64 = base64.b64encode(f.read()).decode('utf-8')
+
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
 # Portsentry Defense & Apple-Style WebUI - 独立自包含一行一键生产部署与更新脚本
@@ -88,6 +91,10 @@ chmod 755 "${INSTALL_DIR}/uninstall.sh"
 # 释放 update.sh
 echo "__UPDATE_B64__" | base64 -d > "${INSTALL_DIR}/update.sh"
 chmod 755 "${INSTALL_DIR}/update.sh"
+
+# 释放 chart.min.js（本地化 Chart.js，避免 CDN 依赖）
+echo "__CHART_B64__" | base64 -d > "${INSTALL_DIR}/chart.min.js"
+chmod 644 "${INSTALL_DIR}/chart.min.js"
 
 echo -e "${GREEN}[✓] 核心代码、更新模块与卸载工具已成功解包并写入完毕！${NC}"
 
@@ -191,7 +198,11 @@ echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.co
 echo -e "${CYAN}================================================================${NC}\n"
 '''
 
-final_content = template.replace("__WEB_B64__", web_b64).replace("__DAEMON_B64__", daemon_b64).replace("__UNINSTALL_B64__", uninstall_b64).replace("__UPDATE_B64__", update_b64)
+final_content = (template.replace("__WEB_B64__", web_b64)
+                 .replace("__DAEMON_B64__", daemon_b64)
+                 .replace("__UNINSTALL_B64__", uninstall_b64)
+                 .replace("__UPDATE_B64__", update_b64)
+                 .replace("__CHART_B64__", chart_b64))
 
 with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)

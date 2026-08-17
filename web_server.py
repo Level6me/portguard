@@ -10,9 +10,9 @@ import time
 import sqlite3
 import subprocess
 import re
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry
+from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd, cleanup_expired_bans
 
 def parse_loose_json_or_lines(text):
     text = (text or "").strip()
@@ -1255,6 +1255,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let whitelistPage = 1;
     let accessLogPage = 1;
 
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function jsEscape(s) {
+        return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+    function csvEscape(s) {
+        return String(s == null ? '' : s).replace(/"/g, '""');
+    }
+
     const COUNTRY_CN_MAP = {
         "United States": "美国", "United Kingdom": "英国", "Germany": "德国", "France": "法国",
         "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
@@ -1756,14 +1766,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td style="font-size:12px; color:var(--text-sec);">${e.attack_time}</td>
-                <td><span class="ip-text" onclick="showIPDetail('${e.ip}')" title="点击查看 IP 详情">${e.ip}</span></td>
+                <td><span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span></td>
                 <td>${geoText}</td>
                 <td><span class="tag neutral">TCP / ${e.port}</span></td>
                 <td style="font-weight:600;">${e.port_name || '自定义诱饵'} <span class="tag accent" style="margin-left:4px;">${catName}</span></td>
                 <td><span class="tag ${tagClass}">${e.level || '高危'}</span></td>
                 <td><span class="tag danger">已内核丢弃 (DROP)</span></td>
                 <td>
-                    <button class="action-btn success" onclick="unbanIP('${e.ip}')">一键解封</button>
+                    <button class="action-btn success" onclick="unbanIP('${jsEscape(e.ip)}')">一键解封</button>
                 </td>
             </tr>
             `;
@@ -1806,13 +1816,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const geoText = formatGeoCN(b);
             html += `
             <tr>
-                <td><span class="ip-text" onclick="showIPDetail('${b.ip}')" title="点击查看 IP 详情">${b.ip}</span></td>
+                <td><span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span></td>
                 <td>${b.reason || '自动诱捕阻断'}</td>
                 <td>${geoText}</td>
                 <td><span class="tag danger">iptables + blackhole</span></td>
                 <td style="font-size:12px; color:var(--text-sec);">${b.ban_time}</td>
                 <td>
-                    <button class="action-btn success" onclick="unbanIP('${b.ip}')">解除封禁</button>
+                    <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
                 </td>
             </tr>
             `;
@@ -2473,7 +2483,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (!allEvents || allEvents.length === 0) return showToast('当前暂无日志可导出', '⚠️');
         let csv = '\uFEFF攻击拦截时间,攻击者IP,国家,地区,ISP运营商,探测端口,服务名称,威胁等级,防护状态\n';
         allEvents.forEach(e => {
-            csv += `"${e.attack_time}","${e.ip}","${e.country || ''}","${e.region || ''}","${e.isp || ''}","${e.port}","${e.port_name || ''}","${e.level || '高危'}","${e.status}"\n`;
+            csv += `"${csvEscape(e.attack_time)}","${csvEscape(e.ip)}","${csvEscape(e.country || '')}","${csvEscape(e.region || '')}","${csvEscape(e.isp || '')}","${e.port}","${csvEscape(e.port_name || '')}","${csvEscape(e.level || '高危')}","${csvEscape(e.status)}"\n`;
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
@@ -2497,6 +2507,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </body>
 </html>
 """
+
+# 本地化 Chart.js：优先内嵌同目录 chart.min.js，文件缺失时保留 CDN 回退
+try:
+    _CHART_JS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.min.js")
+    if os.path.exists(_CHART_JS_PATH):
+        with open(_CHART_JS_PATH, "r", encoding="utf-8") as _cf:
+            _CHART_SRC = _cf.read()
+        HTML_TEMPLATE = HTML_TEMPLATE.replace(
+            '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+            "<script>" + _CHART_SRC + "</script>"
+        )
+except Exception:
+    pass
 
 class RequestHandler(BaseHTTPRequestHandler):
     def _send_json(self, data, status=200):
@@ -2715,10 +2738,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not ip:
                     self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
                     return
-                
-                subprocess.run(f"iptables -D INPUT -s {ip} -j DROP 2>/dev/null || true", shell=True)
-                subprocess.run(f"ip route del blackhole {ip}/32 2>/dev/null || true", shell=True)
-                subprocess.run("iptables-save > /etc/sysconfig/iptables 2>/dev/null || true", shell=True)
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
+                    return
+                ip = valid_ip
+
+                run_firewall_cmd("iptables", "-D", "INPUT", "-s", ip, "-j", "DROP")
+                run_firewall_cmd("ip", "route", "del", "blackhole", f"{ip}/32")
+                run_firewall_cmd("iptables-save")
                 
                 conn = get_db()
                 c = conn.cursor()
@@ -2736,10 +2764,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not ip:
                     self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
                     return
-                
-                subprocess.run(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null || true", shell=True)
-                subprocess.run(f"ip route add blackhole {ip}/32 2>/dev/null || true", shell=True)
-                subprocess.run("iptables-save > /etc/sysconfig/iptables 2>/dev/null || true", shell=True)
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
+                    return
+                ip = valid_ip
+
+                run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
+                run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
+                run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
+                run_firewall_cmd("iptables-save")
                 
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())
@@ -2782,8 +2816,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if mode == "replace":
                     c.execute("SELECT ip FROM blacklist")
                     for (old_ip,) in c.fetchall():
-                        subprocess.run(f"iptables -D INPUT -s {old_ip} -j DROP 2>/dev/null || true", shell=True)
-                        subprocess.run(f"ip route del blackhole {old_ip}/32 2>/dev/null || true", shell=True)
+                        v_old = validate_ip(old_ip)
+                        if v_old:
+                            run_firewall_cmd("iptables", "-D", "INPUT", "-s", v_old, "-j", "DROP")
+                            run_firewall_cmd("ip", "route", "del", "blackhole", f"{v_old}/32")
                     c.execute("DELETE FROM blacklist")
                     conn.commit()
                     
@@ -2810,17 +2846,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                         
                     if not ip or len(ip) < 7:
                         continue
-                        
-                    subprocess.run(f"iptables -I INPUT -s {ip} -j DROP 2>/dev/null || true", shell=True)
-                    subprocess.run(f"ip route add blackhole {ip}/32 2>/dev/null || true", shell=True)
-                    
+                    valid_ip = validate_ip(ip)
+                    if not valid_ip:
+                        continue
+                    ip = valid_ip
+
+                    run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
+                    run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
+                    run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
+
                     c.execute("""
-                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """, (ip, reason, country, level, ban_time, now_ts))
+                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (ip, reason, country, level, ban_time, now_ts, None))
                     success_count += 1
                     
-                subprocess.run("iptables-save > /etc/sysconfig/iptables 2>/dev/null || true", shell=True)
+                run_firewall_cmd("iptables-save")
                 conn.commit()
                 conn.close()
                 
@@ -3082,13 +3123,31 @@ def run_server():
     cfg = load_config()
     bind_ip = cfg.get("web_bind", "0.0.0.0")
     bind_port = int(cfg.get("web_port", 9099))
-    
-    HTTPServer.allow_reuse_address = True
-    httpd = HTTPServer((bind_ip, bind_port), RequestHandler)
+
+    # 启动时重放黑名单到 iptables / 黑洞路由（解决重启后防御规则丢失问题）
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT ip FROM blacklist")
+        for (ip,) in c.fetchall():
+            v = validate_ip(ip)
+            if not v:
+                continue
+            run_firewall_cmd("iptables", "-C", "INPUT", "-s", v, "-j", "DROP")
+            run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
+            run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
+        conn.close()
+        print(f"[Portsentry] 已重放 {c.rowcount if hasattr(c, 'rowcount') else ''} 条黑名单防火墙规则")
+    except Exception as e:
+        print(f"[Portsentry] 黑名单重放失败: {e}")
+
+    ThreadingHTTPServer.allow_reuse_address = True
+    httpd = ThreadingHTTPServer((bind_ip, bind_port), RequestHandler)
     print(f"[Portsentry-UI Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
     
     trap_instance.start()
     sniffer_instance.start()
+    cleanup_expired_bans()
     
     try:
         httpd.serve_forever()

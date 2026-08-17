@@ -46,6 +46,7 @@ fi
 curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/web_server.py" -o web_server.py
 curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/sentry_daemon.py" -o sentry_daemon.py
 curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/uninstall.sh" -o uninstall.sh
+curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/chart.min.js" -o chart.min.js
 
 if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！${NC}"
@@ -59,6 +60,9 @@ chmod 644 "$INSTALL_DIR/web_server.py"
 
 cp -f sentry_daemon.py "$INSTALL_DIR/sentry_daemon.py"
 chmod 644 "$INSTALL_DIR/sentry_daemon.py"
+
+cp -f chart.min.js "$INSTALL_DIR/chart.min.js"
+chmod 644 "$INSTALL_DIR/chart.min.js"
 
 if [ -s uninstall.sh ]; then
     cp -f uninstall.sh "$INSTALL_DIR/uninstall.sh"
