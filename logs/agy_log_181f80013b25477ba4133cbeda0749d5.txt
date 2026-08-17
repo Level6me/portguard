@@ -140,3 +140,13 @@ ERROR: logging before google.Init: I0817 20:51:33.833692     953 http_helpers.go
 ERROR: logging before google.Init: I0817 20:51:38.064336     990 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x9d44e83e9596553b ResponseID: 2AODasadCMje2roPwpGmWA
 ERROR: logging before google.Init: I0817 20:51:41.337832    1065 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xa6ce4fe31b37f00d ResponseID: 2gODarO9MP3c2roP-MzC0Ak
 ERROR: logging before google.Init: I0817 20:51:43.771255    1127 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x4d78cbc25740f7a6 ResponseID: 3gODao3zBcGR0-kP_MqCkQg
+ERROR: logging before google.Init: I0817 20:51:55.916258    1179 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x2ba0594200a52184 ResponseID: 6gODauu7CKGerfcPvo23oQI
+ERROR: logging before google.Init: I0817 20:51:59.743729    1213 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x330d909945054028 ResponseID: 7gODarLWCuKD0-kPncbeoQI
+ERROR: logging before google.Init: I0817 20:52:04.322979    1264 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x92f435faf2955766 ResponseID: 8gODatxe7tDaug--k7RY
+ERROR: logging before google.Init: I0817 20:52:06.463939       1 manager.go:739] CLI store manager shutting down
+ERROR: logging before google.Init: I0817 20:52:06.464471       1 conversation_manager.go:633] Stopping conversation stream
+ERROR: logging before google.Init: I0817 20:52:06.464576     251 server.go:1123] Stream goroutine exited for 459f153c-af03-4539-bcae-c85f20380b4f, sending completion signal
+ERROR: logging before google.Init: I0817 20:52:06.464594     251 conversation_manager.go:761] Stream completed for 459f153c-af03-4539-bcae-c85f20380b4f, clearing ResponsePending
+ERROR: logging before google.Init: I0817 20:52:06.465322    1307 server.go:2637] Language server shutting down
+ERROR: logging before google.Init: I0817 20:52:06.465339    1307 server.go:2642] Waiting for migrations to complete to prevent partial migration state...
+ERROR: logging before google.Init: E0817 20:52:06.465483    1321 telemetry.go:80] error recording trajectory segment analytics: Post "https://daily-cloudcode-pa.googleapis.com/v1internal:recordTrajectoryAnalytics": context canceled

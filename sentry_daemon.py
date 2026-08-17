@@ -1150,7 +1150,7 @@ class GlobalPortSniffer:
         if ip_in_whitelist(src_ip, whitelist):
             action = "WHITELIST"
             proc = active_ports_map.get(dst_port, "")
-            desc = f"白名单访问: {proc} (端口 {dst_port})" if proc else f"安全白名单访问 (端口 {dst_port})"
+            desc = f"信任白名单连接: {proc} (端口 {dst_port})" if proc else f"信任白名单连接 (端口 {dst_port})"
         # 2. 命中活跃诱饵蜜罐 (无论系统防火墙是否提前拦截，优先判定蜜罐探针并联动拉黑)
         elif trap_meta:
             action = "INTERCEPTED"
@@ -1161,15 +1161,15 @@ class GlobalPortSniffer:
                 "level": trap_meta.get("level", "高危")
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-        # 3. 正常系统业务访问（如 SSH 29675、Web 9099、OpenResty 80/443、1Panel 等）
+        # 3. 系统生产业务端口访问（如 Trojan 4212、HTTPS 443、SSH 29675、Web 9099 等）
         elif dst_port in active_ports_map and not trap_meta:
             action = "BUSINESS"
             proc = active_ports_map[dst_port]
-            desc = f"正常业务连接: {proc} (端口 {dst_port})"
+            desc = f"业务端口访问: {proc} (端口 {dst_port})"
         # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
-            desc = f"常规端口探测 (端口 {dst_port})"
+            desc = f"未开放端口探测 (端口 {dst_port})"
             
         def _async_write():
             try:

@@ -1,0 +1,11 @@
+[Portsentry-UI Full-Responsive] 控制台已就绪: http://0.0.0.0:9099
+[Trap] 激活诱捕蜜罐: 1433 (共 1 个端口) - MSSQL 数据库暴力嗅探
+[Trap] 激活诱捕蜜罐: 3389 (共 1 个端口) - RDP 远程桌面爆破探测
+[Trap] 激活诱捕蜜罐: 5900 (共 1 个端口) - VNC 屏幕控制漏洞探测
+[Trap] 激活诱捕蜜罐: 6379 (共 1 个端口) - Redis 未授权提权探针
+[Trap] 激活诱捕蜜罐: 8888 (共 1 个端口) - 宝塔 / 管理控制台探针
+[Trap] 激活诱捕蜜罐: 9200 (共 1 个端口) - Elasticsearch RCE 探测
+[Trap] 激活诱捕蜜罐: 27017 (共 1 个端口) - MongoDB 默认数据库探针
+[Sniffer] 无法开启底层网络嗅探 (可能非 root 环境): [Errno 1] Operation not permitted
+[Portsentry] 异步完成 0 条增量黑名单防火墙规则重放 (已存在 0 条)
+127.0.0.1 - - [17/Aug/2026 20:53:45] "GET /api/stats HTTP/1.1" 200 -
