@@ -1125,26 +1125,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </label>
                 </div>
             </div>
-
-            <!-- 4. 正常业务端口探针防御阻断开关 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🌐 正常业务端口探针诱捕阻断</span>
-                    <span class="badge badge-low" id="badge-business-trap-status" style="font-size: 11px;">放行模式</span>
-                </div>
-                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                    针对 Web(80/443)、SSH(22/29675)、Trojan(4212)、FRP 等正常生产业务端口的非白名单访问控制策略。
-                </div>
-                <label style="display: flex; align-items: flex-start; gap: 10px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border);">
-                    <input type="checkbox" id="setting-trap-business" onchange="updateBusinessTrapNotice()" style="width: 18px; height: 18px; accent-color: var(--danger); margin-top: 2px;">
-                    <div>
-                        <div style="font-weight: 700; color: var(--text);" id="text-business-trap-title">开启正常业务端口探针诱捕阻断</div>
-                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; line-height: 1.4;" id="text-business-trap-desc">
-                            关闭状态（推荐）：对正常业务端口连接仅记录分析（显示绿色业务连接），绝不主动封禁，保障正常客户访问。
-                        </div>
-                    </div>
-                </label>
-            </div>
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
@@ -1222,6 +1202,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <option value="中危">中危</option>
             </select>
         </div>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);">
+                <input type="checkbox" id="trap-is-business-val" style="width: 16px; height: 16px; accent-color: var(--danger);">
+                <span><b>正常业务端口防护</b>（若该端口为当前运行的真实业务，勾选后将同步诱捕该端口的非白名单访问）</span>
+            </label>
+        </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
             <button class="pill-btn accent" onclick="submitAddTrap()">激活诱饵</button>
@@ -1268,6 +1254,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <option value="true">● 启用监听诱捕 (Accept)</option>
                 <option value="false">○ 停用监听 (Reject/Disabled)</option>
             </select>
+        </div>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);">
+                <input type="checkbox" id="edit-trap-is-business-val" style="width: 16px; height: 16px; accent-color: var(--danger);">
+                <span><b>正常业务端口防护</b>（若该端口为当前运行的真实业务，勾选后将同步诱捕该端口的非白名单访问）</span>
+            </label>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
@@ -2011,7 +2003,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let html = '';
         pageList.forEach(t => {
             const isEnabled = (t.enabled === true || t.strategy === 'accept' || t.strategy === 'enabled' || t.strategy === '启用');
+            const isBiz = (t.is_business === true || t.trap_business === true);
             const statusTag = isEnabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
+            const bizTag = isBiz ? '<span class="tag warning" style="margin-left:4px; font-size:10px;" title="同步诱捕该端口的正常业务">🌐 业务诱捕</span>' : '';
             const btnText = isEnabled ? '停用' : '启用';
             const btnClass = isEnabled ? 'danger' : 'success';
             const cat = t.category || 'custom';
@@ -2024,7 +2018,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
-                <td><b style="color: var(--text);">${desc}</b></td>
+                <td><b style="color: var(--text);">${desc}</b>${bizTag}</td>
                 <td><span class="tag accent">${catName}</span></td>
                 <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
                 <td>${statusTag}</td>
@@ -2373,16 +2367,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const name = document.getElementById('trap-name-val').value.trim();
         const category = document.getElementById('trap-cat-val').value;
         const level = document.getElementById('trap-level-val').value;
+        const is_business = document.getElementById('trap-is-business-val') ? document.getElementById('trap-is-business-val').checked : false;
         if (!rawPort) return showToast('请输入端口号或端口范围 (例如 8088 或 1000-3000)', '⚠️');
         
         fetch('/api/traps/add', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port: rawPort, name, level, category, enabled: true })
+            body: JSON.stringify({ port: rawPort, name, level, category, enabled: true, is_business })
         }).then(res => res.json()).then(res => {
             if (res.success) {
                 showToast(res.msg, '🍯');
                 closeModals();
+                if (document.getElementById('trap-is-business-val')) document.getElementById('trap-is-business-val').checked = false;
                 fetchData(false);
             } else {
                 showToast(res.msg || '添加失败，请检查端口格式', '❌');
@@ -2401,6 +2397,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         document.getElementById('edit-trap-level-val').value = item.level || '高危';
         const isEnabled = (item.enabled === true || item.strategy === 'accept' || item.strategy === 'enabled' || item.strategy === '启用');
         document.getElementById('edit-trap-enabled-val').value = isEnabled ? 'true' : 'false';
+        if (document.getElementById('edit-trap-is-business-val')) {
+            document.getElementById('edit-trap-is-business-val').checked = !!(item.is_business || item.trap_business);
+        }
         
         document.getElementById('modal-trap-edit').style.display = 'flex';
     }
@@ -2412,13 +2411,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const category = document.getElementById('edit-trap-cat-val').value;
         const level = document.getElementById('edit-trap-level-val').value;
         const enabled = (document.getElementById('edit-trap-enabled-val').value === 'true');
+        const is_business = document.getElementById('edit-trap-is-business-val') ? document.getElementById('edit-trap-is-business-val').checked : false;
         
         if (!port) return showToast('端口号或范围不能为空', '⚠️');
 
         fetch('/api/traps/edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orig_port, port, name, category, level, enabled })
+            body: JSON.stringify({ orig_port, port, name, category, level, enabled, is_business })
         }).then(res => res.json()).then(res => {
             if (res.success) {
                 showToast(res.msg || '策略已更新', '✓');
@@ -2669,11 +2669,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (document.getElementById('setting-ban-blackhole')) {
                 document.getElementById('setting-ban-blackhole').checked = data.ban_action_blackhole !== false;
             }
-            if (document.getElementById('setting-trap-business')) {
-                document.getElementById('setting-trap-business').checked = !!data.trap_business_ports;
-            }
             updateThresholdBadge();
-            updateBusinessTrapNotice();
         } catch (e) {
             console.error(e);
         }
@@ -2697,27 +2693,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    function updateBusinessTrapNotice() {
-        const chk = document.getElementById('setting-trap-business');
-        const badge = document.getElementById('badge-business-trap-status');
-        const desc = document.getElementById('text-business-trap-desc');
-        if (!chk) return;
-        if (chk.checked) {
-            if (badge) { badge.innerText = '⚠️ 业务探针强阻断'; badge.className = 'badge badge-high'; }
-            if (desc) { desc.innerHTML = '<span style="color:var(--danger); font-weight:600;">⚠️ 严苛模式已激活</span>：非白名单 IP 访问 Web/SSH 等正常业务端口时，也将触发安全感知并执行诱捕阻断拉黑。'; }
-        } else {
-            if (badge) { badge.innerText = '✅ 正常业务放行'; badge.className = 'badge badge-low'; }
-            if (desc) { desc.innerHTML = '<span style="color:var(--success); font-weight:600;">✅ 标准业务放行模式（推荐）</span>：仅记录正常业务端口连接，绝不误封阻断客户/用户对 Web/SSH/代理等业务服务的正常连接。'; }
-        }
-    }
-
     async function saveSystemSettings() {
         const threshold = parseInt(document.getElementById('setting-trap-threshold').value || '1');
         const windowSec = parseInt(document.getElementById('setting-trap-window').value || '30');
         const cleanDays = parseInt(document.getElementById('setting-auto-clean').value || '30');
         const iptables = document.getElementById('setting-ban-iptables').checked;
         const blackhole = document.getElementById('setting-ban-blackhole').checked;
-        const trapBusiness = document.getElementById('setting-trap-business').checked;
 
         try {
             showToast('正在保存系统设置...', '⏳');
@@ -2729,15 +2710,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     trap_window_seconds: windowSec,
                     auto_clean_days: cleanDays,
                     ban_action_iptables: iptables,
-                    ban_action_blackhole: blackhole,
-                    trap_business_ports: trapBusiness
+                    ban_action_blackhole: blackhole
                 })
             });
             const data = await res.json();
             if (data.success) {
                 showToast(data.msg || '系统设置已成功保存并立即生效！', '🎉');
                 updateThresholdBadge();
-                updateBusinessTrapNotice();
             } else {
                 showToast(data.msg || '保存失败', '⚠️');
             }
@@ -2914,7 +2893,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "defense_mode": cfg.get("defense_mode", "strict"),
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
-                    "trap_business_ports": bool(cfg.get("trap_business_ports", False)),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
                 })
                 return
@@ -3333,6 +3311,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 name = req_data.get("name", "").strip()
                 level = req_data.get("level", "高危")
                 category = req_data.get("category", "custom")
+                is_business = bool(req_data.get("is_business", False))
                 if not raw_port:
                     self._send_json({"success": False, "msg": "端口不能为空"}, status=400)
                     return
@@ -3344,7 +3323,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "category": category,
                     "level": level,
                     "enabled": True,
-                    "strategy": "accept"
+                    "strategy": "accept",
+                    "is_business": is_business,
+                    "trap_business": is_business
                 }
                 norm_new = normalize_trap_item(temp_item)
                 if not norm_new:
@@ -3375,6 +3356,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 level = req_data.get("level", "高危")
                 category = req_data.get("category", "custom")
                 enabled = bool(req_data.get("enabled", True))
+                is_business = bool(req_data.get("is_business", False))
                 
                 temp_item = {
                     "port": new_port,
@@ -3383,7 +3365,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "category": category,
                     "level": level,
                     "enabled": enabled,
-                    "strategy": "accept" if enabled else "reject"
+                    "strategy": "accept" if enabled else "reject",
+                    "is_business": is_business,
+                    "trap_business": is_business
                 }
                 norm_new = normalize_trap_item(temp_item)
                 if not norm_new:

@@ -271,6 +271,7 @@ def normalize_trap_item(item):
             
     family = item.get("family", "ipv4")
     address = item.get("address", "")
+    is_business = bool(item.get("is_business", False) or item.get("trap_business", False))
     
     return {
         "family": family,
@@ -284,7 +285,9 @@ def normalize_trap_item(item):
         "name": desc,
         "enabled": enabled,
         "level": level,
-        "category": cat
+        "category": cat,
+        "is_business": is_business,
+        "trap_business": is_business
     }
 
 def get_db():
@@ -1031,21 +1034,16 @@ class TrapServer:
                 time.sleep(0.5)
 
 def is_trap_port(port, cfg=None):
-    """判定指定端口是否属于已配置的诱捕蜜罐端口（严格排除核心业务与系统服务端口）。"""
+    """判定指定端口是否属于已配置的诱捕蜜罐端口。"""
     try:
         port = int(port)
     except Exception:
-        return None
-    # 核心系统与业务端口绝对不可作为诱捕蜜罐
-    if port in KNOWN_SYSTEM_SERVICES:
         return None
     if cfg is None:
         cfg = load_config()
     web_port = int(cfg.get("web_port", 9099) or 9099)
     if port == web_port:
         return None
-    if port in trap_instance.trap_map:
-        return trap_instance.trap_map[port]
     try:
         raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
         for item in raw_traps:
@@ -1055,9 +1053,17 @@ def is_trap_port(port, cfg=None):
             sp = int(norm.get("port_start", norm.get("port")))
             ep = int(norm.get("port_end", norm.get("port")))
             if sp <= port <= ep:
+                # 若勾选了「正常业务端口防护 / is_business」，则即使是核心业务端口也强制作为诱捕蜜罐拦截
+                if norm.get("is_business", False):
+                    return norm
+                # 若未勾选正常业务防护，则排除核心业务端口，防止常规诱饵误伤生产服务
+                if port in KNOWN_SYSTEM_SERVICES:
+                    return None
                 return norm
     except Exception:
         pass
+    if port in trap_instance.trap_map:
+        return trap_instance.trap_map[port]
     return None
 
 class GlobalPortSniffer:
@@ -1160,31 +1166,26 @@ class GlobalPortSniffer:
             action = "WHITELIST"
             proc = active_ports_map.get(dst_port, "")
             desc = f"信任白名单连接: {proc} (端口 {dst_port})" if proc else f"信任白名单连接 (端口 {dst_port})"
-        # 2. 命中活跃诱饵蜜罐 (无论系统防火墙是否提前拦截，优先判定蜜罐探针并联动拉黑)
+        # 2. 命中活跃诱饵蜜罐 (包括勾选了「正常业务」同步诱捕的业务端口)
         elif trap_meta:
             action = "INTERCEPTED"
-            desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
+            is_biz = trap_meta.get("is_business", False)
+            proc = active_ports_map.get(dst_port, "")
+            if is_biz:
+                desc = f"业务诱捕阻断: {proc} (端口 {dst_port})" if proc else (trap_meta.get("name") or f"业务诱捕 (端口 {dst_port})")
+            else:
+                desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
             port_info = {
                 "name": desc,
                 "category": trap_meta.get("category", "custom"),
                 "level": trap_meta.get("level", "高危")
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-        # 3. 系统生产业务端口访问（如 Trojan 4212、HTTPS 443、SSH 29675、Web 9099 等）
-        elif dst_port in active_ports_map and not trap_meta:
+        # 3. 系统生产业务端口访问（未勾选业务诱捕时放行并记录）
+        elif dst_port in active_ports_map:
+            action = "BUSINESS"
             proc = active_ports_map[dst_port]
-            if cfg.get("trap_business_ports", False):
-                action = "INTERCEPTED"
-                desc = f"业务端口诱捕阻断: {proc} (端口 {dst_port})"
-                port_info = {
-                    "name": desc,
-                    "category": "business",
-                    "level": "中危"
-                }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-            else:
-                action = "BUSINESS"
-                desc = f"业务端口访问: {proc} (端口 {dst_port})"
+            desc = f"业务端口访问: {proc} (端口 {dst_port})"
         # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
