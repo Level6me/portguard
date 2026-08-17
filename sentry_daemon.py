@@ -588,9 +588,10 @@ def resolve_ip_geo(ip):
         if ip in _GEO_CACHE:
             return _GEO_CACHE[ip]
     try:
-        url = f"https://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
+        # 首选：ip-api.com HTTP 接口（免费版不支持 HTTPS，必须使用 HTTP 协议）
+        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
         req = urllib.request.Request(url, headers={"User-Agent": "PortsentryUI/2.0"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             if data.get("status") == "success":
                 c = translate_country_cn(data.get("country", ""))
@@ -603,6 +604,24 @@ def resolve_ip_geo(ip):
                 with _GEO_CACHE_LOCK:
                     _GEO_CACHE[ip] = result
                 return result
+    except Exception:
+        pass
+    try:
+        # 备用源：api.ip.sb（HTTPS，返回英文 country，通过内置映射表翻译为中文）
+        url2 = f"https://api.ip.sb/geoip/{ip}"
+        req2 = urllib.request.Request(url2, headers={"User-Agent": "PortsentryUI/2.0"})
+        with urllib.request.urlopen(req2, timeout=4) as resp2:
+            data2 = json.loads(resp2.read().decode('utf-8'))
+            c2 = translate_country_cn(data2.get("country", ""))
+            result = {
+                "country": c2,
+                "region": data2.get("region", ""),
+                "city": data2.get("city", ""),
+                "isp": data2.get("isp", data2.get("organization", ""))
+            }
+            with _GEO_CACHE_LOCK:
+                _GEO_CACHE[ip] = result
+            return result
     except Exception:
         pass
     result = {"country": "公网节点", "region": "", "city": "", "isp": ""}
