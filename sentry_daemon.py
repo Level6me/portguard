@@ -990,6 +990,26 @@ class TrapServer:
             except Exception as e:
                 time.sleep(0.5)
 
+def is_trap_port(port, cfg=None):
+    """判定指定端口是否属于已配置的诱捕蜜罐端口。"""
+    if port in trap_instance.trap_map:
+        return trap_instance.trap_map[port]
+    try:
+        if cfg is None:
+            cfg = load_config()
+        raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
+        for item in raw_traps:
+            norm = normalize_trap_item(item)
+            if not norm or not norm.get("enabled", True):
+                continue
+            sp = int(norm.get("port_start", norm.get("port")))
+            ep = int(norm.get("port_end", norm.get("port")))
+            if sp <= port <= ep:
+                return norm
+    except Exception:
+        pass
+    return None
+
 class GlobalPortSniffer:
     """全端口网络连接实时感知引擎 (基于 Linux 原生 Raw Socket 嗅探 TCP SYN 连接握手)"""
     def __init__(self):
