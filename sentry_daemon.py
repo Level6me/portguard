@@ -14,6 +14,7 @@ import subprocess
 import json
 import urllib.request
 import re
+import struct
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor
 
@@ -86,6 +87,56 @@ def run_firewall_cmd(*args):
         subprocess.run(list(args), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+
+
+def parse_packet(raw_data):
+    """解析以太网帧 / 原始帧中的 TCP/UDP 报文。
+
+    返回 (src_ip, dst_port, proto_str) 或 None。支持 IPv4 与 IPv6。
+    自适应以太网头(14B)、SLL 头(16B) 或无头 RAW 三种形态。
+    """
+    try:
+        offset = 0
+        if len(raw_data) >= 34 and ((raw_data[14] >> 4) in (4, 6)):
+            offset = 14
+        elif len(raw_data) >= 36 and ((raw_data[16] >> 4) in (4, 6)):
+            offset = 16
+        elif len(raw_data) >= 20 and ((raw_data[0] >> 4) in (4, 6)):
+            offset = 0
+        else:
+            return None
+
+        version = raw_data[offset] >> 4
+        if version == 4:
+            if len(raw_data) < offset + 20:
+                return None
+            ip_hdr = raw_data[offset:offset + 20]
+            proto_num = ip_hdr[9]
+            ihl = (ip_hdr[0] & 0x0F) * 4
+            if len(raw_data) < offset + ihl + 4:
+                return None
+            src_ip = socket.inet_ntoa(ip_hdr[12:16])
+        elif version == 6:
+            if len(raw_data) < offset + 40:
+                return None
+            ip_hdr = raw_data[offset:offset + 40]
+            proto_num = ip_hdr[6]  # next header（未展开扩展头，直接 TCP/UDP 场景）
+            ihl = 40
+            src_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[8:24])
+        else:
+            return None
+
+        if proto_num not in (6, 17):  # 仅 TCP / UDP
+            return None
+        proto_str = "TCP" if proto_num == 6 else "UDP"
+
+        l4_hdr = raw_data[offset + ihl:offset + ihl + 4]
+        if len(l4_hdr) < 4:
+            return None
+        src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
+        return (src_ip, dst_port, proto_str)
+    except Exception:
+        return None
 
 def parse_port_range(port_val):
     """解析单个端口或端口范围，返回 (start_port, end_port, display_str) 或 None"""
@@ -930,42 +981,23 @@ class GlobalPortSniffer:
         while self.running:
             try:
                 raw_data, _ = self.raw_sock.recvfrom(65535)
-                # 自适应探测 IP 报文头起始偏移 (适配 14字节以太网帧、16字节SLL头或 0字节RAW)
-                offset = 0
-                if len(raw_data) >= 34 and ((raw_data[14] >> 4) == 4):
-                    offset = 14
-                elif len(raw_data) >= 36 and ((raw_data[16] >> 4) == 4):
-                    offset = 16
-                elif len(raw_data) >= 20 and ((raw_data[0] >> 4) == 4):
-                    offset = 0
-                else:
+                parsed = parse_packet(raw_data)
+                if not parsed:
                     continue
-                    
-                ip_hdr = raw_data[offset:offset+20]
-                proto_num = ip_hdr[9]
-                if proto_num not in (6, 17): # 处理 TCP(6) 与 UDP(17)
+                src_ip, dst_port, proto_str = parsed
+
+                # 过滤本机发出的包、回环流量、IPv6 内部地址与私有 Docker 内部流量
+                if (src_ip in self.local_ips
+                        or src_ip.startswith("127.")
+                        or src_ip == "0.0.0.0"
+                        or src_ip.startswith("172.17.")
+                        or src_ip.startswith("172.18.")
+                        or src_ip == "::1"
+                        or src_ip.startswith("fe80:")
+                        or src_ip.startswith("fc")
+                        or src_ip.startswith("fd")):
                     continue
-                proto_str = "TCP" if proto_num == 6 else "UDP"
-                    
-                v_ihl = ip_hdr[0]
-                ihl = (v_ihl & 0x0F) * 4
-                if len(raw_data) < offset + ihl + 4:
-                    continue
-                    
-                src_ip = socket.inet_ntoa(ip_hdr[12:16])
-                dst_ip = socket.inet_ntoa(ip_hdr[16:20])
-                
-                # 过滤本机发出的包、环回流量以及私有 Docker 内部流量
-                if src_ip in self.local_ips or src_ip.startswith("127.") or src_ip == "0.0.0.0" or src_ip.startswith("172.17.") or src_ip.startswith("172.18."):
-                    continue
-                    
-                l4_hdr = raw_data[offset+ihl:offset+ihl+4]
-                src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
-                
-                # 过滤外网公共响应包 (目的端口必须有效)
-                if dst_port <= 0:
-                    continue
-                    
+
                 now_ts = time.time()
                 cache_key = (src_ip, dst_port, proto_str)
                 # 2秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)

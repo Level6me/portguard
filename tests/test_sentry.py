@@ -3,6 +3,8 @@
 """Portsentry 核心逻辑单元测试（零外部依赖，不触碰真实数据库/防火墙）。"""
 import os
 import sys
+import socket
+import struct
 import unittest
 from unittest import mock
 
@@ -14,6 +16,7 @@ from sentry_daemon import (
     normalize_trap_item,
     ip_in_whitelist,
     run_firewall_cmd,
+    parse_packet,
 )
 
 
@@ -91,6 +94,52 @@ class NormalizeTrapTest(unittest.TestCase):
     def test_invalid(self):
         self.assertIsNone(normalize_trap_item({"port": "abc"}))
         self.assertIsNone(normalize_trap_item({}))
+
+
+class ParsePacketTest(unittest.TestCase):
+    def _ipv4_packet(self, proto, src, dst, sport, dport):
+        eth = b"\x00" * 14
+        ip = bytearray(20)
+        ip[0] = 0x45
+        ip[9] = proto
+        ip[12:16] = socket.inet_aton(src)
+        ip[16:20] = socket.inet_aton(dst)
+        l4 = struct.pack("!HH", sport, dport)
+        return eth + bytes(ip) + l4
+
+    def _ipv6_packet(self, proto, src, dst, sport, dport):
+        eth = b"\x00" * 14
+        ip = bytearray(40)
+        ip[0] = 0x60
+        ip[6] = proto
+        ip[8:24] = socket.inet_pton(socket.AF_INET6, src)
+        ip[24:40] = socket.inet_pton(socket.AF_INET6, dst)
+        l4 = struct.pack("!HH", sport, dport)
+        return eth + bytes(ip) + l4
+
+    def test_ipv4_tcp(self):
+        pkt = self._ipv4_packet(6, "1.2.3.4", "5.6.7.8", 12345, 8080)
+        self.assertEqual(parse_packet(pkt), ("1.2.3.4", 8080, "TCP"))
+
+    def test_ipv4_udp(self):
+        pkt = self._ipv4_packet(17, "8.8.8.8", "1.1.1.1", 53, 5353)
+        self.assertEqual(parse_packet(pkt), ("8.8.8.8", 5353, "UDP"))
+
+    def test_ipv6_tcp(self):
+        pkt = self._ipv6_packet(6, "2408:8222::1", "2409::1", 12345, 443)
+        self.assertEqual(parse_packet(pkt), ("2408:8222::1", 443, "TCP"))
+
+    def test_ipv6_udp(self):
+        pkt = self._ipv6_packet(17, "2001:db8::99", "2001:db8::1", 40000, 53)
+        self.assertEqual(parse_packet(pkt), ("2001:db8::99", 53, "UDP"))
+
+    def test_non_tcp_udp_skipped(self):
+        pkt = self._ipv4_packet(1, "1.2.3.4", "5.6.7.8", 0, 0)  # ICMP
+        self.assertIsNone(parse_packet(pkt))
+
+    def test_garbage(self):
+        self.assertIsNone(parse_packet(b"\x00\x01\x02"))
+        self.assertIsNone(parse_packet(None))
 
 
 if __name__ == "__main__":
