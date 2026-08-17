@@ -20,7 +20,12 @@ except ImportError:
         daemon_threads = True
         allow_reuse_address = True
 from urllib.parse import urlparse, parse_qs
-from sentry_daemon import DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db, trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS, normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd, cleanup_expired_bans
+from sentry_daemon import (
+    DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db,
+    trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
+    normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
+    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR
+)
 
 def parse_loose_json_or_lines(text):
     text = (text or "").strip()
