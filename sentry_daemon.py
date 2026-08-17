@@ -130,6 +130,15 @@ def parse_packet(raw_data):
             return None
         proto_str = "TCP" if proto_num == 6 else "UDP"
 
+        # 若为 TCP 协议：严格判定仅处理 SYN 连接建立握手包 (SYN=1 且 ACK=0)，彻底过滤海量已连接数据流
+        if proto_num == 6:
+            if len(raw_data) < offset + ihl + 14:
+                return None
+            tcp_flags = raw_data[offset + ihl + 13]
+            # 仅放行 SYN 探测请求 (SYN=0x02, ACK=0x10)
+            if not (tcp_flags & 0x02) or (tcp_flags & 0x10):
+                return None
+
         l4_hdr = raw_data[offset + ihl:offset + ihl + 4]
         if len(l4_hdr) < 4:
             return None
@@ -746,69 +755,64 @@ def ban_ip(ip, port, port_info):
 
 _SYSTEM_PORTS_CACHE = {}
 _SYSTEM_PORTS_CACHE_TIME = 0
+_SYSTEM_PORTS_LOCK = threading.Lock()
+
+KNOWN_SYSTEM_SERVICES = {
+    9099: "Portsentry Web控制台",
+    22: "SSH 远程管理",
+    80: "HTTP 网站服务 (OpenResty/Nginx)",
+    443: "HTTPS 加密网站服务",
+    15633: "1Panel 运维控制面板",
+    4212: "Trojan 安全隧道服务",
+    8085: "Trojan 业务端口",
+    29675: "SSHD 远程管理服务",
+    40123: "受保护自定义业务端口"
+}
 
 def get_active_system_ports():
     global _SYSTEM_PORTS_CACHE, _SYSTEM_PORTS_CACHE_TIME
     now = time.time()
-    if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 10.0):
+    if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 30.0):
         return _SYSTEM_PORTS_CACHE
 
-    ports_map = {
-        9099: "Portsentry Web控制台",
-        22: "SSH 远程管理",
-        80: "HTTP 网站服务 (OpenResty/Nginx)",
-        443: "HTTPS 加密网站服务",
-        15633: "1Panel 运维控制面板",
-        4212: "Trojan 安全隧道服务",
-        8085: "Trojan 业务端口",
-        29675: "SSHD 远程管理服务",
-        40123: "受保护自定义业务端口"
-    }
-    try:
-        cfg = load_config()
-        web_p = int(cfg.get("web_port", 9099))
-        ports_map[web_p] = "Portsentry Web控制台"
-        # 用户自定义保护/业务端口
-        custom_biz = cfg.get("business_ports", [])
-        for bp in custom_biz:
-            if isinstance(bp, int):
-                ports_map[bp] = f"自定义业务端口 ({bp})"
-            elif isinstance(bp, dict) and "port" in bp:
-                ports_map[int(bp["port"])] = bp.get("name", f"自定义业务 ({bp['port']})")
-    except Exception:
-        pass
-        
-    try:
-        # 兼容 Python 3.6+，排除自身 python3 进程，精准获取系统全部真实业务服务与进程名
-        p = subprocess.Popen("ss -tulpn | grep -v python3", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        stdout, _ = p.communicate(timeout=3)
-        for line in stdout.splitlines():
-            line = line.strip()
-            if not ("LISTEN" in line or "UNCONN" in line):
-                continue
-            parts = line.split()
-            if len(parts) >= 5:
-                local_addr = parts[4]
-                # 兼容 IPv6 [::]:port 以及 *::port 格式
-                clean_addr = local_addr.replace("[", "").replace("]", "")
-                p_str = clean_addr.split(":")[-1].strip()
-                if p_str.isdigit():
-                    port = int(p_str)
-                    proc_name = "系统服务"
-                    if "users:" in line:
-                        try:
-                            proc_name = line.split('users:(("')[1].split('"')[0]
-                        except Exception:
-                            try:
-                                proc_name = line.split("users:((")[1].split(",")[0].replace('"', '')
-                            except Exception:
-                                pass
-                    ports_map[port] = proc_name
-    except Exception:
-        pass
-    _SYSTEM_PORTS_CACHE = ports_map
-    _SYSTEM_PORTS_CACHE_TIME = now
-    return ports_map
+    with _SYSTEM_PORTS_LOCK:
+        if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 30.0):
+            return _SYSTEM_PORTS_CACHE
+
+        ports_map = dict(KNOWN_SYSTEM_SERVICES)
+        try:
+            cfg = load_config()
+            web_p = int(cfg.get("web_port", 9099))
+            ports_map[web_p] = "Portsentry Web控制台"
+            custom_biz = cfg.get("business_ports", [])
+            for bp in custom_biz:
+                if isinstance(bp, int):
+                    ports_map[bp] = f"自定义业务端口 ({bp})"
+                elif isinstance(bp, dict) and "port" in bp:
+                    ports_map[int(bp["port"])] = bp.get("name", f"自定义业务 ({bp['port']})")
+        except Exception:
+            pass
+
+        # 零进程开销：直接解析 Linux 原生 /proc/net/tcp 和 /proc/net/tcp6 (耗时<0.01ms, 零 fork 子进程)
+        for proc_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                if os.path.exists(proc_file):
+                    with open(proc_file, "r") as f:
+                        lines = f.readlines()
+                    for line in lines[1:]:
+                        parts = line.strip().split()
+                        if len(parts) >= 4 and parts[3] == "0A":  # 0A = TCP_LISTEN
+                            local_addr = parts[1]
+                            hex_port = local_addr.split(":")[-1]
+                            port_num = int(hex_port, 16)
+                            if port_num not in ports_map:
+                                ports_map[port_num] = KNOWN_SYSTEM_SERVICES.get(port_num, "系统监听服务")
+            except Exception:
+                pass
+
+        _SYSTEM_PORTS_CACHE = ports_map
+        _SYSTEM_PORTS_CACHE_TIME = now
+        return ports_map
 
 class TrapServer:
     def __init__(self):
@@ -918,6 +922,10 @@ class TrapServer:
                                 client_ip = client_addr[0]
                                 client_sock.close()
                                 
+                                # 严格忽略本机及本地回环测试流量
+                                if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
+                                    continue
+                                
                                 port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
                                 print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
                                 _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
@@ -934,6 +942,9 @@ class TrapServer:
                                     client_sock, client_addr = s.accept()
                                     client_ip = client_addr[0]
                                     client_sock.close()
+                                    
+                                    if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
+                                        continue
                                     
                                     port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
                                     print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
@@ -1005,12 +1016,15 @@ class GlobalPortSniffer:
                     continue
                 src_ip, dst_port, proto_str = parsed
 
-                # 过滤本机发出的包、回环流量、IPv6 内部地址与私有 Docker 内部流量
+                # 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
                 if (src_ip in self.local_ips
                         or src_ip.startswith("127.")
                         or src_ip == "0.0.0.0"
-                        or src_ip.startswith("172.17.")
-                        or src_ip.startswith("172.18.")
+                        or src_ip.startswith("10.")
+                        or src_ip.startswith("192.168.")
+                        or src_ip.startswith("172.16.") or src_ip.startswith("172.17.")
+                        or src_ip.startswith("172.18.") or src_ip.startswith("172.19.")
+                        or src_ip.startswith("172.2") or src_ip.startswith("172.3")
                         or src_ip == "::1"
                         or src_ip.startswith("fe80:")
                         or src_ip.startswith("fc")
@@ -1019,21 +1033,21 @@ class GlobalPortSniffer:
 
                 now_ts = time.time()
                 cache_key = (src_ip, dst_port, proto_str)
-                # 2秒内相同 IP + 端口去重防抖 (杜绝单次通信产生海量重复记录)
+                # 5秒内相同 IP + 端口去重防抖 (杜绝单次扫描或重复报文产生海量重复记录)
                 if cache_key in self._recent_cache:
-                    if now_ts - self._recent_cache[cache_key] < 2.0:
+                    if now_ts - self._recent_cache[cache_key] < 5.0:
                         continue
                 self._recent_cache[cache_key] = now_ts
                 
                 # 定期清理防抖缓存
-                if len(self._recent_cache) > 5000:
-                    cutoff = now_ts - 10.0
+                if len(self._recent_cache) > 2000:
+                    cutoff = now_ts - 15.0
                     self._recent_cache = {k: v for k, v in self._recent_cache.items() if v > cutoff}
                     
                 # 异步记录此端口连接事件
                 self._handle_port_access(src_ip, dst_port, proto=proto_str)
             except Exception:
-                pass
+                time.sleep(0.01)
 
     def _handle_port_access(self, src_ip, dst_port, proto="TCP"):
         cfg = load_config()
