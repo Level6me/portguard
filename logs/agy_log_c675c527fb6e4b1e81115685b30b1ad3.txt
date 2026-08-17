@@ -1,0 +1,141 @@
+ERROR: logging before google.Init: I0817 11:35:42.823552       1 resolver.go:85] Model ID claude-sonnet-4-6 not in local config, defaulting to CCPA
+ERROR: logging before google.Init: I0817 11:35:42.823615       1 resolver.go:111] Model resolved via default
+ERROR: logging before google.Init: I0817 11:35:42.823839      20 server.go:1464] Starting language server process with pid 812001
+ERROR: logging before google.Init: I0817 11:35:42.824137      20 server.go:1516] Language server version: 1.1.13
+ERROR: logging before google.Init: I0817 11:35:42.824148      20 server.go:573] Language server will attempt to listen on host localhost
+ERROR: logging before google.Init: I0817 11:35:42.824433      20 server.go:588] Language server listening on random port at 36511 for HTTPS (gRPC)
+ERROR: logging before google.Init: I0817 11:35:42.824481      20 server.go:596] Language server listening on random port at 43559 for HTTP
+ERROR: logging before google.Init: E0817 11:35:43.064239      37 errorreport.go:223] Failed to poll ListExperiments: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.064335      37 model_configs.go:59] Auth mode is unspecified, skipping fetchAvailableModels and returning empty response
+ERROR: logging before google.Init: W0817 11:35:43.071570      20 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.071665      20 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.071857      20 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.071899      20 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.072580      20 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.072636      20 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.072749      20 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.072780      20 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.072909      20 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.072946      20 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.073035      20 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.073070      20 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.077958      20 launchmanager.go:69] Entering local chrome mode! This is WRONG unless you are running tests or in eval mode on Linux.
+ERROR: logging before google.Init: W0817 11:35:43.080672      50 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.080737      50 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.080841      50 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.080867      50 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.081652      20 defaults.go:759] failed to get cs path: cs path /usr/bin/cs invalid
+ERROR: logging before google.Init: I0817 11:35:43.081683      20 manager.go:98] Creating trajectory store manager with proto store and SQLite store
+ERROR: logging before google.Init: I0817 11:35:43.083407      48 manager.go:75] Migration [MIGRATION_ID_SIDECAR_USER_CONFIG_BYPASS] is disabled, skipping entirely
+ERROR: logging before google.Init: I0817 11:35:43.083464      48 manager.go:78] Migration [MIGRATION_ID_SANITY_CHECK_PROJECT_URIS] is enabled
+ERROR: logging before google.Init: I0817 11:35:43.083488      48 manager.go:87] Migration [MIGRATION_ID_SANITY_CHECK_PROJECT_URIS] already has status MIGRATION_STATUS_COMPLETED, skipping
+ERROR: logging before google.Init: I0817 11:35:43.083497      48 manager.go:78] Migration [MIGRATION_ID_PLUGIN_ENABLEMENT] is enabled
+ERROR: logging before google.Init: I0817 11:35:43.083505      48 manager.go:87] Migration [MIGRATION_ID_PLUGIN_ENABLEMENT] already has status MIGRATION_STATUS_COMPLETED, skipping
+ERROR: logging before google.Init: I0817 11:35:43.090257      20 server.go:2773] Auth succeeded, refreshing features and managers
+ERROR: logging before google.Init: E0817 11:35:43.090391      20 errorreport.go:223] Failed to poll ListExperiments: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.090465      20 server.go:2779] State refresh took 0ms
+ERROR: logging before google.Init: I0817 11:35:43.090498      20 server.go:2793] [RemoteControl] Subscription callback triggered.
+ERROR: logging before google.Init: I0817 11:35:43.090505      20 server.go:2795] [RemoteControl] RemoteControlEnabled value: false
+ERROR: logging before google.Init: I0817 11:35:43.090509      20 server.go:3054] [RemoteControl] Resolved proxyServerURL: ""
+ERROR: logging before google.Init: I0817 11:35:43.090519      20 profiler.go:154] Continuous pprof profiling is disabled.
+ERROR: logging before google.Init: I0817 11:35:43.090807      20 server.go:2307] initialized server successfully in 266.928186ms
+ERROR: logging before google.Init: W0817 11:35:43.091110      85 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.091164      85 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.091228       1 auto_updater.go:252] Last check was less than 15 minutes ago, skipping update (fast path)
+ERROR: logging before google.Init: I0817 11:35:43.091307       1 common.go:170] Launching CLI mode
+ERROR: logging before google.Init: E0817 11:35:43.091325       1 launchsteps.go:77] Failed to resolve GeminiDir ".gemini": .gemini must be an absolute path: path is not absolute, falling back to default
+ERROR: logging before google.Init: W0817 11:35:43.091677      85 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.091714      85 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.092624       1 common.go:208] CLI app data directory: /home/ubuntu/.gemini/antigravity-cli
+ERROR: logging before google.Init: I0817 11:35:43.092651       1 server.go:270] Creating CLI server backend: product=antigravity workspaceDirs=[/home/ubuntu/portsentry-ui /home/ubuntu/portsentry-ui] appDataDir=/home/ubuntu/.gemini/antigravity-cli cascadeManager=true codeAssist=true
+ERROR: logging before google.Init: I0817 11:35:43.092724       1 composite_token_storage.go:123] Using file-based token storage because SSH session detected
+ERROR: logging before google.Init: I0817 11:35:43.092751       1 auth_provider.go:734] [AuthProvider] SetEnableBusinessLogin called with enable: true
+ERROR: logging before google.Init: I0817 11:35:43.144302       1 server.go:2693] GetConversationDetail: found conversation 459f153c-af03-4539-bcae-c85f20380b4f (active=false)
+ERROR: logging before google.Init: I0817 11:35:43.147608       1 common.go:307] project: resuming conversation belonging to project ID: default-cli-project
+ERROR: logging before google.Init: I0817 11:35:43.147834       1 common.go:320] project: synced active project to "CLI Project" (id=default-cli-project) from resumed conversation
+ERROR: logging before google.Init: I0817 11:35:43.147847       1 server.go:1802] Backend project ID updated dynamically to: default-cli-project
+ERROR: logging before google.Init: I0817 11:35:43.147867       1 analytics.go:138] CLI startup completed (took 325.578545ms)
+ERROR: logging before google.Init: I0817 11:35:43.147889       1 printmode.go:160] Print mode: starting (promptLength=1770, model="claude-sonnet-4-6", conversationID="459f153c-af03-4539-bcae-c85f20380b4f")
+ERROR: logging before google.Init: I0817 11:35:43.147904       1 manager.go:386] Initializing CLI store manager for workspace /home/ubuntu/portsentry-ui
+ERROR: logging before google.Init: W0817 11:35:43.148186      75 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.148242      75 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.148240       1 cli_setting_manager.go:145] applyUserSettings: no shared config permissions from /home/ubuntu/.gemini/config/config.json
+ERROR: logging before google.Init: I0817 11:35:43.148263       1 cli_setting_manager.go:829] Skipping telemetry propagation because user is not logged in
+ERROR: logging before google.Init: I0817 11:35:43.148270       1 cli_setting_manager.go:88] CLI settings initialized: permissions=&{Allow:[command(pm2) command(ls) command(grep) command(rm -f /home/ubuntu/.pm2/logs/feishu-bot* /home/ubuntu/.pm2/logs/agy-daemon*) command(ps) command(rm -rf /home/ubuntu/antigravity-feishu-bot) command(find /home/ubuntu -name "*feishu*" 2>/dev/null) command(git status) command(git log) command(git ls-files) command(git restore) command(cat) command(rm -f .update_pending.json) command(git diff) command(./venv/bin/pip install -r requirements.txt) command(find . -name "requirements.txt") command(./venv/bin/pip install -r plugins/multi_agent/requirements.txt) command(sleep) command(tail)] Deny:[] Ask:[]}, toolPermission=request-review
+ERROR: logging before google.Init: W0817 11:35:43.148367      75 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.148399      75 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: W0817 11:35:43.148528      75 cache.go:56] Cache(loadCodeAssistResponse): Singleflight refresh failed: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.148561      75 errorreport.go:223] error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.148559       1 hooks_manager.go:53] loaded 0 named hooks from 0 hooks.json file(s)
+ERROR: logging before google.Init: I0817 11:35:43.148577       1 manager.go:559] CLI store manager initialized successfully
+ERROR: logging before google.Init: I0817 11:35:43.148599       1 printmode.go:208] Print mode: --dangerously-skip-permissions set, auto-approving all tool permissions
+ERROR: logging before google.Init: I0817 11:35:43.148614       1 printmode.go:440] Print mode: not authenticated, trying silent auth
+ERROR: logging before google.Init: W0817 11:35:43.148643      75 cache.go:56] Cache(userInfo): Singleflight refresh failed: failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: E0817 11:35:43.148668      75 errorreport.go:223] failed to get load code assist response: error getting token source: You are not logged into Antigravity.
+ERROR: logging before google.Init: I0817 11:35:43.148717     121 keyring.go:81] keyringAuth: loaded token, expiry=2026-08-17 12:16:43.529323936 +0800 CST expired=false
+ERROR: logging before google.Init: I0817 11:35:43.321187       1 auth.go:147] ChainedAuth: authenticated via keyring (effective: keyring)
+ERROR: logging before google.Init: I0817 11:35:43.321228       1 server_oauth.go:189] applyAuthResult: email=system.level6@gmail.com, authMethod=consumer, quotaProject=
+ERROR: logging before google.Init: I0817 11:35:43.321234       1 server_oauth.go:194] OAuth: authenticated successfully as system.level6@gmail.com
+ERROR: logging before google.Init: I0817 11:35:43.321240       1 server_oauth.go:200] b.codeAssistClient.AuthProvider (0x1f03edace0f0) is same as b.cliAuth (0x1f03edace0f0)
+ERROR: logging before google.Init: W0817 11:35:43.321488     152 cache.go:56] Cache(fetchBAICAdminControls): Singleflight refresh failed: admin controls not applicable
+ERROR: logging before google.Init: E0817 11:35:43.321516     152 errorreport.go:223] admin controls not applicable
+ERROR: logging before google.Init: W0817 11:35:43.321621     152 cache.go:79] Failed to refresh cache in background: admin controls not applicable
+ERROR: logging before google.Init: W0817 11:35:43.321630     159 cache.go:79] Failed to refresh cache in background: admin controls not applicable
+ERROR: logging before google.Init: E0817 11:35:44.296010      62 browser_context.go:179] failed to install playwright: could not install driver: could not install driver: error: got non 200 status code: 404 (404 Not Found) from https://playwright.azureedge.net/builds/driver/playwright-1.57.0-linux.zip
+error: got non 200 status code: 404 (404 Not Found) from https://playwright-akamai.azureedge.net/builds/driver/playwright-1.57.0-linux.zip
+error: got non 200 status code: 404 (404 Not Found) from https://playwright-verizon.azureedge.net/builds/driver/playwright-1.57.0-linux.zip
+ERROR: logging before google.Init: I0817 11:35:44.637873     148 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist Trace: 0x1cdb0bcada1f9ac1
+ERROR: logging before google.Init: I0817 11:35:45.127814     148 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels Trace: 0xc1412ecc36a4ea5e
+ERROR: logging before google.Init: I0817 11:35:45.138323       1 model_resolver.go:80] Resolving model claude-sonnet-4-6
+ERROR: logging before google.Init: I0817 11:35:45.138374       1 model_config_manager.go:311] Propagating selected model override to backend: label="Claude Sonnet 4.6 (Thinking)"
+ERROR: logging before google.Init: I0817 11:35:45.138516     103 quota_manager.go:45] doRefreshQuota: starting reload (force=true)
+ERROR: logging before google.Init: I0817 11:35:45.710014       1 printmode.go:442] Print mode: silent auth succeeded
+ERROR: logging before google.Init: I0817 11:35:45.710134     104 experiment_manager.go:38] Starting experiment refresh after login
+ERROR: logging before google.Init: I0817 11:35:45.946049     104 experiment_manager.go:42] Experiments refreshed after login
+ERROR: logging before google.Init: I0817 11:35:45.946203     220 manager.go:1222] Reloading system slash commands
+ERROR: logging before google.Init: I0817 11:35:47.165240     226 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist Trace: 0xea663cce6f936082
+ERROR: logging before google.Init: I0817 11:35:48.694993     226 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist Trace: 0x228111764f2bf341
+ERROR: logging before google.Init: I0817 11:35:48.965868     226 model_resolver.go:80] Resolving model claude-sonnet-4-6
+ERROR: logging before google.Init: I0817 11:35:48.965911     226 model_config_manager.go:311] Propagating selected model override to backend: label="Claude Sonnet 4.6 (Thinking)"
+ERROR: logging before google.Init: I0817 11:35:48.965982     239 model_resolver.go:80] Resolving model claude-sonnet-4-6
+ERROR: logging before google.Init: I0817 11:35:48.966001     239 model_config_manager.go:311] Propagating selected model override to backend: label="Claude Sonnet 4.6 (Thinking)"
+ERROR: logging before google.Init: I0817 11:35:48.966063     103 quota_manager.go:45] doRefreshQuota: starting reload (force=true)
+ERROR: logging before google.Init: I0817 11:35:49.010521       1 model_resolver.go:80] Resolving model claude-sonnet-4-6
+ERROR: logging before google.Init: I0817 11:35:49.036824       1 server.go:2693] GetConversationDetail: found conversation 459f153c-af03-4539-bcae-c85f20380b4f (active=false)
+ERROR: logging before google.Init: I0817 11:35:49.038644       1 printmode.go:324] Print mode: resuming conversation 459f153c-af03-4539-bcae-c85f20380b4f
+ERROR: logging before google.Init: I0817 11:35:49.038676       1 conversation_manager.go:675] Streaming conversation 459f153c-af03-4539-bcae-c85f20380b4f
+ERROR: logging before google.Init: I0817 11:35:49.039301       1 server.go:1083] Starting conversation update stream for 459f153c-af03-4539-bcae-c85f20380b4f
+ERROR: logging before google.Init: I0817 11:35:49.039335       1 printmode.go:340] Print mode: conversation=459f153c-af03-4539-bcae-c85f20380b4f, sending message
+ERROR: logging before google.Init: I0817 11:35:49.039350       1 manager.go:1222] Reloading system slash commands
+ERROR: logging before google.Init: I0817 11:35:49.040942       1 manager.go:1226] Slash commands unchanged, skipping update
+ERROR: logging before google.Init: I0817 11:35:49.041019       1 conversation_manager.go:523] Forwarding user message to conversation 459f153c-af03-4539-bcae-c85f20380b4f (items=1, media=0)
+ERROR: logging before google.Init: I0817 11:35:49.041030       1 server.go:1515] Sending user message to conversation 459f153c-af03-4539-bcae-c85f20380b4f (items=1, media=0)
+ERROR: logging before google.Init: I0817 11:35:49.294767     251 manager.go:480] Ignoring IDLE update because we are waiting for RUNNING
+ERROR: logging before google.Init: I0817 11:35:49.550268     104 experiment_manager.go:38] Starting experiment refresh after login
+ERROR: logging before google.Init: I0817 11:35:49.717145     104 experiment_manager.go:42] Experiments refreshed after login
+ERROR: logging before google.Init: I0817 11:35:49.717319     537 manager.go:1222] Reloading system slash commands
+ERROR: logging before google.Init: I0817 11:35:49.720207     537 manager.go:1226] Slash commands unchanged, skipping update
+ERROR: logging before google.Init: I0817 11:35:49.781477     526 model_resolver.go:80] Resolving model claude-sonnet-4-6
+ERROR: logging before google.Init: I0817 11:35:49.781530     526 model_config_manager.go:311] Propagating selected model override to backend: label="Claude Sonnet 4.6 (Thinking)"
+ERROR: logging before google.Init: I0817 11:35:49.781882     103 quota_manager.go:45] doRefreshQuota: starting reload (force=true)
+ERROR: logging before google.Init: I0817 11:35:50.318873     104 experiment_manager.go:38] Starting experiment refresh after login
+ERROR: logging before google.Init: I0817 11:35:50.482060     104 experiment_manager.go:42] Experiments refreshed after login
+ERROR: logging before google.Init: I0817 11:35:50.483477     549 manager.go:1222] Reloading system slash commands
+ERROR: logging before google.Init: I0817 11:35:50.486473     549 manager.go:1226] Slash commands unchanged, skipping update
+ERROR: logging before google.Init: I0817 11:35:50.858555     525 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist Trace: 0x33fbed99331f39b8
+ERROR: logging before google.Init: I0817 11:35:51.679465     530 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xd2bc8edef7e94624 ResponseID: req_vrtx_011Ce7cwYqRZdhchhnR3CVRK
+ERROR: logging before google.Init: I0817 11:36:03.557401     627 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xf6c5861711c3c4fd ResponseID: req_vrtx_011Ce7cxRzStRZccKFXRmmXt
+ERROR: logging before google.Init: I0817 11:36:14.134928     757 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xd3cf7d42a8dbe976 ResponseID: req_vrtx_011Ce7cyCtgMHS7UiXHUgCmL
+ERROR: logging before google.Init: E0817 11:36:16.323461     735 grep_handler.go:582] app root path missing
+ERROR: logging before google.Init: I0817 11:36:18.389360     787 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x4df5cb1d7bff4815 ResponseID: req_vrtx_011Ce7cyWuQ7EfPD8qhRHzg7
+ERROR: logging before google.Init: I0817 11:36:21.817854     841 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x9791c8cd7f1143af ResponseID: req_vrtx_011Ce7cymBdkVFGAUK9cQzjd
+ERROR: logging before google.Init: I0817 11:36:59.666909     991 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xb1a2f763d9ba6ccb ResponseID: req_vrtx_011Ce7d2YftozdyWh6qKtsfr
+ERROR: logging before google.Init: I0817 11:37:06.532559    1030 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xd4a285a242060861 ResponseID: req_vrtx_011Ce7d34zHGbkix3WJQRxvU
+ERROR: logging before google.Init: I0817 11:37:15.315441    1063 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x6871c553b3555d2f ResponseID: req_vrtx_011Ce7d3hobayec8pcBeic2b
+ERROR: logging before google.Init: I0817 11:37:36.080631    1147 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1b45a5ee5cfad98c ResponseID: req_vrtx_011Ce7d5EMecD3zWvWnsaAXt
+ERROR: logging before google.Init: I0817 11:37:40.424083    1188 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xf6cac614c381d5a5 ResponseID: req_vrtx_011Ce7d5Xw59jZw5XyRSYpAY
+ERROR: logging before google.Init: I0817 11:37:46.103979    1204 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0xcb8778b48258252a ResponseID: req_vrtx_011Ce7d5zgAEqJU1VRLh5cXn
+ERROR: logging before google.Init: I0817 11:37:49.425540    1234 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x72395c8ced3c294 ResponseID: req_vrtx_011Ce7d6C9yKDggNpv7Zc2g1
+ERROR: logging before google.Init: I0817 11:37:54.711590    1280 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x485a351f9860c953 ResponseID: req_vrtx_011Ce7d6bSCPtQUNgbfUxet8
+ERROR: logging before google.Init: I0817 11:38:04.053335    1343 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x7326a5de03d3c102 ResponseID: req_vrtx_011Ce7d7Hw1i6f3VVj2rMp2D
+ERROR: logging before google.Init: I0817 11:38:07.776773    1394 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x996834315b807b18 ResponseID: req_vrtx_011Ce7d7aLVdSqRoynmaaytD
