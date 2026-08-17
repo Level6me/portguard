@@ -625,6 +625,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <h1 class="title" id="page-main-title">安全态势概览</h1>
         </div>
         <div class="header-actions">
+            <button class="pill-btn" onclick="openSystemSettingsModal()" id="btn-settings-modal" title="系统防御与全局策略设置">
+                <span>⚙️</span>
+                <span class="btn-text-full">系统设置</span>
+            </button>
             <button class="pill-btn" onclick="cycleTheme()" id="btn-theme-toggle" title="切换主题: 自动 (跟随系统) / 暗黑 / 明亮">
                 <span id="theme-icon">🌓</span>
                 <span id="theme-label" class="btn-text-full">自动</span>
@@ -1012,97 +1016,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="bottom-spacer"></div>
     </div>
-
-    <!-- Page 7: 系统防御与全局策略设置 (Settings) -->
-    <div id="tab-settings" style="display: none;">
-        <div class="card" style="max-width: 900px; margin: 0 auto;">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">⚙️ 系统防御参数与全局策略设置</div>
-                    <div class="val-sub">自定义诱捕封禁灵敏度、时间窗口、自动解封周期与内核联动方式</div>
-                </div>
-            </div>
-
-            <div style="padding: 22px; display: flex; flex-direction: column; gap: 20px;">
-                <!-- 1. 封禁灵敏度与阈值 -->
-                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <span style="font-weight: 700; font-size: 14px; color: var(--text);">🎯 诱捕探测判定与自动拉黑阈值</span>
-                        <span class="badge badge-high" id="badge-threshold-status">主动严防</span>
-                    </div>
-                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
-                        当外部 IP 在指定时间窗口内对蜜罐端口发起探测达到设定次数后，系统将自动触发内核防火墙阻断并将其永久或定期拉黑。
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px;">
-                        <div>
-                            <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数 (阈值)</label>
-                            <select id="setting-trap-threshold" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
-                                <option value="1">1 次 (零容忍立即封禁 - 推荐全网防扫)</option>
-                                <option value="2">2 次 (严苛防御模式)</option>
-                                <option value="3">3 次 (标准默认模式 - 防单次误触)</option>
-                                <option value="5">5 次 (宽松模式)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
-                            <select id="setting-trap-window" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
-                                <option value="15">15 秒</option>
-                                <option value="30">30 秒 (标准默认)</option>
-                                <option value="60">60 秒 (长窗口感知)</option>
-                                <option value="300">300 秒 (5分钟慢速扫描捕获)</option>
-                                <option value="600">600 秒 (10分钟超长感知)</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 2. 封禁时长与自动解封周期 -->
-                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
-                    <div style="font-weight: 700; font-size: 14px; color: var(--text); margin-bottom: 8px;">⏳ 黑名单封禁周期与自动解封</div>
-                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
-                        被拉黑的恶意攻击 IP 的持续封禁天数。设为永久封禁时，除非管理员手动解封，否则永远阻断。
-                    </div>
-                    <div>
-                        <label style="font-size: 12px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
-                        <select id="setting-auto-clean" class="input-field" style="width: 100%; margin-top: 6px; padding: 9px 12px; font-size: 13px; font-weight: 600;">
-                            <option value="7">7 天 (临时阻断)</option>
-                            <option value="30">30 天 (标准推荐)</option>
-                            <option value="90">90 天 (长期封锁)</option>
-                            <option value="180">180 天 (半年封锁)</option>
-                            <option value="0">永久封禁 (永不自动解封)</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- 3. 内核阻断机制 -->
-                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
-                    <div style="font-weight: 700; font-size: 14px; color: var(--text); margin-bottom: 8px;">🛡️ Linux 内核底层阻断联动机制</div>
-                    <div style="font-size: 12px; color: var(--text-sec); margin-bottom: 14px; line-height: 1.5;">
-                        启用双层内核防御联动，确保恶意流量在数据链路层或路由层瞬间丢弃，不占用任何系统带宽与 CPU。
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 12px;">
-                        <label style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); cursor: pointer;">
-                            <input type="checkbox" id="setting-ban-iptables" checked style="width: 17px; height: 17px; accent-color: var(--accent);">
-                            <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链最顶层直接丢弃数据包）</span>
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); cursor: pointer;">
-                            <input type="checkbox" id="setting-ban-blackhole" checked style="width: 17px; height: 17px; accent-color: var(--accent);">
-                            <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接阻断，极低 CPU 消耗）</span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- 保存设置按钮 -->
-                <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px;">
-                    <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 10px 28px; font-size: 14px; font-weight: 700;">
-                        <span>💾</span>
-                        <span>保存并动态应用设置</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-        <div class="bottom-spacer"></div>
-    </div>
 </div>
 
 <!-- Floating Glass Dock (Abit 经典底栏) -->
@@ -1131,10 +1044,91 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
         <span>信任白名单</span>
     </button>
-    <button class="dock-btn" id="dock-btn-settings" onclick="switchTab('settings', this)">
-        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-        <span>系统设置</span>
-    </button>
+</div>
+
+<!-- Modal: 系统设置弹窗 -->
+<div class="modal-overlay" id="modal-settings">
+    <div class="modal-sheet" style="max-width: 620px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                <span>⚙️</span>
+                <span>系统防御参数与全局设置</span>
+            </h3>
+            <button class="action-btn" onclick="closeModals()" style="font-size: 16px; padding: 4px 8px;">✕</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px; max-height: 75vh; overflow-y: auto; padding-right: 4px;">
+            <!-- 1. 封禁灵敏度与阈值 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🎯 诱捕探测判定与自动拉黑阈值</span>
+                    <span class="badge badge-high" id="badge-threshold-status">主动严防</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                    外部 IP 在指定时间窗口内触碰蜜罐端口达到设定次数后，自动触发内核阻断并加入黑名单。
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数</label>
+                        <select id="setting-trap-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                            <option value="1">1 次 (零容忍立即封禁)</option>
+                            <option value="2">2 次 (严苛防御)</option>
+                            <option value="3">3 次 (标准防误触)</option>
+                            <option value="5">5 次 (宽松模式)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
+                        <select id="setting-trap-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                            <option value="15">15 秒</option>
+                            <option value="30">30 秒 (标准默认)</option>
+                            <option value="60">60 秒 (长窗口感知)</option>
+                            <option value="300">300 秒 (5分钟慢速感知)</option>
+                            <option value="600">600 秒 (10分钟超长感知)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. 封禁时长与自动解封周期 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⏳ 黑名单封禁周期与自动解封</div>
+                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                    被拉黑攻击 IP 的持续阻断天数。设为永久封禁时永不自动解封。
+                </div>
+                <div>
+                    <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
+                    <select id="setting-auto-clean" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                        <option value="7">7 天 (临时阻断)</option>
+                        <option value="30">30 天 (标准推荐)</option>
+                        <option value="90">90 天 (长期封锁)</option>
+                        <option value="180">180 天 (半年封锁)</option>
+                        <option value="0">永久封禁 (永不自动解封)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 3. 内核阻断机制 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ Linux 内核底层阻断联动方式</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                        <input type="checkbox" id="setting-ban-iptables" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                        <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链顶层直接丢弃数据包）</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                        <input type="checkbox" id="setting-ban-blackhole" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                        <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接丢弃）</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 8px 20px; font-weight: 700;">💾 保存设置</button>
+        </div>
+    </div>
 </div>
 
 <!-- Modal: 手动拉黑 -->
@@ -1376,61 +1370,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function csvEscape(s) {
         return String(s == null ? '' : s).replace(/"/g, '""');
     }
-
     const COUNTRY_CN_MAP = {
-        // 北美
         "United States": "美国", "Canada": "加拿大", "Mexico": "墨西哥",
-        // 南美
         "Brazil": "巴西", "Argentina": "阿根廷", "Chile": "智利", "Colombia": "哥伦比亚",
-        "Peru": "秘鲁", "Venezuela": "委内瑞拉", "Ecuador": "厄瓜多尔", "Bolivia": "玻利维亚",
-        "Paraguay": "巴拉圭", "Uruguay": "乌拉圭",
-        // 欧洲
         "United Kingdom": "英国", "Germany": "德国", "France": "法国", "Italy": "意大利",
         "Spain": "西班牙", "Portugal": "葡萄牙", "Netherlands": "荷兰", "The Netherlands": "荷兰",
         "Belgium": "比利时", "Switzerland": "瑞士", "Austria": "奥地利", "Sweden": "瑞典",
         "Norway": "挪威", "Denmark": "丹麦", "Finland": "芬兰", "Poland": "波兰",
         "Czech Republic": "捷克", "Czechia": "捷克", "Hungary": "匈牙利", "Romania": "罗马尼亚",
         "Bulgaria": "保加利亚", "Greece": "希腊", "Croatia": "克罗地亚", "Serbia": "塞尔维亚",
-        "Slovakia": "斯洛伐克", "Slovenia": "斯洛文尼亚", "Lithuania": "立陶宛",
-        "Latvia": "拉脱维亚", "Estonia": "爱沙尼亚", "Ukraine": "乌克兰", "Russia": "俄罗斯",
-        "Belarus": "白俄罗斯", "Moldova": "摩尔多瓦", "Albania": "阿尔巴尼亚",
-        "Bosnia and Herzegovina": "波黑", "North Macedonia": "北马其顿", "Montenegro": "黑山",
-        "Luxembourg": "卢森堡", "Iceland": "冰岛", "Ireland": "爱尔兰",
-        "Malta": "马耳他", "Cyprus": "塞浦路斯",
-        // 亚洲
+        "Ukraine": "乌克兰", "Russia": "俄罗斯", "Belarus": "白俄罗斯", "Ireland": "爱尔兰",
         "China": "中国", "Japan": "日本", "South Korea": "韩国", "North Korea": "朝鲜",
         "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Macau": "中国澳门",
-        "India": "印度", "Pakistan": "巴基斯坦", "Bangladesh": "孟加拉国",
-        "Singapore": "新加坡", "Malaysia": "马来西亚", "Indonesia": "印度尼西亚",
-        "Philippines": "菲律宾", "Vietnam": "越南", "Thailand": "泰国", "Myanmar": "缅甸",
-        "Cambodia": "柬埔寨", "Laos": "老挝", "Sri Lanka": "斯里兰卡", "Nepal": "尼泊尔",
-        "Mongolia": "蒙古", "Kazakhstan": "哈萨克斯坦", "Uzbekistan": "乌兹别克斯坦",
-        "Kyrgyzstan": "吉尔吉斯斯坦", "Tajikistan": "塔吉克斯坦", "Turkmenistan": "土库曼斯坦",
-        "Afghanistan": "阿富汗", "Iran": "伊朗", "Iraq": "伊拉克", "Syria": "叙利亚",
-        "Turkey": "土耳其", "Israel": "以色列", "Palestine": "巴勒斯坦", "Jordan": "约旦",
-        "Lebanon": "黎巴嫩", "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋",
-        "Qatar": "卡塔尔", "Kuwait": "科威特", "Bahrain": "巴林", "Oman": "阿曼",
-        "Yemen": "也门", "Georgia": "格鲁吉亚", "Armenia": "亚美尼亚", "Azerbaijan": "阿塞拜疆",
-        // 非洲
-        "South Africa": "南非", "Nigeria": "尼日利亚", "Egypt": "埃及", "Kenya": "肯尼亚",
-        "Ethiopia": "埃塞俄比亚", "Ghana": "加纳", "Tanzania": "坦桑尼亚", "Uganda": "乌干达",
-        "Algeria": "阿尔及利亚", "Morocco": "摩洛哥", "Tunisia": "突尼斯", "Libya": "利比亚",
-        "Sudan": "苏丹", "Angola": "安哥拉", "Mozambique": "莫桑比克", "Zimbabwe": "津巴布韦",
-        "Cameroon": "喀麦隆", "Ivory Coast": "科特迪瓦", "Senegal": "塞内加尔",
-        "Mauritius": "毛里求斯", "Seychelles": "塞舌尔",
-        // 大洋洲
-        "Australia": "澳大利亚", "New Zealand": "新西兰",
-        // 其他常见
-        "Luxembourg": "卢森堡", "Liechtenstein": "列支敦士登", "Andorra": "安道尔",
-        "Monaco": "摩纳哥", "San Marino": "圣马力诺", "Vatican City": "梵蒂冈",
+        "India": "印度", "Pakistan": "巴基斯坦", "Singapore": "新加坡", "Malaysia": "马来西亚",
+        "Indonesia": "印度尼西亚", "Philippines": "菲律宾", "Vietnam": "越南", "Thailand": "泰国",
+        "Australia": "澳大利亚", "New Zealand": "新西兰", "South Africa": "南非", "Egypt": "埃及"
     };
 
     function formatGeoCN(item) {
         if (!item) return '未知节点';
         let country = item.country || '';
-        // 优先从映射表翻译，找不到时直接显示原值（避免退化为"公网节点"）
+        if (country === '分析中...' || !country) return '分析中...';
         country = COUNTRY_CN_MAP[country] || country;
-        if (!country) return '公网节点';
         let region = item.region || item.city || '';
         if (region && !country.includes(region)) {
             return `🌐 ${country} · ${region}`;
@@ -1455,8 +1416,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'access-logs': '端口与控制台访问日志',
         'blacklist': '内核黑名单池',
         'traps': '蜜罐策略配置',
-        'whitelist': '安全信任白名单',
-        'settings': '系统防御全局设置'
+        'whitelist': '安全信任白名单'
     };
 
     const CATEGORY_LABELS = {
@@ -1534,7 +1494,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function switchTab(tabKey, btn) {
-        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist', 'settings'].forEach(t => {
+        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
             const el = document.getElementById(`tab-${t}`);
             if (el) el.style.display = (t === tabKey) ? 'block' : 'none';
         });
@@ -1543,11 +1503,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (targetBtn) targetBtn.classList.add('active');
         document.getElementById('page-main-title').innerText = PAGE_TITLES[tabKey] || '控制台';
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        if (tabKey === 'settings') {
-            loadSystemSettings();
-        } else {
-            fetchData(false);
-        }
+        fetchData(false);
+    }
+
+    function openSystemSettingsModal() {
+        loadSystemSettings();
+        document.getElementById('modal-settings').classList.add('active');
     }
 
     function jumpToLogsFilter(cat) {

@@ -606,51 +606,80 @@ _GEO_CACHE = {}
 _GEO_CACHE_LOCK = threading.Lock()
 
 def resolve_ip_geo(ip):
-    # 结果缓存：同一 IP 只查一次，降低外部 API 压力与限流
+    # 结果缓存：同一 IP 且解析成功过只查一次，降低外部 API 压力
     with _GEO_CACHE_LOCK:
-        if ip in _GEO_CACHE:
+        if ip in _GEO_CACHE and _GEO_CACHE[ip].get("country") not in ("公网节点", "公网探测", "未知地域", "", None):
             return _GEO_CACHE[ip]
+            
+    # 过滤本地与私网 IP
+    if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127."):
+        return {"country": "本地回环", "region": "", "city": "", "isp": "Localhost"}
+    if ip.startswith("10.") or ip.startswith("192.168.") or (ip.startswith("172.") and len(ip.split(".")) > 1 and ip.split(".")[1].isdigit() and 16 <= int(ip.split(".")[1]) <= 31):
+        return {"country": "局域私网", "region": "", "city": "", "isp": "Private LAN"}
+
+    # 1. 首选高可用源：ipwho.is (原生支持简体中文返回，数据精准，无频控限制)
     try:
-        # 首选：ip-api.com HTTP 接口（免费版不支持 HTTPS，必须使用 HTTP 协议）
-        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
-        req = urllib.request.Request(url, headers={"User-Agent": "PortsentryUI/2.0"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        url = f"http://ipwho.is/{ip}?lang=zh-CN"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            if data.get("status") == "success":
-                c = translate_country_cn(data.get("country", ""))
+            if data.get("success"):
+                country = data.get("country", "").strip()
+                if country:
+                    result = {
+                        "country": translate_country_cn(country),
+                        "region": data.get("region", "").strip(),
+                        "city": data.get("city", "").strip(),
+                        "isp": data.get("connection", {}).get("isp", "").strip()
+                    }
+                    with _GEO_CACHE_LOCK:
+                        _GEO_CACHE[ip] = result
+                    return result
+    except Exception:
+        pass
+
+    # 2. 备选源：ip-api.com HTTP 接口
+    try:
+        url2 = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
+        req2 = urllib.request.Request(url2, headers={"User-Agent": "PortsentryUI/2.0"})
+        with urllib.request.urlopen(req2, timeout=3) as resp2:
+            data2 = json.loads(resp2.read().decode('utf-8'))
+            if data2.get("status") == "success":
+                country = data2.get("country", "").strip()
+                if country:
+                    result = {
+                        "country": translate_country_cn(country),
+                        "region": data2.get("regionName", "").strip(),
+                        "city": data2.get("city", "").strip(),
+                        "isp": data2.get("isp", "").strip()
+                    }
+                    with _GEO_CACHE_LOCK:
+                        _GEO_CACHE[ip] = result
+                    return result
+    except Exception:
+        pass
+
+    # 3. 备选源：api.ip.sb
+    try:
+        url3 = f"https://api.ip.sb/geoip/{ip}"
+        req3 = urllib.request.Request(url3, headers={"User-Agent": "PortsentryUI/2.0"})
+        with urllib.request.urlopen(req3, timeout=3) as resp3:
+            data3 = json.loads(resp3.read().decode('utf-8'))
+            country = data3.get("country", "").strip()
+            if country:
                 result = {
-                    "country": c,
-                    "region": data.get("regionName", ""),
-                    "city": data.get("city", ""),
-                    "isp": data.get("isp", "")
+                    "country": translate_country_cn(country),
+                    "region": data3.get("region", "").strip(),
+                    "city": data3.get("city", "").strip(),
+                    "isp": data3.get("isp", data3.get("organization", "")).strip()
                 }
                 with _GEO_CACHE_LOCK:
                     _GEO_CACHE[ip] = result
                 return result
     except Exception:
         pass
-    try:
-        # 备用源：api.ip.sb（HTTPS，返回英文 country，通过内置映射表翻译为中文）
-        url2 = f"https://api.ip.sb/geoip/{ip}"
-        req2 = urllib.request.Request(url2, headers={"User-Agent": "PortsentryUI/2.0"})
-        with urllib.request.urlopen(req2, timeout=4) as resp2:
-            data2 = json.loads(resp2.read().decode('utf-8'))
-            c2 = translate_country_cn(data2.get("country", ""))
-            result = {
-                "country": c2,
-                "region": data2.get("region", ""),
-                "city": data2.get("city", ""),
-                "isp": data2.get("isp", data2.get("organization", ""))
-            }
-            with _GEO_CACHE_LOCK:
-                _GEO_CACHE[ip] = result
-            return result
-    except Exception:
-        pass
-    result = {"country": "公网节点", "region": "", "city": "", "isp": ""}
-    with _GEO_CACHE_LOCK:
-        _GEO_CACHE[ip] = result
-    return result
+
+    return {"country": "公网探测", "region": "", "city": "", "isp": ""}
 
 def ban_ip(ip, port, port_info):
     cfg = load_config()
