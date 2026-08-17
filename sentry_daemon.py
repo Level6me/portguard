@@ -792,10 +792,17 @@ KNOWN_SYSTEM_SERVICES = {
     80: "HTTP 网站服务 (OpenResty/Nginx)",
     443: "HTTPS 加密网站服务",
     15633: "1Panel 运维控制面板",
+    10232: "1Panel 运维控制面板",
     4212: "Trojan 安全隧道服务",
     8085: "Trojan 业务端口",
     29675: "SSHD 远程管理服务",
-    40123: "受保护自定义业务端口"
+    40123: "受保护自定义业务端口",
+    12432: "Trojan MariaDB 数据库",
+    8080: "Keycloak 业务端口",
+    9090: "Bark 消息推送服务",
+    1688: "KMS 激活服务",
+    9000: "Portainer 控制台",
+    9443: "Portainer HTTPS 管理"
 }
 
 def get_active_system_ports():
@@ -880,7 +887,7 @@ class TrapServer:
         cfg = load_config()
         raw_trap_ports = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
         active_ports_map = get_active_system_ports()
-        active_ports = set(active_ports_map.keys())
+        active_ports = set(active_ports_map.keys()) | set(KNOWN_SYSTEM_SERVICES.keys())
         
         normalized_traps = []
         for item in raw_trap_ports:
