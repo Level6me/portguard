@@ -416,6 +416,8 @@ _WEB_PORT_LOG_CACHE = {}
 
 def log_access_entry(ip, method, path, status_code=200, user_agent=""):
     try:
+        if ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127."):
+            return
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
         conn = get_db()

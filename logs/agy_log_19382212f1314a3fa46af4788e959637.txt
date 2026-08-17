@@ -185,3 +185,10 @@ ERROR: logging before google.Init: I0817 20:02:33.333424    3018 http_helpers.go
 ERROR: logging before google.Init: I0817 20:02:36.082822    3123 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x989fb82d44c019cc ResponseID: WfiCas7hM4ye2roP583L6A8
 ERROR: logging before google.Init: I0817 20:02:38.042165    3188 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x62237e22bd512bf0 ResponseID: XPiCaueoKYfj1e8PtcXiiQI
 ERROR: logging before google.Init: I0817 20:02:41.184957    3208 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x12fdae5ab1ca272c ResponseID: XviCar2ANtqE0-kPsZT0kAI
+ERROR: logging before google.Init: I0817 20:02:45.807929    3269 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x598084a5d34ec71c ResponseID: Y_iCaoi-Gf3c2roP-MzC0Ak
+ERROR: logging before google.Init: I0817 20:02:57.674295    3318 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x811e4bf7ac552264 ResponseID: cPiCatmaEIq_1e8P9u-O4AI
+ERROR: logging before google.Init: I0817 20:02:59.929072    3342 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x315e795731766ea8 ResponseID: cviCaoHTIMKv2roPmKiyoQU
+ERROR: logging before google.Init: I0817 20:03:02.842590    3366 http_helpers.go:232] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x6515b3c14ce2b6a5 ResponseID: dPiCapaoH9DU2roP8c23oAg
+ERROR: logging before google.Init: I0817 20:03:05.856809       1 manager.go:739] CLI store manager shutting down
+ERROR: logging before google.Init: I0817 20:03:05.857270       1 conversation_manager.go:633] Stopping conversation stream
+ERROR: logging before google.Init: I0817 20:03:05.857833    3421 server.go:2637] Language server shutting down
