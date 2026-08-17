@@ -1087,11 +1087,17 @@ class GlobalPortSniffer:
             action = "BUSINESS"
             proc = active_ports_map[dst_port]
             desc = f"正常业务连接: {proc} (端口 {dst_port})"
-        # 3. 命中活跃诱饵蜜罐
+        # 3. 命中活跃诱饵蜜罐 (无论 iptables 是否提前阻断，嗅探器直接联动触发蜜罐拦截与自动拉黑)
         elif dst_port in trap_instance.trap_map:
             action = "INTERCEPTED"
             trap_meta = trap_instance.trap_map.get(dst_port, {})
             desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
+            port_info = {
+                "name": desc,
+                "category": trap_meta.get("category", "custom"),
+                "level": trap_meta.get("level", "高危")
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
         # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
