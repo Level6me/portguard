@@ -551,6 +551,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             display: none; align-items: center; justify-content: center; z-index: 2000;
             padding: 16px;
         }
+        .modal-overlay.active {
+            display: flex !important;
+        }
         .modal-sheet {
             background: var(--modal-bg);
             border: 1px solid var(--border);
@@ -1122,6 +1125,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </label>
                 </div>
             </div>
+
+            <!-- 4. 正常业务端口探针防御阻断开关 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🌐 正常业务端口探针诱捕阻断</span>
+                    <span class="badge badge-low" id="badge-business-trap-status" style="font-size: 11px;">放行模式</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                    针对 Web(80/443)、SSH(22/29675)、Trojan(4212)、FRP 等正常生产业务端口的非白名单访问控制策略。
+                </div>
+                <label style="display: flex; align-items: flex-start; gap: 10px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border);">
+                    <input type="checkbox" id="setting-trap-business" onchange="updateBusinessTrapNotice()" style="width: 18px; height: 18px; accent-color: var(--danger); margin-top: 2px;">
+                    <div>
+                        <div style="font-weight: 700; color: var(--text);" id="text-business-trap-title">开启正常业务端口探针诱捕阻断</div>
+                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; line-height: 1.4;" id="text-business-trap-desc">
+                            关闭状态（推荐）：对正常业务端口连接仅记录分析（显示绿色业务连接），绝不主动封禁，保障正常客户访问。
+                        </div>
+                    </div>
+                </label>
+            </div>
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
@@ -1508,7 +1531,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function openSystemSettingsModal() {
         loadSystemSettings();
-        document.getElementById('modal-settings').classList.add('active');
+        const m = document.getElementById('modal-settings');
+        if (m) {
+            m.style.display = 'flex';
+            m.classList.add('active');
+        }
     }
 
     function jumpToLogsFilter(cat) {
@@ -2292,7 +2319,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function openManualBanModal() { document.getElementById('modal-ban').style.display = 'flex'; }
     function openAddWhiteModal() { document.getElementById('modal-white').style.display = 'flex'; }
     function openAddTrapModal() { document.getElementById('modal-trap').style.display = 'flex'; }
-    function closeModals() { document.querySelectorAll('.modal-overlay').forEach(m => m.style.display = 'none'); }
+    function closeModals() { 
+        document.querySelectorAll('.modal-overlay').forEach(m => {
+            m.style.display = 'none';
+            m.classList.remove('active');
+        });
+    }
 
     function submitManualBan() {
         const ip = document.getElementById('ban-ip-val').value.trim();
@@ -2623,7 +2655,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const res = await fetch('/api/settings');
             const data = await res.json();
             if (document.getElementById('setting-trap-threshold')) {
-                document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 3);
+                document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 1);
             }
             if (document.getElementById('setting-trap-window')) {
                 document.getElementById('setting-trap-window').value = String(data.trap_window_seconds || 30);
@@ -2637,7 +2669,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (document.getElementById('setting-ban-blackhole')) {
                 document.getElementById('setting-ban-blackhole').checked = data.ban_action_blackhole !== false;
             }
+            if (document.getElementById('setting-trap-business')) {
+                document.getElementById('setting-trap-business').checked = !!data.trap_business_ports;
+            }
             updateThresholdBadge();
+            updateBusinessTrapNotice();
         } catch (e) {
             console.error(e);
         }
@@ -2646,7 +2682,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function updateThresholdBadge() {
         const sel = document.getElementById('setting-trap-threshold');
         if (!sel) return;
-        const val = parseInt(sel.value || '3');
+        const val = parseInt(sel.value || '1');
         const badge = document.getElementById('badge-threshold-status');
         if (!badge) return;
         if (val === 1) {
@@ -2661,12 +2697,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    function updateBusinessTrapNotice() {
+        const chk = document.getElementById('setting-trap-business');
+        const badge = document.getElementById('badge-business-trap-status');
+        const desc = document.getElementById('text-business-trap-desc');
+        if (!chk) return;
+        if (chk.checked) {
+            if (badge) { badge.innerText = '⚠️ 业务探针强阻断'; badge.className = 'badge badge-high'; }
+            if (desc) { desc.innerHTML = '<span style="color:var(--danger); font-weight:600;">⚠️ 严苛模式已激活</span>：非白名单 IP 访问 Web/SSH 等正常业务端口时，也将触发安全感知并执行诱捕阻断拉黑。'; }
+        } else {
+            if (badge) { badge.innerText = '✅ 正常业务放行'; badge.className = 'badge badge-low'; }
+            if (desc) { desc.innerHTML = '<span style="color:var(--success); font-weight:600;">✅ 标准业务放行模式（推荐）</span>：仅记录正常业务端口连接，绝不误封阻断客户/用户对 Web/SSH/代理等业务服务的正常连接。'; }
+        }
+    }
+
     async function saveSystemSettings() {
-        const threshold = parseInt(document.getElementById('setting-trap-threshold').value || '3');
+        const threshold = parseInt(document.getElementById('setting-trap-threshold').value || '1');
         const windowSec = parseInt(document.getElementById('setting-trap-window').value || '30');
         const cleanDays = parseInt(document.getElementById('setting-auto-clean').value || '30');
         const iptables = document.getElementById('setting-ban-iptables').checked;
         const blackhole = document.getElementById('setting-ban-blackhole').checked;
+        const trapBusiness = document.getElementById('setting-trap-business').checked;
 
         try {
             showToast('正在保存系统设置...', '⏳');
@@ -2678,13 +2729,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     trap_window_seconds: windowSec,
                     auto_clean_days: cleanDays,
                     ban_action_iptables: iptables,
-                    ban_action_blackhole: blackhole
+                    ban_action_blackhole: blackhole,
+                    trap_business_ports: trapBusiness
                 })
             });
             const data = await res.json();
             if (data.success) {
                 showToast(data.msg || '系统设置已成功保存并立即生效！', '🎉');
                 updateThresholdBadge();
+                updateBusinessTrapNotice();
             } else {
                 showToast(data.msg || '保存失败', '⚠️');
             }
@@ -2855,12 +2908,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 cfg = load_config()
                 self._send_json({
-                    "trap_threshold": int(cfg.get("trap_threshold", 3) or 3),
+                    "trap_threshold": int(cfg.get("trap_threshold", 1) or 1),
                     "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
                     "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
                     "defense_mode": cfg.get("defense_mode", "strict"),
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
+                    "trap_business_ports": bool(cfg.get("trap_business_ports", False)),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
                 })
                 return
@@ -3062,6 +3116,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cfg["ban_action_iptables"] = bool(req_data["ban_action_iptables"])
                 if "ban_action_blackhole" in req_data:
                     cfg["ban_action_blackhole"] = bool(req_data["ban_action_blackhole"])
+                if "trap_business_ports" in req_data:
+                    cfg["trap_business_ports"] = bool(req_data["trap_business_ports"])
                 save_config(cfg)
                 self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
                 return

@@ -56,7 +56,8 @@ DEFAULT_CONFIG = {
     "ban_action_blackhole": True,
     "auto_clean_days": 30,
     "trap_threshold": 1,
-    "trap_window_seconds": 30
+    "trap_window_seconds": 30,
+    "trap_business_ports": False
 }
 
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
@@ -1171,9 +1172,19 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
         # 3. 系统生产业务端口访问（如 Trojan 4212、HTTPS 443、SSH 29675、Web 9099 等）
         elif dst_port in active_ports_map and not trap_meta:
-            action = "BUSINESS"
             proc = active_ports_map[dst_port]
-            desc = f"业务端口访问: {proc} (端口 {dst_port})"
+            if cfg.get("trap_business_ports", False):
+                action = "INTERCEPTED"
+                desc = f"业务端口诱捕阻断: {proc} (端口 {dst_port})"
+                port_info = {
+                    "name": desc,
+                    "category": "business",
+                    "level": "中危"
+                }
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+            else:
+                action = "BUSINESS"
+                desc = f"业务端口访问: {proc} (端口 {dst_port})"
         # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
