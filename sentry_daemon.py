@@ -473,7 +473,7 @@ def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTE
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
         geo = geo or {}
-        country = geo.get("country", "公网探测" if ip not in ("127.0.0.1", "::1", "localhost") else "本地测试")
+        country = geo.get("country", "分析中..." if ip not in ("127.0.0.1", "::1", "localhost") else "本地测试")
         region = geo.get("region", "")
         city = geo.get("city", "")
         isp = geo.get("isp", "")
@@ -484,8 +484,23 @@ def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTE
         INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
         VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
         """, (ip, port, port_name, country, region, city, isp, action, now_str, now_ts))
+        p_id = cursor.lastrowid
         conn.commit()
         conn.close()
+
+        if not geo and ip not in ("127.0.0.1", "::1", "localhost"):
+            def _async_geo_port(entry_id, target_ip):
+                try:
+                    g = resolve_ip_geo(target_ip)
+                    c2 = get_db()
+                    cur2 = c2.cursor()
+                    cur2.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                 (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), entry_id))
+                    c2.commit()
+                    c2.close()
+                except Exception:
+                    pass
+            _EXECUTOR.submit(_async_geo_port, p_id, ip)
     except Exception:
         pass
 
@@ -515,8 +530,8 @@ def cleanup_expired_bans():
         now_ts = int(time.time())
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT ip, ban_expire FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
-        expired = [row["ip"] for row in c.fetchall()]
+        c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
+        expired = [r["ip"] for r in c.fetchall()]
         for ip in expired:
             valid = validate_ip(ip)
             if not valid:
@@ -537,12 +552,6 @@ def cleanup_loop():
     while True:
         time.sleep(3600)
         cleanup_expired_bans()
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            cfg = json.load(f)
-            return {**DEFAULT_CONFIG, **cfg}
-    except Exception:
-        return DEFAULT_CONFIG
 
 def save_config(cfg):
     try:
@@ -575,12 +584,15 @@ GEO_COUNTRY_CN = {
     "Japan": "日本", "South Korea": "韩国", "China": "中国", "Russia": "俄罗斯",
     "Canada": "加拿大", "Australia": "澳大利亚", "Brazil": "巴西", "India": "印度",
     "Singapore": "新加坡", "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Netherlands": "荷兰",
-    "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
+    "The Netherlands": "荷兰", "Italy": "意大利", "Spain": "西班牙", "Vietnam": "越南", "Thailand": "泰国",
     "Indonesia": "印度尼西亚", "Malaysia": "马来西亚", "Philippines": "菲律宾", "Turkey": "土耳其",
     "Ukraine": "乌克兰", "Poland": "波兰", "Sweden": "瑞典", "Switzerland": "瑞士",
     "South Africa": "南非", "Egypt": "埃及", "Mexico": "墨西哥", "Argentina": "阿根廷",
     "Chile": "智利", "Colombia": "哥伦比亚", "Iran": "伊朗", "Israel": "以色列",
-    "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦"
+    "Saudi Arabia": "沙特阿拉伯", "United Arab Emirates": "阿联酋", "Pakistan": "巴基斯坦",
+    "Belgium": "比利时", "Finland": "芬兰", "Bulgaria": "保加利亚", "Romania": "罗马尼亚",
+    "Seychelles": "塞舌尔", "Norway": "挪威", "Denmark": "丹麦", "Austria": "奥地利",
+    "Czech Republic": "捷克", "Hungary": "匈牙利", "Greece": "希腊", "Portugal": "葡萄牙"
 }
 
 def translate_country_cn(name):
@@ -683,6 +695,7 @@ def ban_ip(ip, port, port_info):
                 (ip, port, port_info.get("name", f"TCP/{port}"), port_info.get("category", "other"),
                  port_info.get("level", "高危"), now_str, now_ts, hit_count)
             )
+            w_event_id = cw.lastrowid
             cw.execute(
                 "INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) "
                 "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
@@ -690,6 +703,22 @@ def ban_ip(ip, port, port_info):
             )
             conn_w.commit()
             conn_w.close()
+
+            def _async_geo_watch(e_id, p_id, target_ip):
+                try:
+                    geo = resolve_ip_geo(target_ip)
+                    c_geo = get_db()
+                    cur = c_geo.cursor()
+                    cur.execute("UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                (geo["country"], geo["region"], geo["city"], geo["isp"], e_id))
+                    cur.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                (geo["country"], geo["region"], geo["city"], geo["isp"], p_id))
+                    c_geo.commit()
+                    c_geo.close()
+                except Exception:
+                    pass
+
+            _EXECUTOR.submit(_async_geo_watch, w_event_id, w_port_id, ip)
         except Exception:
             pass
         return
