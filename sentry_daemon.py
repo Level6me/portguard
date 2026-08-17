@@ -1089,12 +1089,7 @@ class GlobalPortSniffer:
             action = "WHITELIST"
             proc = active_ports_map.get(dst_port, "")
             desc = f"白名单访问: {proc} (端口 {dst_port})" if proc else f"安全白名单访问 (端口 {dst_port})"
-        # 2. 正常系统业务访问（如 SSH 29675、Web 9099、OpenResty 80/443、1Panel 等）
-        elif dst_port in active_ports_map:
-            action = "BUSINESS"
-            proc = active_ports_map[dst_port]
-            desc = f"正常业务连接: {proc} (端口 {dst_port})"
-        # 3. 命中活跃诱饵蜜罐 (无论 iptables 是否提前阻断，嗅探器直接联动触发蜜罐拦截与自动拉黑)
+        # 2. 命中活跃诱饵蜜罐 (必须优先于 active_ports_map，因为蜜罐自身的监听端口也会出现在系统的监听列表中)
         elif dst_port in trap_instance.trap_map:
             action = "INTERCEPTED"
             trap_meta = trap_instance.trap_map.get(dst_port, {})
@@ -1105,6 +1100,11 @@ class GlobalPortSniffer:
                 "level": trap_meta.get("level", "高危")
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+        # 3. 正常系统业务访问（如 SSH 29675、Web 9099、OpenResty 80/443、1Panel 等）
+        elif dst_port in active_ports_map and dst_port not in trap_instance.trap_map:
+            action = "BUSINESS"
+            proc = active_ports_map[dst_port]
+            desc = f"正常业务连接: {proc} (端口 {dst_port})"
         # 4. 其他未开放端口常规探测
         else:
             action = "PROBE"
