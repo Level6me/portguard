@@ -3136,23 +3136,6 @@ def run_server():
     bind_ip = cfg.get("web_bind", "0.0.0.0")
     bind_port = int(cfg.get("web_port", 9099))
 
-    # 启动时重放黑名单到 iptables / 黑洞路由（解决重启后防御规则丢失问题）
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT ip FROM blacklist")
-        for (ip,) in c.fetchall():
-            v = validate_ip(ip)
-            if not v:
-                continue
-            run_firewall_cmd("iptables", "-C", "INPUT", "-s", v, "-j", "DROP")
-            run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
-            run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
-        conn.close()
-        print(f"[Portsentry] 已重放 {c.rowcount if hasattr(c, 'rowcount') else ''} 条黑名单防火墙规则")
-    except Exception as e:
-        print(f"[Portsentry] 黑名单重放失败: {e}")
-
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((bind_ip, bind_port), RequestHandler)
     print(f"[Portsentry-UI Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
@@ -3160,6 +3143,28 @@ def run_server():
     trap_instance.start()
     sniffer_instance.start()
     cleanup_expired_bans()
+
+    # 后台异步重放黑名单到 iptables / 黑洞路由（避免阻塞主进程启动）
+    def _async_replay_blacklist():
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("SELECT ip FROM blacklist")
+            rows = c.fetchall()
+            count = 0
+            for (ip,) in rows:
+                v = validate_ip(ip)
+                if not v:
+                    continue
+                run_firewall_cmd("iptables", "-C", "INPUT", "-s", v, "-j", "DROP")
+                run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
+                run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
+                count += 1
+            conn.close()
+            print(f"[Portsentry] 异步完成 {count} 条黑名单防火墙规则重放")
+        except Exception as e:
+            print(f"[Portsentry] 黑名单重放失败: {e}")
+    threading.Thread(target=_async_replay_blacklist, daemon=True).start()
     
     try:
         httpd.serve_forever()
