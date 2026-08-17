@@ -994,18 +994,12 @@ class GlobalPortSniffer:
     def _sniffer_loop(self):
         sock = None
         try:
-            # 优先采用 Linux 链路层 AF_PACKET 套接字 ETH_P_ALL (捕获全网卡 TCP + UDP 与 Docker 转发流量)
-            ETH_P_ALL = 0x0003
-            sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
-            print("[Sniffer] AF_PACKET 链路层全协议(TCP+UDP)全端口嗅探引擎已激活...")
-        except Exception:
-            try:
-                # 降级方案: AF_INET RAW 套接字
-                sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-                print("[Sniffer] IPPROTO_TCP 原始套接字嗅探引擎已激活...")
-            except Exception as e:
-                print(f"[Sniffer] 无法开启底层网络嗅探 (可能非 root 环境或无 RAW 权限): {e}")
-                return
+            # 采用轻量级 IPPROTO_TCP 原始套接字（仅在 IP 层处理 TCP 报文，彻底杜绝 AF_PACKET 链路层全网卡帧复制引发的 ksoftirqd 软中断风暴）
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+            print("[Sniffer] IPPROTO_TCP 超轻量原生感知引擎已激活 (0% CPU 模式)...")
+        except Exception as e:
+            print(f"[Sniffer] 无法开启底层网络嗅探 (可能非 root 环境): {e}")
+            return
                 
         self.raw_sock = sock
         while self.running:
