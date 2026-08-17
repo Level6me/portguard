@@ -3113,10 +3113,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     c.execute("SELECT ip FROM blacklist WHERE ip = ?", (v,))
                     if c.fetchone():
                         continue
-                    geo = resolve_ip_geo(v)
-                    country = geo.get("country", "公网探测")
+                    cached_geo = _GEO_CACHE.get(v, {})
+                    country = cached_geo.get("country", "公网探测")
                     
                     if cfg.get("ban_action_iptables", True):
+                        run_firewall_cmd("iptables", "-C", "INPUT", "-s", v, "-j", "DROP")
                         run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
                     if cfg.get("ban_action_blackhole", True):
                         run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
@@ -3128,8 +3129,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     
                     c.execute("""
                     INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                    VALUES (?, ?, 'TCP', '全网端口嗅探扫描', 'scan', '高危', ?, ?, ?, ?, ?, ?, 'BANNED')
-                    """, (v, port, country, geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), now_str, now_ts))
+                    VALUES (?, ?, 'TCP', '全网端口嗅探扫描', 'scan', '高危', ?, '', '', '', ?, ?, 'BANNED')
+                    """, (v, port, country, now_str, now_ts))
+                    
+                    if not cached_geo:
+                        _EXECUTOR.submit(resolve_ip_geo, v)
                     count += 1
                     
                 conn.commit()
