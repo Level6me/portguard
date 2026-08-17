@@ -1878,6 +1878,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const tagClass = (e.level === '极高危') ? 'danger' : (e.level === '高危' ? 'warning' : 'accent');
             const catName = CATEGORY_LABELS[e.category] || e.category || '服务探针';
             const geoText = formatGeoCN(e);
+            const isWatch = (e.status === 'WATCH');
+            const statusBadge = isWatch 
+                ? '<span class="tag warning">探测感知 (观察中)</span>' 
+                : '<span class="tag danger">已内核丢弃 (DROP)</span>';
+            const actionBtn = isWatch
+                ? `<button class="action-btn danger" onclick="quickBanIP('${jsEscape(e.ip)}', '手动封禁观察中IP')">立即封禁</button>`
+                : `<button class="action-btn success" onclick="unbanIP('${jsEscape(e.ip)}')">一键解封</button>`;
+
             html += `
             <tr>
                 <td style="font-size:12px; color:var(--text-sec);">${e.attack_time}</td>
@@ -1886,10 +1894,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <td><span class="tag neutral">TCP / ${e.port}</span></td>
                 <td style="font-weight:600;">${e.port_name || '自定义诱饵'} <span class="tag accent" style="margin-left:4px;">${catName}</span></td>
                 <td><span class="tag ${tagClass}">${e.level || '高危'}</span></td>
-                <td><span class="tag danger">已内核丢弃 (DROP)</span></td>
-                <td>
-                    <button class="action-btn success" onclick="unbanIP('${jsEscape(e.ip)}')">一键解封</button>
-                </td>
+                <td>${statusBadge}</td>
+                <td>${actionBtn}</td>
             </tr>
             `;
         });

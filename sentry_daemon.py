@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "ban_action_iptables": True,
     "ban_action_blackhole": True,
     "auto_clean_days": 30,
-    "trap_threshold": 3,
+    "trap_threshold": 1,
     "trap_window_seconds": 30
 }
 
@@ -732,6 +732,7 @@ def ban_ip(ip, port, port_info):
                 "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
                 (ip, port, port_info.get("name", f"TCP/{port}"), now_str, now_ts)
             )
+            w_port_id = cw.lastrowid
             conn_w.commit()
             conn_w.close()
 
@@ -740,10 +741,12 @@ def ban_ip(ip, port, port_info):
                     geo = resolve_ip_geo(target_ip)
                     c_geo = get_db()
                     cur = c_geo.cursor()
-                    cur.execute("UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?",
-                                (geo["country"], geo["region"], geo["city"], geo["isp"], e_id))
-                    cur.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
-                                (geo["country"], geo["region"], geo["city"], geo["isp"], p_id))
+                    if e_id:
+                        cur.execute("UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                    (geo["country"], geo["region"], geo["city"], geo["isp"], e_id))
+                    if p_id:
+                        cur.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                    (geo["country"], geo["region"], geo["city"], geo["isp"], p_id))
                     c_geo.commit()
                     c_geo.close()
                 except Exception:
