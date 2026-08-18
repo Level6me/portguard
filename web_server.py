@@ -237,12 +237,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             flex-shrink: 0;
         }
 
+        .btn-text-mobile { display: none; }
+        .analytics-subtab-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            gap: 10px;
+        }
+        .analytics-filter-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        @media (max-width: 768px) {
+            .analytics-subtab-bar {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+            .analytics-filter-row {
+                width: 100%;
+                justify-content: space-between;
+            }
+            .analytics-filter-row .segmented-control {
+                flex: 1;
+            }
+        }
+
         @media (max-width: 600px) {
-            .header { margin: 2px 0 12px 0; min-height: 42px; }
-            .title { font-size: 22px; }
+            .header { margin: 2px 0 10px 0; min-height: 38px; }
+            .title { font-size: 20px; line-height: 1.2; }
             .date-badge { font-size: 10px; }
             .pill-btn { padding: 5px 8px; font-size: 11px; gap: 4px; }
             .pill-btn .btn-text-full { display: none; }
+            .pill-btn .btn-text-mobile { display: inline; }
         }
 
         /* Pill Buttons */
@@ -663,7 +692,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <!-- Page 1: 态势分析 (Overview & Multi-dimensional Deep Analytics) -->
     <div id="tab-overview">
         <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+        <div class="analytics-subtab-bar">
             <div class="segmented-control" style="max-width: 320px; width: 100%;">
                 <button class="segment-btn active" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)">
                     📊 全局概览
@@ -672,15 +701,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     🔬 多维深度分析
                 </button>
             </div>
-            <div id="analytics-toolbar" style="display: none; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <div id="analytics-toolbar" class="analytics-filter-row" style="display: none;">
                 <div class="segmented-control" style="background: var(--card); border: 1px solid var(--border);">
-                    <button class="segment-btn" id="filter-range-24h" onclick="changeAnalyticsRange('24h', this)">近 24 小时</button>
-                    <button class="segment-btn active" id="filter-range-7d" onclick="changeAnalyticsRange('7d', this)">近 7 天</button>
-                    <button class="segment-btn" id="filter-range-30d" onclick="changeAnalyticsRange('30d', this)">近 30 天</button>
-                    <button class="segment-btn" id="filter-range-all" onclick="changeAnalyticsRange('all', this)">全部历史</button>
+                    <button class="segment-btn" id="filter-range-24h" onclick="changeAnalyticsRange('24h', this)">24h</button>
+                    <button class="segment-btn active" id="filter-range-7d" onclick="changeAnalyticsRange('7d', this)">7天</button>
+                    <button class="segment-btn" id="filter-range-30d" onclick="changeAnalyticsRange('30d', this)">30天</button>
+                    <button class="segment-btn" id="filter-range-all" onclick="changeAnalyticsRange('all', this)">全部</button>
                 </div>
-                <button class="pill-btn accent" onclick="exportAnalyticsJSON()" title="导出当前多维态势分析完整数据集 (JSON)">
-                    <span>📥</span><span>导出分析报告</span>
+                <button class="pill-btn accent" onclick="exportAnalyticsJSON()" style="flex-shrink: 0;" title="导出当前多维态势分析完整数据集 (JSON)">
+                    <span>📥</span>
+                    <span class="btn-text-full">导出报告</span>
+                    <span class="btn-text-mobile">导出</span>
                 </button>
             </div>
         </div>
