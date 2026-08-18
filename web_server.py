@@ -2243,8 +2243,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         } else {
             pageLogs.forEach(l => {
                 const methodTag = (l.method === 'POST') 
-                    ? '<span class="tag warning" style="font-weight:700; font-size:10px; padding:2px 5px;">POST</span>' 
-                    : '<span class="tag success" style="font-weight:700; font-size:10px; padding:2px 5px;">GET</span>';
+                    ? '<span class="tag warning" style="font-weight:700; font-size:10px; padding:2px 5px; flex-shrink:0;">POST</span>' 
+                    : '<span class="tag success" style="font-weight:700; font-size:10px; padding:2px 5px; flex-shrink:0;">GET</span>';
                 
                 let statusTag = '<span class="tag success" style="font-weight:700; font-size:11px;">200 OK</span>';
                 if (l.status_code >= 300 && l.status_code < 400) {
@@ -2256,16 +2256,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 const geoText = formatGeoCN(l);
                 const domain = l.domain || '默认站点';
-                const uaShort = (l.user_agent || 'Unknown').slice(0, 42);
+                const uaShort = (l.user_agent || 'Unknown').slice(0, 36);
+                const rawPath = l.path || '/';
+                const pathDisplay = (rawPath.length > 45) ? (rawPath.slice(0, 42) + '...') : rawPath;
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
                     <td><span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
-                    <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent);">🌐 ${escapeHtml(domain)}</span></td>
-                    <td>${methodTag} <code style="background:var(--card-sec); padding:2px 6px; border-radius:6px; font-size:12px; font-weight:600; color:var(--text);">${escapeHtml(l.path)}</code></td>
+                    <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(domain)}">🌐 ${escapeHtml(domain)}</span></td>
+                    <td>
+                        <div style="display:inline-flex; align-items:center; gap:6px; max-width:320px;">
+                            ${methodTag}
+                            <code style="background:var(--card-sec); padding:2px 6px; border-radius:6px; font-size:12px; font-weight:600; color:var(--text); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle; cursor:pointer;" title="${escapeHtml(rawPath)}">${escapeHtml(pathDisplay)}</code>
+                        </div>
+                    </td>
                     <td>${statusTag}</td>
-                    <td><span style="font-size:11px; color:var(--text-sec);" title="${escapeHtml(l.user_agent || '')}">${escapeHtml(uaShort)}</span></td>
+                    <td><span style="font-size:11px; color:var(--text-sec); max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(l.user_agent || '')}">${escapeHtml(uaShort)}</span></td>
                 </tr>
                 `;
             });
