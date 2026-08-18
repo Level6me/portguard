@@ -1114,7 +1114,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- 3. 内核阻断机制 -->
+            <!-- 3. 全局全端口零信任诱捕 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⚡ 全端口零信任诱捕拉黑（全网全端口诱捕）</div>
+                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                    基于 Linux 原生网络层感知，外部非白名单 IP 探测服务器上的任何端口（包括开放、未开放、蜜罐或业务端口）时，立即毫秒级拉黑并下发内核防火墙。
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                        <input type="checkbox" id="setting-trap-all-ports" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                        <span><b>开启探测任何端口立即诱捕拉黑</b>（所有入站非白名单探测一律直接封禁）</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                        <input type="checkbox" id="setting-trap-all-unopened" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                        <span><b>未开放端口隐蔽嗅探诱捕</b>（探测任意未开放端口立即拉黑阻断）</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 4. 内核阻断机制 -->
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                 <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ Linux 内核底层阻断联动方式</div>
                 <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -3186,6 +3204,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (document.getElementById('setting-auto-clean')) {
                 document.getElementById('setting-auto-clean').value = String(data.auto_clean_days !== undefined ? data.auto_clean_days : 30);
             }
+            if (document.getElementById('setting-trap-all-ports')) {
+                document.getElementById('setting-trap-all-ports').checked = data.trap_all_ports !== false;
+            }
+            if (document.getElementById('setting-trap-all-unopened')) {
+                document.getElementById('setting-trap-all-unopened').checked = data.trap_all_unopened_ports !== false;
+            }
             if (document.getElementById('setting-ban-iptables')) {
                 document.getElementById('setting-ban-iptables').checked = data.ban_action_iptables !== false;
             }
@@ -3220,6 +3244,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const threshold = parseInt(document.getElementById('setting-trap-threshold').value || '1');
         const windowSec = parseInt(document.getElementById('setting-trap-window').value || '30');
         const cleanDays = parseInt(document.getElementById('setting-auto-clean').value || '30');
+        const trapAllPorts = document.getElementById('setting-trap-all-ports') ? document.getElementById('setting-trap-all-ports').checked : true;
+        const trapAllUnopened = document.getElementById('setting-trap-all-unopened') ? document.getElementById('setting-trap-all-unopened').checked : true;
         const iptables = document.getElementById('setting-ban-iptables').checked;
         const blackhole = document.getElementById('setting-ban-blackhole').checked;
 
@@ -3232,6 +3258,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     trap_threshold: threshold,
                     trap_window_seconds: windowSec,
                     auto_clean_days: cleanDays,
+                    trap_all_ports: trapAllPorts,
+                    trap_all_unopened_ports: trapAllUnopened,
                     ban_action_iptables: iptables,
                     ban_action_blackhole: blackhole
                 })
@@ -3442,6 +3470,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
                     "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
                     "defense_mode": cfg.get("defense_mode", "strict"),
+                    "trap_all_ports": bool(cfg.get("trap_all_ports", True)),
+                    "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", True)),
+                    "trap_business_ports": bool(cfg.get("trap_business_ports", True)),
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
@@ -3674,6 +3705,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cfg["ban_action_blackhole"] = bool(req_data["ban_action_blackhole"])
                 if "trap_business_ports" in req_data:
                     cfg["trap_business_ports"] = bool(req_data["trap_business_ports"])
+                if "trap_all_unopened_ports" in req_data:
+                    cfg["trap_all_unopened_ports"] = bool(req_data["trap_all_unopened_ports"])
+                if "trap_all_ports" in req_data:
+                    cfg["trap_all_ports"] = bool(req_data["trap_all_ports"])
                 save_config(cfg)
                 self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
                 return

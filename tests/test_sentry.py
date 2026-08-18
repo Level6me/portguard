@@ -3,6 +3,7 @@
 """Portsentry 核心逻辑单元测试（零外部依赖，不触碰真实数据库/防火墙）。"""
 import os
 import sys
+import time
 import socket
 import struct
 import unittest
@@ -272,7 +273,68 @@ class IsTrapPortTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_trap_all_unopened_ports(self):
+        from sentry_daemon import GlobalPortSniffer, init_db
+        init_db()
+        sniffer = GlobalPortSniffer()
+        
+        # 1. 开启 trap_all_unopened_ports 时，探测未开放端口立即触发 ban_ip 诱捕
+        with mock.patch("sentry_daemon.load_config") as mock_cfg, \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban:
+            mock_cfg.return_value = {
+                "whitelist": [],
+                "trap_ports": [],
+                "trap_business_ports": False,
+                "trap_all_unopened_ports": True
+            }
+            sniffer._handle_port_access("203.0.113.88", 54321, "TCP")
+            time.sleep(0.05)
+            mock_ban.assert_called_once()
+            args, _ = mock_ban.call_args
+            self.assertEqual(args[0], "203.0.113.88")
+            self.assertEqual(args[1], 54321)
+
+        # 2. 关闭 trap_all_unopened_ports 时，探测未开放端口仅记录日志，不调用 ban_ip
+        with mock.patch("sentry_daemon.load_config") as mock_cfg2, \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban2:
+            mock_cfg2.return_value = {
+                "whitelist": [],
+                "trap_ports": [],
+                "trap_business_ports": False,
+                "trap_all_unopened_ports": False,
+                "trap_all_ports": False
+            }
+            sniffer._handle_port_access("203.0.113.89", 54322, "TCP")
+            time.sleep(0.05)
+            mock_ban2.assert_not_called()
+
+    def test_trap_all_ports_zero_trust(self):
+        from sentry_daemon import GlobalPortSniffer, init_db
+        init_db()
+        sniffer = GlobalPortSniffer()
+
+        # 开启全端口诱捕：探测任何端口 (如 SSH 22, 业务 80, 数据库 3306, 未开放端口 9999) 均直接拉黑
+        with mock.patch("sentry_daemon.load_config") as mock_cfg, \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban:
+            mock_cfg.return_value = {
+                "whitelist": [],
+                "trap_ports": [],
+                "trap_business_ports": True,
+                "trap_all_unopened_ports": True,
+                "trap_all_ports": True,
+                "web_port": 9099
+            }
+            # 探测业务端口 22
+            sniffer._handle_port_access("203.0.113.100", 22, "TCP")
+            time.sleep(0.05)
+            mock_ban.assert_called_once()
+            args, _ = mock_ban.call_args
+            self.assertEqual(args[0], "203.0.113.100")
+            self.assertEqual(args[1], 22)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
 
