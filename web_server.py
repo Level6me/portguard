@@ -693,13 +693,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="tab-overview">
         <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
         <div class="analytics-subtab-bar">
-            <div class="segmented-control" style="max-width: 320px; width: 100%;">
-                <button class="segment-btn active" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)">
-                    📊 全局概览
-                </button>
-                <button class="segment-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)">
-                    🔬 多维深度分析
-                </button>
+            <!-- 模式切换分段按钮 (采用与访问日志一致的胶囊拟态设计) -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
+                <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 全局概览</button>
+                <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维度分析</button>
             </div>
             <div id="analytics-toolbar" class="analytics-filter-row" style="display: none;">
                 <div class="segmented-control" style="background: var(--card); border: 1px solid var(--border);">
@@ -2087,18 +2084,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const btnAnalysis = document.getElementById('subtab-btn-analysis');
 
         if (subTab === 'overview') {
+            if (btnOverview) { btnOverview.className = 'pill-btn accent'; btnOverview.style.background = ''; }
+            if (btnAnalysis) { btnAnalysis.className = 'pill-btn'; btnAnalysis.style.background = 'transparent'; }
             if (subviewOverview) subviewOverview.style.display = 'block';
             if (subviewAnalysis) subviewAnalysis.style.display = 'none';
             if (toolbar) toolbar.style.display = 'none';
-            if (btnOverview) btnOverview.classList.add('active');
-            if (btnAnalysis) btnAnalysis.classList.remove('active');
             fetchData(false);
         } else {
+            if (btnOverview) { btnOverview.className = 'pill-btn'; btnOverview.style.background = 'transparent'; }
+            if (btnAnalysis) { btnAnalysis.className = 'pill-btn accent'; btnAnalysis.style.background = ''; }
             if (subviewOverview) subviewOverview.style.display = 'none';
             if (subviewAnalysis) subviewAnalysis.style.display = 'block';
             if (toolbar) toolbar.style.display = 'flex';
-            if (btnOverview) btnOverview.classList.remove('active');
-            if (btnAnalysis) btnAnalysis.classList.add('active');
             if (!analyticsTrendChartInstance) {
                 initAnalyticsCharts();
             }
