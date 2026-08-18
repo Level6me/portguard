@@ -153,5 +153,33 @@ class ParsePacketTest(unittest.TestCase):
         self.assertIsNone(parse_packet(None))
 
 
+class IsTrapPortTest(unittest.TestCase):
+    def test_business_trap_priority_over_broad_range(self):
+        from sentry_daemon import is_trap_port
+        cfg = {
+            "web_port": 9099,
+            "trap_business_ports": False,
+            "trap_ports": [
+                {"port": "1-60000", "is_business": False, "enabled": True},
+                {"port": 22, "is_business": True, "enabled": True, "name": "SSH 业务诱捕"}
+            ]
+        }
+        res = is_trap_port(22, cfg)
+        self.assertIsNotNone(res)
+        self.assertTrue(res.get("is_business"))
+        self.assertEqual(res.get("port"), 22)
+
+    def test_global_business_trap(self):
+        from sentry_daemon import is_trap_port
+        cfg = {
+            "web_port": 9099,
+            "trap_business_ports": True,
+            "trap_ports": []
+        }
+        res = is_trap_port(8085, cfg)
+        self.assertIsNotNone(res)
+        self.assertTrue(res.get("is_business"))
+
+
 if __name__ == "__main__":
     unittest.main()
