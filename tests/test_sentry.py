@@ -180,6 +180,36 @@ class IsTrapPortTest(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertTrue(res.get("is_business"))
 
+    def test_site_log_collector_and_schema(self):
+        from sentry_daemon import SiteLogCollector, site_collector_instance, get_db, init_db
+        init_db()
+        self.assertIsNotNone(site_collector_instance)
+        collector = SiteLogCollector()
+        targets = collector._discover_log_files()
+        self.assertIsInstance(targets, list)
+        
+        # 验证 access_logs 数据表中包含 domain 字段
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO access_logs (ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  ("1.2.3.4", "test.example.com", "GET", "/api/test", 200, "curl/7.88.1", "CN", "Beijing", "Beijing", "Telecom", "2026-08-18 12:00:00", 1787035200))
+        conn.commit()
+        
+        c.execute("SELECT ip, domain, method, path, status_code FROM access_logs WHERE ip = '1.2.3.4'")
+        row = c.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "1.2.3.4")
+        self.assertEqual(row[1], "test.example.com")
+        self.assertEqual(row[2], "GET")
+        self.assertEqual(row[3], "/api/test")
+        self.assertEqual(row[4], 200)
+        
+        # 清理测试数据
+        c.execute("DELETE FROM access_logs WHERE ip = '1.2.3.4'")
+        conn.commit()
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+

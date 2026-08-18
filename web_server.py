@@ -21,7 +21,7 @@ _RAW_HTML_CACHE = None
 _GZIP_HTML_CACHE = None
 from sentry_daemon import (
     DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db,
-    trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
+    trap_instance, sniffer_instance, site_collector_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR
 )
@@ -957,8 +957,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="header-action-wrap">
                     <!-- 模式切换分段按钮 -->
                     <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
-                        <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问</button>
-                        <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌐 控制台访问</button>
+                        <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口网络访问</button>
+                        <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 HTTPS 业务网站访问 (443)</button>
                     </div>
                     <button class="pill-btn" onclick="exportAccessLogsCSV()">
                         <span>📥</span>
@@ -2109,44 +2109,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const titleEl = document.getElementById('access-logs-title');
         const subEl = document.getElementById('access-logs-sub');
         const theadEl = document.getElementById('access-logs-thead');
+        const actionSegments = document.getElementById('access-action-segments');
         
         if (mode === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
             if (btnWeb) { btnWeb.className = 'pill-btn'; btnWeb.style.background = 'transparent'; }
             if (titleEl) titleEl.innerText = '🍯 端口网络访问日志';
             if (subEl) subEl.innerText = '实时记录所有外部客户端对本机各诱捕端口与网络端口的连接嗅探';
+            if (actionSegments) actionSegments.style.display = 'flex';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
-                        <th>访问时间</th>
-                        <th>来源 IP</th>
-                        <th>归属地域 / 运营商</th>
-                        <th>目标端口</th>
+                        <th style="width: 150px;">访问时间</th>
+                        <th style="width: 150px;">来源 IP</th>
+                        <th style="width: 150px;">归属地域</th>
+                        <th style="width: 120px;">目标端口</th>
                         <th>服务说明</th>
-                        <th>防御处置</th>
+                        <th style="width: 110px;">防御处置</th>
                     </tr>
                 `;
             }
         } else {
             if (btnWeb) { btnWeb.className = 'pill-btn accent'; btnWeb.style.background = ''; }
             if (btnPort) { btnPort.className = 'pill-btn'; btnPort.style.background = 'transparent'; }
-            if (titleEl) titleEl.innerText = '🌐 Web 控制台访问审计';
-            if (subEl) subEl.innerText = '实时记录 Web 管理控制台接口调用、鉴权请求与放行流量审计';
+            if (titleEl) titleEl.innerText = '🌍 HTTPS 业务网站访问日志 (443 / Web)';
+            if (subEl) subEl.innerText = '实时采集并聚合 OpenResty / Nginx 业务站点的客户端域名、访问路径、状态码与设备信息';
+            if (actionSegments) actionSegments.style.display = 'none';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
-                        <th>访问时间</th>
-                        <th>客户端 IP</th>
-                        <th>归属地域 / 运营商</th>
-                        <th>请求方法</th>
-                        <th>请求路径 (URI)</th>
-                        <th>状态码</th>
-                        <th>客户端设备 (User-Agent)</th>
+                        <th style="width: 150px;">访问时间</th>
+                        <th style="width: 150px;">客户端 IP</th>
+                        <th style="width: 150px;">归属地域</th>
+                        <th style="width: 180px;">访问域名 (Host)</th>
+                        <th>请求方法 & 访问路径 (URI)</th>
+                        <th style="width: 100px;">状态码</th>
+                        <th style="width: 200px;">客户端设备 (User-Agent)</th>
                     </tr>
                 `;
             }
         }
-        renderAccessLogsTable();
+        
+        // 立即拉取对应模式数据
+        fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
+            if (currentAccessLogMode === 'port') allPortLogs = data;
+            else allWebLogs = data;
+            renderAccessLogsTable();
+        });
     }
 
     let currentAccessActionFilter = 'all';
@@ -2167,7 +2176,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const activeLogs = (currentAccessLogMode === 'port') ? allPortLogs : allWebLogs;
         let list = activeLogs || [];
         
-        // 动作过滤
+        // 动作过滤（仅针对端口模式）
         if (currentAccessLogMode === 'port' && currentAccessActionFilter !== 'all') {
             list = list.filter(l => (l.action || '') === currentAccessActionFilter);
         }
@@ -2180,13 +2189,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const ip = (l.ip || '').toLowerCase();
                 const port = String(l.port || '');
                 const portName = (l.port_name || '').toLowerCase();
+                const domain = (l.domain || '').toLowerCase();
                 const path = (l.path || '').toLowerCase();
                 const country = (l.country || '').toLowerCase();
                 const region = (l.region || '').toLowerCase();
                 const city = (l.city || '').toLowerCase();
                 const isp = (l.isp || '').toLowerCase();
                 const ua = (l.user_agent || '').toLowerCase();
-                return ip.includes(query) || port.includes(query) || portName.includes(query) || path.includes(query) || country.includes(query) || region.includes(query) || city.includes(query) || isp.includes(query) || ua.includes(query);
+                return ip.includes(query) || port.includes(query) || portName.includes(query) || domain.includes(query) || path.includes(query) || country.includes(query) || region.includes(query) || city.includes(query) || isp.includes(query) || ua.includes(query);
             });
         }
 
@@ -2199,7 +2209,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         if (totalCount === 0) {
             const emptyColspan = (currentAccessLogMode === 'port') ? 6 : 7;
-            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口网络访问' : 'Web控制台访问'}记录</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口网络访问' : 'HTTPS 业务网站访问'}记录</td></tr>`;
             return;
         }
 
@@ -2211,45 +2221,51 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (currentAccessLogMode === 'port') {
             pageLogs.forEach(l => {
                 const geoText = formatGeoCN(l);
-                let actionTag = '<span class="tag danger" style="font-weight:700;">🚫 诱捕阻断</span>';
+                let actionTag = '<span class="tag danger" style="font-weight:700; font-size:11px;">🚫 诱捕阻断</span>';
                 if (l.action === 'WHITELIST' || l.action === '放行') {
-                    actionTag = '<span class="tag success" style="font-weight:700;">🛡️ 信任放行</span>';
+                    actionTag = '<span class="tag success" style="font-weight:700; font-size:11px;">🛡️ 信任放行</span>';
                 } else if (l.action === 'BUSINESS' || l.action === '业务') {
-                    actionTag = '<span class="tag accent" style="font-weight:700;">⚡ 正常业务</span>';
+                    actionTag = '<span class="tag accent" style="font-weight:700; font-size:11px;">⚡ 正常业务</span>';
                 } else if (l.action === 'PROBE' || l.action === '探测') {
-                    actionTag = '<span class="tag warning" style="font-weight:700;">🔍 外部探测</span>';
+                    actionTag = '<span class="tag warning" style="font-weight:700; font-size:11px;">🔍 外部探测</span>';
                 }
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="showIPDetail('${l.ip}')" title="点击查看 IP 详情">${l.ip}</span></td>
+                    <td><span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
-                    <td><b style="color:var(--text); font-size:12px;">${l.port_name || '网络连接'}</b></td>
+                    <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(l.port_name || '网络连接')}</span></td>
                     <td>${actionTag}</td>
                 </tr>
                 `;
             });
         } else {
             pageLogs.forEach(l => {
-                const methodTag = l.method === 'POST' ? '<span class="tag warning" style="font-weight:700;">POST</span>' : '<span class="tag accent" style="font-weight:700;">GET</span>';
-                let statusTag = '<span class="tag success" style="font-weight:700;">200 OK</span>';
-                if (l.status_code >= 400 && l.status_code < 500) {
-                    statusTag = `<span class="tag warning" style="font-weight:700;">${l.status_code}</span>`;
+                const methodTag = (l.method === 'POST') 
+                    ? '<span class="tag warning" style="font-weight:700; font-size:10px; padding:2px 5px;">POST</span>' 
+                    : '<span class="tag success" style="font-weight:700; font-size:10px; padding:2px 5px;">GET</span>';
+                
+                let statusTag = '<span class="tag success" style="font-weight:700; font-size:11px;">200 OK</span>';
+                if (l.status_code >= 300 && l.status_code < 400) {
+                    statusTag = `<span class="tag accent" style="font-weight:700; font-size:11px;">${l.status_code}</span>`;
+                } else if (l.status_code >= 400 && l.status_code < 500) {
+                    statusTag = `<span class="tag warning" style="font-weight:700; font-size:11px;">${l.status_code}</span>`;
                 } else if (l.status_code >= 500) {
-                    statusTag = `<span class="tag danger" style="font-weight:700;">${l.status_code}</span>`;
+                    statusTag = `<span class="tag danger" style="font-weight:700; font-size:11px;">${l.status_code}</span>`;
                 }
                 const geoText = formatGeoCN(l);
-                const uaShort = (l.user_agent || 'Unknown').slice(0, 48);
+                const domain = l.domain || '默认站点';
+                const uaShort = (l.user_agent || 'Unknown').slice(0, 42);
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="showIPDetail('${l.ip}')" title="点击查看 IP 详情">${l.ip}</span></td>
+                    <td><span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span></td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
-                    <td>${methodTag}</td>
-                    <td><code style="background:var(--card-sec); padding:3px 6px; border-radius:6px; font-size:12px; font-weight:600;">${l.path}</code></td>
+                    <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent);">🌐 ${escapeHtml(domain)}</span></td>
+                    <td>${methodTag} <code style="background:var(--card-sec); padding:2px 6px; border-radius:6px; font-size:12px; font-weight:600; color:var(--text);">${escapeHtml(l.path)}</code></td>
                     <td>${statusTag}</td>
-                    <td><span style="font-size:11px; color:var(--text-sec);" title="${l.user_agent || ''}">${uaShort}</span></td>
+                    <td><span style="font-size:11px; color:var(--text-sec);" title="${escapeHtml(l.user_agent || '')}">${escapeHtml(uaShort)}</span></td>
                 </tr>
                 `;
             });
@@ -2267,9 +2283,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 csv += `"${l.access_time}","${l.ip}","${l.country || ''} ${l.region || ''}","${l.isp || ''}","${l.proto || 'TCP'}","${l.port}","${(l.port_name || '').replace(/"/g, '""')}","${l.action || 'INTERCEPTED'}"\n`;
             });
         } else {
-            csv = '\uFEFF访问时间,客户端IP,国家/地区,网络运营商,请求方式,请求路径,响应状态码,客户端UserAgent\n';
+            csv = '\uFEFF访问时间,客户端IP,国家/地区,网络运营商,访问域名,请求方式,请求路径,响应状态码,客户端UserAgent\n';
             activeLogs.forEach(l => {
-                csv += `"${l.access_time}","${l.ip}","${l.country || ''} ${l.region || ''}","${l.isp || ''}","${l.method}","${l.path}","${l.status_code}","${(l.user_agent || '').replace(/"/g, '""')}"\n`;
+                csv += `"${l.access_time}","${l.ip}","${l.country || ''} ${l.region || ''}","${l.isp || ''}","${l.domain || ''}","${l.method}","${l.path}","${l.status_code}","${(l.user_agent || '').replace(/"/g, '""')}"\n`;
             });
         }
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -2277,11 +2293,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         link.href = URL.createObjectURL(blob);
         link.download = `portsentry_${currentAccessLogMode}_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
-        showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : '控制台'}审计报表 CSV`, '📥');
+        showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : 'HTTPS业务网站'}审计报表 CSV`, '📥');
     }
 
     function clearAccessLogs() {
-        const modeText = (currentAccessLogMode === 'port') ? '端口访问日志' : 'Web控制台日志';
+        const modeText = (currentAccessLogMode === 'port') ? '端口网络访问日志' : 'HTTPS 业务网站访问日志';
         if (!confirm(`确定要清空全部历史【${modeText}】吗？此操作不可恢复。`)) return;
         fetch('/api/access_logs/clear', {
             method: 'POST',
@@ -3013,15 +3029,33 @@ class RequestHandler(BaseHTTPRequestHandler):
                     limit_cnt = 500
                 conn = get_db()
                 c = conn.cursor()
-                if log_type == "web":
-                    c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
+                if log_type in ("web", "site"):
+                    domain_filter = query.get("domain", [None])[0]
+                    if domain_filter:
+                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs WHERE domain = ? ORDER BY id DESC LIMIT ?", (domain_filter, limit_cnt))
+                    else:
+                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
+                    for r in rows:
+                        if (not r.get("country") or r.get("country") == "分析中...") and r.get("ip") in _GEO_CACHE:
+                            g = _GEO_CACHE[r["ip"]]
+                            r["country"] = g.get("country", "")
+                            r["region"] = g.get("region", "")
+                            r["city"] = g.get("city", "")
+                            r["isp"] = g.get("isp", "")
                 else:
                     c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp FROM port_access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
                     if not rows:
                         c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, status as action, attack_time as access_time, timestamp FROM events ORDER BY id DESC LIMIT ?", (limit_cnt,))
                         rows = [dict(r) for r in c.fetchall()]
+                    for r in rows:
+                        if (not r.get("country") or r.get("country") == "分析中...") and r.get("ip") in _GEO_CACHE:
+                            g = _GEO_CACHE[r["ip"]]
+                            r["country"] = g.get("country", "")
+                            r["region"] = g.get("region", "")
+                            r["city"] = g.get("city", "")
+                            r["isp"] = g.get("isp", "")
                 conn.close()
                 self._send_json(rows)
                 return
@@ -3527,6 +3561,7 @@ def run_server():
     
     trap_instance.start()
     sniffer_instance.start()
+    site_collector_instance.start()
     cleanup_expired_bans()
 
     # 后台平滑增量重放黑名单到 iptables / 黑洞路由（彻底杜绝进程风暴与 CPU 脉冲）

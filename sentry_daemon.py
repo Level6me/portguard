@@ -3,19 +3,20 @@
 """
 Portsentry Core Daemon v2.0 - 高级蜜罐诱捕与智能威胁防御引擎
 """
-import os
-import sys
-import time
-import socket
-import select
-import sqlite3
-import threading
-import subprocess
-import json
-import urllib.request
-import re
-import struct
+import glob
 import ipaddress
+import json
+import os
+import re
+import select
+import socket
+import sqlite3
+import struct
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -364,6 +365,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS access_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ip TEXT NOT NULL,
+        domain TEXT DEFAULT '',
         method TEXT NOT NULL,
         path TEXT NOT NULL,
         status_code INTEGER DEFAULT 200,
@@ -397,6 +399,10 @@ def init_db():
     
     # 自动列自适应补充（迁移旧库）
     try:
+        cursor.execute("ALTER TABLE access_logs ADD COLUMN domain TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
         cursor.execute("ALTER TABLE blacklist ADD COLUMN country TEXT")
     except Exception:
         pass
@@ -414,6 +420,12 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE events ADD COLUMN level TEXT")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_domain ON access_logs(domain)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp)")
     except Exception:
         pass
         
@@ -1283,6 +1295,156 @@ class GlobalPortSniffer:
                 
         _EXECUTOR.submit(_async_write)
 
+class SiteLogCollector:
+    """自动扫描并实时采集 OpenResty / Nginx 业务站点的 access.log 访问日志"""
+    def __init__(self):
+        self.running = False
+        self._file_offsets = {}
+        self._seen_lines = set()
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        threading.Thread(target=self._collector_loop, daemon=True).start()
+        print("[SiteCollector] HTTPS 业务网站访问日志采集引擎已激活...")
+
+    def stop(self):
+        self.running = False
+
+    def _discover_log_files(self):
+        """自动发现系统中的 OpenResty / Nginx 站点访问日志文件"""
+        files = []
+        # 1. 1Panel OpenResty 站点目录
+        for p in glob.glob("/opt/1panel/apps/openresty/openresty/www/sites/*/log/access.log"):
+            if os.path.exists(p):
+                parts = p.split(os.sep)
+                try:
+                    site_idx = parts.index("sites")
+                    domain = parts[site_idx + 1]
+                except Exception:
+                    domain = "1Panel站点"
+                files.append((p, domain))
+
+        # 2. 1Panel 全局访问日志
+        global_p = "/opt/1panel/apps/openresty/openresty/log/access.log"
+        if os.path.exists(global_p):
+            files.append((global_p, "全局反代"))
+
+        # 3. 标准系统 Nginx 路径
+        for p in glob.glob("/var/log/nginx/*access*.log"):
+            if os.path.exists(p):
+                bname = os.path.basename(p).replace(".access.log", "").replace("access.log", "").replace(".log", "")
+                domain = bname if bname and bname != "nginx" else "Nginx主站"
+                files.append((p, domain))
+
+        for p in glob.glob("/www/server/nginx/logs/*access*.log"):
+            if os.path.exists(p):
+                files.append((p, "BT-Nginx"))
+
+        return files
+
+    def _collector_loop(self):
+        log_regex = re.compile(
+            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d+)\s+\S+(?:\s+"[^"]*"\s+"(?P<ua>[^"]*)")?'
+        )
+        
+        while self.running:
+            try:
+                log_targets = self._discover_log_files()
+                new_records = []
+                
+                for filepath, default_domain in log_targets:
+                    try:
+                        if not os.path.exists(filepath):
+                            continue
+                        size = os.path.getsize(filepath)
+                        
+                        # 首次发现此文件：从末尾向前读取约 32KB（约 150 条最新记录）
+                        if filepath not in self._file_offsets:
+                            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                                if size > 32768:
+                                    f.seek(size - 32768)
+                                    f.readline()
+                                lines = f.readlines()
+                                self._file_offsets[filepath] = f.tell()
+                        else:
+                            last_pos = self._file_offsets[filepath]
+                            if size < last_pos:
+                                last_pos = 0
+                            if size == last_pos:
+                                continue
+                            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                                f.seek(last_pos)
+                                lines = f.readlines()
+                                self._file_offsets[filepath] = f.tell()
+
+                        for line in lines:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            line_hash = (filepath, line)
+                            if line_hash in self._seen_lines:
+                                continue
+                            self._seen_lines.add(line_hash)
+                            if len(self._seen_lines) > 8000:
+                                self._seen_lines.clear()
+
+                            m = log_regex.match(line)
+                            if not m:
+                                continue
+                            ip = m.group("ip")
+                            if not validate_ip(ip) and not (":" in ip or "." in ip):
+                                continue
+                            time_str = m.group("time")
+                            request = m.group("request") or ""
+                            status = int(m.group("status") or 200)
+                            ua = m.group("ua") or ""
+
+                            req_parts = request.split()
+                            if len(req_parts) >= 2:
+                                method = req_parts[0]
+                                path = req_parts[1]
+                            elif len(req_parts) == 1:
+                                method = req_parts[0]
+                                path = "/"
+                            else:
+                                method = "GET"
+                                path = "/"
+
+                            try:
+                                raw_t = time_str.split()[0]
+                                t_struct = time.strptime(raw_t, "%d/%b/%Y:%H:%M:%S")
+                                ftime = time.strftime("%Y-%m-%d %H:%M:%S", t_struct)
+                                ts = int(time.mktime(t_struct))
+                            except Exception:
+                                ftime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                                ts = int(time.time())
+
+                            new_records.append((ip, default_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
+                    except Exception:
+                        pass
+
+                if new_records:
+                    try:
+                        conn = get_db()
+                        c = conn.cursor()
+                        c.executemany("""
+                        INSERT INTO access_logs (ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, new_records)
+                        conn.commit()
+                        conn.close()
+
+                        for item in new_records:
+                            _EXECUTOR.submit(resolve_ip_geo, item[0])
+                    except Exception:
+                        pass
+
+            except Exception:
+                pass
+            time.sleep(2)
+
 def config_watcher_loop():
     """实时监听 config.json 文件变更，动态热重载蜜罐监听套接字"""
     last_mtime = 0
@@ -1300,11 +1462,13 @@ def config_watcher_loop():
 
 trap_instance = TrapServer()
 sniffer_instance = GlobalPortSniffer()
+site_collector_instance = SiteLogCollector()
 
 if __name__ == "__main__":
     init_db()
     trap_instance.start()
     sniffer_instance.start()
+    site_collector_instance.start()
     _EXECUTOR.submit(cleanup_loop)
     _EXECUTOR.submit(config_watcher_loop)
     while True:
