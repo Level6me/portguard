@@ -61,6 +61,70 @@ DEFAULT_CONFIG = {
     "trap_business_ports": False
 }
 
+DEFAULT_HTTP_TRAPS = [
+    {
+        "rule_id": "ht_env_backup",
+        "name": "敏感配置与备份嗅探",
+        "match_type": "path_keyword",
+        "pattern": r"\.env|\.git|\.svn|\.aws|config\.json|database\.sql|dump\.sql|backup\.zip|www\.rar|web\.zip|\.bak$",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "极高危",
+        "enabled": 1,
+        "description": "探测系统关键配置文件、源码仓库与数据库备份文件"
+    },
+    {
+        "rule_id": "ht_admin_probe",
+        "name": "高危管理后台探针",
+        "match_type": "path_keyword",
+        "pattern": r"phpmyadmin|admin\.php|wp-login\.php|actuator|/solr/|/manager/html|/api/v1/debug",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "极高危",
+        "enabled": 1,
+        "description": "嗅探常见管理控制台、框架调试接口与后台入口"
+    },
+    {
+        "rule_id": "ht_traversal_rce",
+        "name": "路径遍历与系统文件嗅探",
+        "match_type": "path_keyword",
+        "pattern": r"%2e%2e|\.\./\.\.|eval-stdin|/cgi-bin/|/etc/passwd|/proc/self",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "极高危",
+        "enabled": 1,
+        "description": "尝试路径穿越、系统命令注入与私密文件读取攻击"
+    },
+    {
+        "rule_id": "ht_scanner_tools",
+        "name": "黑客扫描器工具指纹",
+        "match_type": "ua_keyword",
+        "pattern": r"sqlmap|nikto|dirsearch|gobuster|wpscan|masscan|hydra|acunetix|nessus|zgrab",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "高危",
+        "enabled": 1,
+        "description": "拦截携带明确特征扫描工具指纹的自动化探测源"
+    },
+    {
+        "rule_id": "ht_rate_404",
+        "name": "高频 404/403 爆破熔断",
+        "match_type": "status_rate",
+        "pattern": "",
+        "threshold": 6,
+        "window": 30,
+        "action": "ban",
+        "level": "高危",
+        "enabled": 1,
+        "description": "30秒内对不存在路径连续产生 6 次以上 404/403 异常直接熔断拉黑"
+    }
+]
+
+DEFAULT_CONFIG["http_traps"] = DEFAULT_HTTP_TRAPS
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
 
 # 全局线程池：限制并发，避免扫描风暴下线程爆炸
@@ -397,6 +461,31 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_time ON port_access_logs(timestamp)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_ip ON port_access_logs(ip)")
     
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS http_traps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_id TEXT UNIQUE,
+        name TEXT NOT NULL,
+        match_type TEXT NOT NULL,
+        pattern TEXT DEFAULT '',
+        threshold INTEGER DEFAULT 6,
+        window INTEGER DEFAULT 30,
+        action TEXT DEFAULT 'ban',
+        level TEXT DEFAULT '极高危',
+        enabled INTEGER DEFAULT 1,
+        description TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    )
+    """)
+    cursor.execute("SELECT count(*) FROM http_traps")
+    if cursor.fetchone()[0] == 0:
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        for ht in DEFAULT_HTTP_TRAPS:
+            cursor.execute("""
+            INSERT OR IGNORE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
+
     # 自动列自适应补充（迁移旧库）
     try:
         cursor.execute("ALTER TABLE access_logs ADD COLUMN domain TEXT DEFAULT ''")
@@ -431,6 +520,87 @@ def init_db():
         
     conn.commit()
     conn.close()
+
+def get_http_traps():
+    """获取所有配置的 HTTP 请求特征与防扫描策略"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at FROM http_traps ORDER BY id ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        rules = []
+        for r in rows:
+            rules.append({
+                "id": r[0],
+                "rule_id": r[1],
+                "name": r[2],
+                "match_type": r[3],
+                "pattern": r[4] or "",
+                "threshold": r[5] or 6,
+                "window": r[6] or 30,
+                "action": r[7] or "ban",
+                "level": r[8] or "极高危",
+                "enabled": bool(r[9]),
+                "description": r[10] or "",
+                "created_at": r[11] or ""
+            })
+        return rules
+    except Exception as e:
+        return [dict(r) for r in DEFAULT_HTTP_TRAPS]
+
+_IP_404_RATE_CACHE = {}
+_IP_404_LOCK = threading.Lock()
+
+def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
+    """根据 http_traps 规则库实时分析 HTTP 请求是否命中恶意扫描或高危敏感蜜罐特征"""
+    if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127.") or ip_in_whitelist(ip):
+        return False
+
+    rules = get_http_traps()
+    if not rules:
+        return False
+
+    now = time.time()
+    for rule in rules:
+        if not rule.get("enabled"):
+            continue
+        mtype = rule.get("match_type", "path_keyword")
+        rname = rule.get("name", "Web特征检测")
+        rlevel = rule.get("level", "高危")
+
+        # 1. 路径敏感特征匹配
+        if mtype == "path_keyword":
+            pat = rule.get("pattern", "")
+            if pat and re.search(pat, path, re.IGNORECASE):
+                reason = f"Web诱捕: 探测高危路径 {path[:36]}"
+                ban_ip(ip, reason=reason, category="web", level=rlevel)
+                return True
+
+        # 2. UA 扫描器工具指纹匹配
+        elif mtype == "ua_keyword":
+            pat = rule.get("pattern", "")
+            if pat and ua and re.search(pat, ua, re.IGNORECASE):
+                reason = f"Web诱捕: 扫描工具指纹 {ua[:28]}"
+                ban_ip(ip, reason=reason, category="web", level=rlevel)
+                return True
+
+        # 3. 404/403 频次熔断
+        elif mtype == "status_rate":
+            if status_code in (404, 403, 400):
+                threshold = int(rule.get("threshold") or 6)
+                window = int(rule.get("window") or 30)
+                with _IP_404_LOCK:
+                    history = _IP_404_RATE_CACHE.setdefault(ip, [])
+                    history = [item for item in history if now - item[0] <= window]
+                    history.append((now, path))
+                    _IP_404_RATE_CACHE[ip] = history
+                    if len(history) >= threshold:
+                        _IP_404_RATE_CACHE[ip] = []
+                        reason = f"Web防扫: {window}s内触发 {len(history)}次 404/403 ({path[:20]})"
+                        ban_ip(ip, reason=reason, category="web", level=rlevel)
+                        return True
+    return False
 
 _WEB_PORT_LOG_CACHE = {}
 
@@ -583,9 +753,15 @@ def save_config(cfg):
     except Exception:
         return False
 
-def ip_in_whitelist(ip, whitelist_items):
-    if ip in ("127.0.0.1", "::1", "localhost"):
+def ip_in_whitelist(ip, whitelist_items=None):
+    if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
+    if whitelist_items is None:
+        try:
+            cfg = load_config()
+            whitelist_items = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
+        except Exception:
+            whitelist_items = DEFAULT_CONFIG.get("whitelist", [])
     for item in whitelist_items:
         val = item.get("ip") if isinstance(item, dict) else item
         if not val:
@@ -1451,6 +1627,10 @@ class SiteLogCollector:
                                 ts = int(time.time())
 
                             new_records.append((ip, req_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
+                            try:
+                                check_http_request_traps(ip, req_domain, method, path, status, ua)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 

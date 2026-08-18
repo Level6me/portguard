@@ -22,6 +22,7 @@ _GZIP_HTML_CACHE = None
 from sentry_daemon import (
     DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db,
     trap_instance, sniffer_instance, site_collector_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
+    DEFAULT_HTTP_TRAPS, get_http_traps, check_http_request_traps,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR
 )
@@ -840,28 +841,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title">🍯 活跃蜜罐策略与诱饵端口</div>
-                    <div class="val-sub">模拟高危服务静默监听，一旦连入即自动封禁</div>
+                    <div class="card-title" id="traps-main-title">🍯 活跃蜜罐策略与诱饵端口</div>
+                    <div class="val-sub" id="traps-main-sub">模拟高危服务静默监听，一旦连入即自动封禁</div>
                 </div>
                 <div class="header-action-wrap">
-                    <button class="pill-btn" onclick="openImportModal('traps')">
-                        <span>📥</span>
-                        <span>导入策略 (JSON)</span>
-                    </button>
-                    <button class="pill-btn" onclick="exportTrapsJSON()">
-                        <span>📤</span>
-                        <span>导出策略 (JSON)</span>
-                    </button>
-                    <button class="pill-btn accent" onclick="openAddTrapModal()">
-                        <span>➕</span>
-                        <span>添加自定义诱饵</span>
-                    </button>
+                    <!-- 模式切换分段按钮 -->
+                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
+                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
+                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 请求特征</button>
+                    </div>
+                    <div id="trap-port-actions" style="display: inline-flex; gap: 6px;">
+                        <button class="pill-btn" onclick="openImportModal('traps')">
+                            <span>📥</span>
+                            <span>导入策略 (JSON)</span>
+                        </button>
+                        <button class="pill-btn" onclick="exportTrapsJSON()">
+                            <span>📤</span>
+                            <span>导出策略 (JSON)</span>
+                        </button>
+                        <button class="pill-btn accent" onclick="openAddTrapModal()">
+                            <span>➕</span>
+                            <span>添加端口诱饵</span>
+                        </button>
+                    </div>
+                    <div id="trap-req-actions" style="display: none; gap: 6px;">
+                        <button class="pill-btn accent" onclick="openAddHttpTrapModal()">
+                            <span>➕</span>
+                            <span>添加请求特征策略</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
             <div class="table-wrap">
                 <table>
-                    <thead>
+                    <thead id="traps-thead">
                         <tr>
                             <th>诱饵端口</th>
                             <th>模拟服务描述</th>
@@ -1267,6 +1281,109 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 </div>
 
+<!-- Modal: 添加请求特征策略 -->
+<div class="modal-overlay" id="modal-http-trap">
+    <div class="modal-sheet" style="max-width: 540px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🎯 添加请求特征与防扫描策略</h3>
+        <div class="form-group">
+            <label class="form-label">策略名称</label>
+            <input type="text" class="form-control" id="http-trap-name-val" placeholder="例如：敏感配置与密钥嗅探">
+        </div>
+        <div class="form-group">
+            <label class="form-label">匹配类型</label>
+            <select class="form-control" id="http-trap-type-val" onchange="onHttpTrapTypeChange('add')">
+                <option value="path_keyword" selected>URL 路径特征 (关键词 / 正则)</option>
+                <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="status_rate">404 / 403 异常高频熔断</option>
+            </select>
+        </div>
+        <div class="form-group" id="http-trap-pattern-group">
+            <label class="form-label" id="http-trap-pattern-label">特征规则表达式 (支持 | 分隔多个词或正则)</label>
+            <input type="text" class="form-control" id="http-trap-pattern-val" placeholder="例如：\.env|\.git|config\.json">
+        </div>
+        <div class="form-group" id="http-trap-rate-group" style="display: none;">
+            <div style="display: flex; gap: 12px;">
+                <div style="flex: 1;">
+                    <label class="form-label">时间窗口 (秒)</label>
+                    <input type="number" class="form-control" id="http-trap-window-val" value="30" min="5" max="300">
+                </div>
+                <div style="flex: 1;">
+                    <label class="form-label">熔断阈值 (次 404/403)</label>
+                    <input type="number" class="form-control" id="http-trap-threshold-val" value="6" min="2" max="100">
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">威胁等级评定</label>
+            <select class="form-control" id="http-trap-level-val">
+                <option value="极高危" selected>极高危</option>
+                <option value="高危">高危</option>
+                <option value="中危">中危</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">策略描述与防护说明</label>
+            <input type="text" class="form-control" id="http-trap-desc-val" placeholder="例如：探测系统关键配置文件与数据库备份">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="submitAddHttpTrap()">保存并生效</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 编辑请求特征策略 -->
+<div class="modal-overlay" id="modal-http-trap-edit">
+    <div class="modal-sheet" style="max-width: 540px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑请求特征与防扫描策略</h3>
+        <input type="hidden" id="edit-http-trap-id">
+        <div class="form-group">
+            <label class="form-label">策略名称</label>
+            <input type="text" class="form-control" id="edit-http-trap-name-val">
+        </div>
+        <div class="form-group">
+            <label class="form-label">匹配类型</label>
+            <select class="form-control" id="edit-http-trap-type-val" onchange="onHttpTrapTypeChange('edit')">
+                <option value="path_keyword">URL 路径特征 (关键词 / 正则)</option>
+                <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="status_rate">404 / 403 异常高频熔断</option>
+            </select>
+        </div>
+        <div class="form-group" id="edit-http-trap-pattern-group">
+            <label class="form-label" id="edit-http-trap-pattern-label">特征规则表达式 (支持 | 分隔多个词或正则)</label>
+            <input type="text" class="form-control" id="edit-http-trap-pattern-val">
+        </div>
+        <div class="form-group" id="edit-http-trap-rate-group" style="display: none;">
+            <div style="display: flex; gap: 12px;">
+                <div style="flex: 1;">
+                    <label class="form-label">时间窗口 (秒)</label>
+                    <input type="number" class="form-control" id="edit-http-trap-window-val" min="5" max="300">
+                </div>
+                <div style="flex: 1;">
+                    <label class="form-label">熔断阈值 (次 404/403)</label>
+                    <input type="number" class="form-control" id="edit-http-trap-threshold-val" min="2" max="100">
+                </div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">威胁等级评定</label>
+            <select class="form-control" id="edit-http-trap-level-val">
+                <option value="极高危">极高危</option>
+                <option value="高危">高危</option>
+                <option value="中危">中危</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">策略描述与防护说明</label>
+            <input type="text" class="form-control" id="edit-http-trap-desc-val">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="submitEditHttpTrap()">保存修改</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: IP 属性与威胁情报详情 -->
 <div class="modal-overlay" id="modal-ip-detail">
     <div class="modal-sheet" style="max-width: 520px;">
@@ -1420,6 +1537,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let allBlacklist = [];
     let allWhitelist = [];
     let allTraps = [];
+    let currentTrapTab = 'port';
+    let allHttpTraps = [];
+    let httpTrapsPage = 1;
     let currentCategory = 'all';
     let trendChartInstance = null;
     let portChartInstance = null;
@@ -1667,7 +1787,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         fetch('/api/traps').then(res => res.json()).then(data => {
             allTraps = data;
-            renderTrapsTable();
+            if (currentTrapTab === 'port') renderTrapsTable();
+        });
+
+        fetch('/api/http_traps').then(res => res.json()).then(data => {
+            allHttpTraps = data;
+            if (currentTrapTab === 'req') renderTrapsTable();
         });
 
         fetch('/api/whitelist').then(res => res.json()).then(data => {
@@ -1970,69 +2095,339 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    function switchTrapTab(tab) {
+        currentTrapTab = tab;
+        const btnPort = document.getElementById('btn-trap-tab-port');
+        const btnReq = document.getElementById('btn-trap-tab-req');
+        const titleEl = document.getElementById('traps-main-title');
+        const subEl = document.getElementById('traps-main-sub');
+        const theadEl = document.getElementById('traps-thead');
+        const portActions = document.getElementById('trap-port-actions');
+        const reqActions = document.getElementById('trap-req-actions');
+
+        if (tab === 'port') {
+            if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
+            if (btnReq) { btnReq.className = 'pill-btn'; btnReq.style.background = 'transparent'; }
+            if (titleEl) titleEl.innerText = '🍯 活跃蜜罐策略与诱饵端口';
+            if (subEl) subEl.innerText = '模拟高危服务静默监听，一旦连入即自动封禁';
+            if (portActions) portActions.style.display = 'inline-flex';
+            if (reqActions) reqActions.style.display = 'none';
+            if (theadEl) {
+                theadEl.innerHTML = `
+                    <tr>
+                        <th>诱饵端口</th>
+                        <th>模拟服务描述</th>
+                        <th>分类</th>
+                        <th>威胁等级</th>
+                        <th>当前状态</th>
+                        <th>开关操作</th>
+                    </tr>
+                `;
+            }
+        } else {
+            if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
+            if (btnPort) { btnPort.className = 'pill-btn'; btnPort.style.background = 'transparent'; }
+            if (titleEl) titleEl.innerText = '🎯 Web 请求特征与防扫描策略';
+            if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、后台爆破、扫描工具指纹与高频 404 熔断';
+            if (portActions) portActions.style.display = 'none';
+            if (reqActions) reqActions.style.display = 'inline-flex';
+            if (theadEl) {
+                theadEl.innerHTML = `
+                    <tr>
+                        <th style="width: 180px;">特征策略名称</th>
+                        <th style="width: 140px;">匹配类型</th>
+                        <th>特征规则内容 / 阈值配置</th>
+                        <th style="width: 100px;">威胁等级</th>
+                        <th style="width: 110px;">当前状态</th>
+                        <th style="width: 160px;">管理操作</th>
+                    </tr>
+                `;
+            }
+            if (!allHttpTraps || allHttpTraps.length === 0) {
+                fetch('/api/http_traps').then(res => res.json()).then(data => {
+                    allHttpTraps = data;
+                    renderTrapsTable();
+                });
+            }
+        }
+        renderTrapsTable();
+    }
+
     function changeTrapsPage(delta) {
-        const total = allTraps ? allTraps.length : 0;
-        const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-        const target = trapsPage + delta;
-        if (target >= 1 && target <= totalPages) {
-            trapsPage = target;
-            renderTrapsTable();
+        if (currentTrapTab === 'port') {
+            const total = allTraps ? allTraps.length : 0;
+            const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            const target = trapsPage + delta;
+            if (target >= 1 && target <= totalPages) {
+                trapsPage = target;
+                renderTrapsTable();
+            }
+        } else {
+            const total = allHttpTraps ? allHttpTraps.length : 0;
+            const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            const target = httpTrapsPage + delta;
+            if (target >= 1 && target <= totalPages) {
+                httpTrapsPage = target;
+                renderTrapsTable();
+            }
         }
     }
-    function setTrapsPage(p) { trapsPage = p; renderTrapsTable(); }
+    function setTrapsPage(p) {
+        if (currentTrapTab === 'port') trapsPage = p;
+        else httpTrapsPage = p;
+        renderTrapsTable();
+    }
 
     function renderTrapsTable() {
         const tbody = document.getElementById('traps-tbody');
-        const list = allTraps || [];
-        const totalCount = list.length;
-        const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-        if (trapsPage > totalPages) trapsPage = totalPages;
-        if (trapsPage < 1) trapsPage = 1;
+        if (currentTrapTab === 'port') {
+            const list = allTraps || [];
+            const totalCount = list.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+            if (trapsPage > totalPages) trapsPage = totalPages;
+            if (trapsPage < 1) trapsPage = 1;
 
-        renderPaginationUI(totalCount, trapsPage, PAGE_SIZE, 'traps-total-cnt', 'traps-page-info', 'btn-traps-prev', 'btn-traps-next', 'traps-page-nums', 'setTrapsPage');
+            renderPaginationUI(totalCount, trapsPage, PAGE_SIZE, 'traps-total-cnt', 'traps-page-info', 'btn-traps-prev', 'btn-traps-next', 'traps-page-nums', 'setTrapsPage');
 
-        if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px;">暂无诱捕端口</td></tr>';
-            return;
+            if (totalCount === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px;">暂无诱捕端口策略</td></tr>';
+                return;
+            }
+
+            const startIdx = (trapsPage - 1) * PAGE_SIZE;
+            const endIdx = startIdx + PAGE_SIZE;
+            const pageList = list.slice(startIdx, endIdx);
+
+            let html = '';
+            pageList.forEach(t => {
+                const isEnabled = (t.enabled === true || t.strategy === 'accept' || t.strategy === 'enabled' || t.strategy === '启用');
+                const isBiz = (t.is_business === true || t.trap_business === true);
+                const statusTag = isEnabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
+                const bizTag = isBiz ? '<span class="tag warning" style="margin-left:4px; font-size:10px;" title="同步诱捕该端口的正常业务">🌐 业务诱捕</span>' : '';
+                const btnText = isEnabled ? '停用' : '启用';
+                const btnClass = isEnabled ? 'danger' : 'success';
+                const cat = t.category || 'custom';
+                const catName = CATEGORY_LABELS[cat] || cat || '服务探针';
+                const desc = t.description || t.name || (t.protocol ? `${t.protocol.toUpperCase()}/${t.port}` : `TCP/${t.port}`);
+                const proto = (t.protocol || 'tcp').toUpperCase();
+                const level = t.level || '高危';
+                const portDisplay = String(t.port || (t.port_start === t.port_end ? t.port_start : `${t.port_start}-${t.port_end}`));
+                const safePortParam = portDisplay.replace(/'/g, "\\'");
+                html += `
+                <tr>
+                    <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
+                    <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(desc)}</span>${bizTag}</td>
+                    <td><span class="tag accent">${catName}</span></td>
+                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
+                    <td>${statusTag}</td>
+                    <td>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button class="action-btn" onclick="openEditTrapModal('${safePortParam}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                            <button class="action-btn ${btnClass}" onclick="toggleTrap('${safePortParam}', ${!isEnabled})">${btnText}</button>
+                            <button class="action-btn danger" onclick="deleteTrap('${safePortParam}')" title="删除此策略">🗑️</button>
+                        </div>
+                    </td>
+                </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        } else {
+            // 请求特征模式
+            const list = allHttpTraps || [];
+            const totalCount = list.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+            if (httpTrapsPage > totalPages) httpTrapsPage = totalPages;
+            if (httpTrapsPage < 1) httpTrapsPage = 1;
+
+            renderPaginationUI(totalCount, httpTrapsPage, PAGE_SIZE, 'traps-total-cnt', 'traps-page-info', 'btn-traps-prev', 'btn-traps-next', 'traps-page-nums', 'setTrapsPage');
+
+            if (totalCount === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px;">暂无请求特征策略</td></tr>';
+                return;
+            }
+
+            const startIdx = (httpTrapsPage - 1) * PAGE_SIZE;
+            const endIdx = startIdx + PAGE_SIZE;
+            const pageList = list.slice(startIdx, endIdx);
+
+            const MATCH_LABELS = {
+                'path_keyword': 'URL 敏感路径',
+                'ua_keyword': '扫描工具指纹',
+                'status_rate': '高频404熔断'
+            };
+
+            let html = '';
+            pageList.forEach(rule => {
+                const isEnabled = !!rule.enabled;
+                const statusTag = isEnabled ? '<span class="tag success">● 防护生效中</span>' : '<span class="tag neutral">已停用</span>';
+                const btnText = isEnabled ? '停用' : '启用';
+                const btnClass = isEnabled ? 'danger' : 'success';
+                const mtype = rule.match_type || 'path_keyword';
+                const mtypeName = MATCH_LABELS[mtype] || mtype;
+                const level = rule.level || '极高危';
+                
+                let ruleContentHtml = '';
+                if (mtype === 'status_rate') {
+                    ruleContentHtml = `<span style="font-size:12px; font-weight:600; color:var(--accent);">⚡ ${rule.window || 30} 秒内累计 404/403 ≥ ${rule.threshold || 6} 次即熔断封禁</span>`;
+                } else {
+                    const pat = rule.pattern || '';
+                    ruleContentHtml = `<code style="background:var(--card-sec); padding:3px 8px; border-radius:6px; font-size:12px; color:var(--text); max-width:340px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;" title="${escapeHtml(pat)}">${escapeHtml(pat)}</code>`;
+                }
+                
+                if (rule.description) {
+                    ruleContentHtml += `<div style="font-size:11px; color:var(--text-sec); margin-top:3px;">${escapeHtml(rule.description)}</div>`;
+                }
+
+                html += `
+                <tr>
+                    <td><span style="font-weight:700; font-size:13px; color:var(--text);">${escapeHtml(rule.name)}</span></td>
+                    <td><span class="tag accent" style="font-weight:700;">${mtypeName}</span></td>
+                    <td>${ruleContentHtml}</td>
+                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
+                    <td>${statusTag}</td>
+                    <td>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button class="action-btn" onclick="openEditHttpTrapModal('${rule.id || rule.rule_id}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                            <button class="action-btn ${btnClass}" onclick="toggleHttpTrap('${rule.id || rule.rule_id}', ${!isEnabled})">${btnText}</button>
+                            <button class="action-btn danger" onclick="deleteHttpTrap('${rule.id || rule.rule_id}')" title="删除此规则">🗑️</button>
+                        </div>
+                    </td>
+                </tr>
+                `;
+            });
+            tbody.innerHTML = html;
         }
+    }
 
-        const startIdx = (trapsPage - 1) * PAGE_SIZE;
-        const endIdx = startIdx + PAGE_SIZE;
-        const pageList = list.slice(startIdx, endIdx);
+    function onHttpTrapTypeChange(prefix) {
+        const typeEl = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-type-val`);
+        const patGroup = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-pattern-group`);
+        const rateGroup = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-rate-group`);
+        const labelEl = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-pattern-label`);
+        
+        if (!typeEl) return;
+        const val = typeEl.value;
+        if (val === 'status_rate') {
+            if (patGroup) patGroup.style.display = 'none';
+            if (rateGroup) rateGroup.style.display = 'block';
+        } else {
+            if (patGroup) patGroup.style.display = 'block';
+            if (rateGroup) rateGroup.style.display = 'none';
+            if (labelEl) {
+                labelEl.innerText = (val === 'ua_keyword') ? 'User-Agent 扫描工具指纹 (正则/关键词)' : 'URL 敏感路径特征表达式 (支持 | 分隔)';
+            }
+        }
+    }
 
-        let html = '';
-        pageList.forEach(t => {
-            const isEnabled = (t.enabled === true || t.strategy === 'accept' || t.strategy === 'enabled' || t.strategy === '启用');
-            const isBiz = (t.is_business === true || t.trap_business === true);
-            const statusTag = isEnabled ? '<span class="tag success">● 诱捕就绪</span>' : '<span class="tag neutral">已停用</span>';
-            const bizTag = isBiz ? '<span class="tag warning" style="margin-left:4px; font-size:10px;" title="同步诱捕该端口的正常业务">🌐 业务诱捕</span>' : '';
-            const btnText = isEnabled ? '停用' : '启用';
-            const btnClass = isEnabled ? 'danger' : 'success';
-            const cat = t.category || 'custom';
-            const catName = CATEGORY_LABELS[cat] || cat || '服务探针';
-            const desc = t.description || t.name || (t.protocol ? `${t.protocol.toUpperCase()}/${t.port}` : `TCP/${t.port}`);
-            const proto = (t.protocol || 'tcp').toUpperCase();
-            const level = t.level || '高危';
-            const portDisplay = String(t.port || (t.port_start === t.port_end ? t.port_start : `${t.port_start}-${t.port_end}`));
-            const safePortParam = portDisplay.replace(/'/g, "\\'");
-            html += `
-            <tr>
-                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
-                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${desc}</span>${bizTag}</td>
-                <td><span class="tag accent">${catName}</span></td>
-                <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
-                <td>${statusTag}</td>
-                <td>
-                    <div style="display: flex; gap: 6px; align-items: center;">
-                        <button class="action-btn" onclick="openEditTrapModal('${safePortParam}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
-                        <button class="action-btn ${btnClass}" onclick="toggleTrap('${safePortParam}', ${!isEnabled})">${btnText}</button>
-                        <button class="action-btn danger" onclick="deleteTrap('${safePortParam}')" title="删除此策略">🗑️</button>
-                    </div>
-                </td>
-            </tr>
-            `;
+    function openAddHttpTrapModal() {
+        document.getElementById('http-trap-name-val').value = '';
+        document.getElementById('http-trap-type-val').value = 'path_keyword';
+        document.getElementById('http-trap-pattern-val').value = '';
+        document.getElementById('http-trap-window-val').value = 30;
+        document.getElementById('http-trap-threshold-val').value = 6;
+        document.getElementById('http-trap-level-val').value = '极高危';
+        document.getElementById('http-trap-desc-val').value = '';
+        onHttpTrapTypeChange('add');
+        document.getElementById('modal-http-trap').style.display = 'flex';
+    }
+
+    function submitAddHttpTrap() {
+        const name = document.getElementById('http-trap-name-val').value.trim();
+        const match_type = document.getElementById('http-trap-type-val').value;
+        const pattern = document.getElementById('http-trap-pattern-val').value.trim();
+        const window = parseInt(document.getElementById('http-trap-window-val').value) || 30;
+        const threshold = parseInt(document.getElementById('http-trap-threshold-val').value) || 6;
+        const level = document.getElementById('http-trap-level-val').value;
+        const description = document.getElementById('http-trap-desc-val').value.trim();
+
+        if (!name) return showToast('请输入策略名称', '⚠️');
+        if (match_type !== 'status_rate' && !pattern) return showToast('请输入特征表达式或关键词', '⚠️');
+
+        fetch('/api/http_traps/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, match_type, pattern, window, threshold, level, description })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '添加成功', '🎯');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '添加失败', '❌');
+            }
         });
-        tbody.innerHTML = html;
+    }
+
+    function openEditHttpTrapModal(ruleId) {
+        const rule = (allHttpTraps || []).find(r => String(r.id) === String(ruleId) || String(r.rule_id) === String(ruleId));
+        if (!rule) return showToast('未找到该策略数据', '⚠️');
+
+        document.getElementById('edit-http-trap-id').value = rule.id || rule.rule_id;
+        document.getElementById('edit-http-trap-name-val').value = rule.name || '';
+        document.getElementById('edit-http-trap-type-val').value = rule.match_type || 'path_keyword';
+        document.getElementById('edit-http-trap-pattern-val').value = rule.pattern || '';
+        document.getElementById('edit-http-trap-window-val').value = rule.window || 30;
+        document.getElementById('edit-http-trap-threshold-val').value = rule.threshold || 6;
+        document.getElementById('edit-http-trap-level-val').value = rule.level || '极高危';
+        document.getElementById('edit-http-trap-desc-val').value = rule.description || '';
+        
+        onHttpTrapTypeChange('edit');
+        document.getElementById('modal-http-trap-edit').style.display = 'flex';
+    }
+
+    function submitEditHttpTrap() {
+        const id = document.getElementById('edit-http-trap-id').value;
+        const name = document.getElementById('edit-http-trap-name-val').value.trim();
+        const match_type = document.getElementById('edit-http-trap-type-val').value;
+        const pattern = document.getElementById('edit-http-trap-pattern-val').value.trim();
+        const window = parseInt(document.getElementById('edit-http-trap-window-val').value) || 30;
+        const threshold = parseInt(document.getElementById('edit-http-trap-threshold-val').value) || 6;
+        const level = document.getElementById('edit-http-trap-level-val').value;
+        const description = document.getElementById('edit-http-trap-desc-val').value.trim();
+
+        if (!name) return showToast('请输入策略名称', '⚠️');
+        if (match_type !== 'status_rate' && !pattern) return showToast('请输入特征表达式或关键词', '⚠️');
+
+        fetch('/api/http_traps/edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, name, match_type, pattern, window, threshold, level, description })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '修改成功', '✓');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '修改失败', '❌');
+            }
+        });
+    }
+
+    function toggleHttpTrap(ruleId, enabled) {
+        fetch('/api/http_traps/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: ruleId, enabled })
+        }).then(res => res.json()).then(res => {
+            showToast(res.msg || '状态已更新', '⚙️');
+            fetchData(false);
+        });
+    }
+
+    function deleteHttpTrap(ruleId) {
+        if (!confirm('确定要删除此请求特征与防扫描策略吗？')) return;
+        fetch('/api/http_traps/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: ruleId })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '已删除策略', '🗑️');
+                fetchData(false);
+            } else {
+                showToast(res.msg || '删除失败', '❌');
+            }
+        });
     }
 
     function changeWhitelistPage(delta) {
@@ -2989,6 +3384,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(normalized)
                 return
 
+            if path == "/api/http_traps":
+                rules = get_http_traps()
+                self._send_json(rules)
+                return
+
             if path == "/api/traps/export":
                 cfg = load_config()
                 raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
@@ -3503,6 +3903,74 @@ class RequestHandler(BaseHTTPRequestHandler):
                 save_config(cfg)
                 trap_instance.reload()
                 self._send_json({"success": True, "msg": f"已更新端口策略 {port_key} 状态"})
+                return
+
+            if path == "/api/http_traps/toggle":
+                rule_id = req_data.get("id")
+                enabled = 1 if req_data.get("enabled") else 0
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("UPDATE http_traps SET enabled = ? WHERE id = ? OR rule_id = ?", (enabled, rule_id, str(rule_id)))
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": f"请求特征策略已{'启用' if enabled else '停用'}"})
+                return
+
+            if path == "/api/http_traps/add":
+                name = str(req_data.get("name", "")).strip()
+                mtype = str(req_data.get("match_type", "path_keyword")).strip()
+                pattern = str(req_data.get("pattern", "")).strip()
+                threshold = int(req_data.get("threshold") or 6)
+                window = int(req_data.get("window") or 30)
+                level = str(req_data.get("level", "高危")).strip()
+                desc = str(req_data.get("description", "")).strip()
+                rule_id = "ht_" + str(int(time.time()))
+                now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                if not name:
+                    self._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
+                    return
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("""
+                INSERT INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, 1, ?, ?)
+                """, (rule_id, name, mtype, pattern, threshold, window, level, desc, now_dt))
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": f"已添加请求特征策略: {name}"})
+                return
+
+            if path == "/api/http_traps/edit":
+                rule_db_id = req_data.get("id")
+                name = str(req_data.get("name", "")).strip()
+                mtype = str(req_data.get("match_type", "path_keyword")).strip()
+                pattern = str(req_data.get("pattern", "")).strip()
+                threshold = int(req_data.get("threshold") or 6)
+                window = int(req_data.get("window") or 30)
+                level = str(req_data.get("level", "高危")).strip()
+                desc = str(req_data.get("description", "")).strip()
+                if not name:
+                    self._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
+                    return
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("""
+                UPDATE http_traps SET name = ?, match_type = ?, pattern = ?, threshold = ?, window = ?, level = ?, description = ?
+                WHERE id = ? OR rule_id = ?
+                """, (name, mtype, pattern, threshold, window, level, desc, rule_db_id, str(rule_db_id)))
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": f"已更新请求特征策略: {name}"})
+                return
+
+            if path == "/api/http_traps/delete":
+                rule_db_id = req_data.get("id")
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("DELETE FROM http_traps WHERE id = ? OR rule_id = ?", (rule_db_id, str(rule_db_id)))
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": "已删除请求特征策略"})
                 return
 
             if path == "/api/traps/import":

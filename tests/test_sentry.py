@@ -204,10 +204,30 @@ class IsTrapPortTest(unittest.TestCase):
         self.assertEqual(row[3], "/api/test")
         self.assertEqual(row[4], 200)
         
-        # 清理测试数据
-        c.execute("DELETE FROM access_logs WHERE ip = '1.2.3.4'")
-        conn.commit()
-        conn.close()
+    def test_http_traps_and_scanner_defense(self):
+        from sentry_daemon import get_http_traps, check_http_request_traps, init_db, ban_ip
+        init_db()
+        rules = get_http_traps()
+        self.assertIsInstance(rules, list)
+        self.assertTrue(len(rules) >= 4)
+        
+        # 测试敏感路径探测匹配 (如 /.env)
+        with mock.patch("sentry_daemon.ban_ip") as mock_ban:
+            # 正常请求不触发封禁
+            res = check_http_request_traps("203.0.113.5", "example.com", "GET", "/index.html", 200, "Mozilla/5.0")
+            self.assertFalse(res)
+            mock_ban.assert_not_called()
+            
+            # 高危敏感路径探测触发封禁
+            res_env = check_http_request_traps("203.0.113.6", "example.com", "GET", "/.env", 404, "curl/7.88")
+            self.assertTrue(res_env)
+            mock_ban.assert_called_once()
+            
+        # 测试扫描器工具指纹匹配 (如 sqlmap)
+        with mock.patch("sentry_daemon.ban_ip") as mock_ban_ua:
+            res_sqlmap = check_http_request_traps("203.0.113.7", "example.com", "GET", "/api/test", 200, "sqlmap/1.5.2#stable")
+            self.assertTrue(res_sqlmap)
+            mock_ban_ua.assert_called_once()
 
 
 if __name__ == "__main__":
