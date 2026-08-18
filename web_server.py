@@ -913,18 +913,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub">白名单内的 IP 永不触发任何封禁拦截机制</div>
                 </div>
                 <div class="header-action-wrap">
-                    <button class="pill-btn" onclick="openImportModal('whitelist')">
-                        <span>📥</span>
-                        <span>导入白名单</span>
-                    </button>
-                    <button class="pill-btn" onclick="exportWhitelistJSON()">
-                        <span>📤</span>
-                        <span>导出 JSON</span>
-                    </button>
-                    <button class="pill-btn accent" onclick="openAddWhiteModal()">
-                        <span>➕</span>
-                        <span>添加信任 IP</span>
-                    </button>
+                    <!-- 统一弹出式白名单配置卡片按钮 -->
+                    <div style="position: relative; display: inline-block;">
+                        <button class="pill-btn accent" id="btn-whitelist-action-menu" onclick="toggleWhitelistActionMenu(event)" style="font-weight: 700;">
+                            <span>⚙️ 白名单管理与配置</span>
+                            <span style="font-size: 10px; margin-left: 2px;">▾</span>
+                        </button>
+                        <div id="whitelist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
+                            <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ 白名单操作配置</div>
+                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openAddWhiteModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>➕</span><span>添加信任 IP</span>
+                            </a>
+                            <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openImportModal('whitelist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>📥</span><span>导入白名单 (JSON)</span>
+                            </a>
+                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); exportWhitelistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>📤</span><span>导出白名单 (JSON)</span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2114,6 +2122,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function toggleTrapActionMenu(e) {
         if (e) e.stopPropagation();
         closeBlacklistActionMenu();
+        closeWhitelistActionMenu();
         const popover = document.getElementById('trap-action-popover');
         if (!popover) return;
         if (popover.style.display === 'block') {
@@ -2132,6 +2141,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function toggleBlacklistActionMenu(e) {
         if (e) e.stopPropagation();
         closeTrapActionMenu();
+        closeWhitelistActionMenu();
         const popover = document.getElementById('blacklist-action-popover');
         if (!popover) return;
         if (popover.style.display === 'block') {
@@ -2143,6 +2153,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function closeBlacklistActionMenu() {
         const popover = document.getElementById('blacklist-action-popover');
+        if (popover) popover.style.display = 'none';
+    }
+
+    function toggleWhitelistActionMenu(e) {
+        if (e) e.stopPropagation();
+        closeTrapActionMenu();
+        closeBlacklistActionMenu();
+        const popover = document.getElementById('whitelist-action-popover');
+        if (!popover) return;
+        if (popover.style.display === 'block') {
+            popover.style.display = 'none';
+        } else {
+            popover.style.display = 'block';
+        }
+    }
+
+    function closeWhitelistActionMenu() {
+        const popover = document.getElementById('whitelist-action-popover');
         if (popover) popover.style.display = 'none';
     }
 
@@ -2161,6 +2189,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (blPopover && blPopover.style.display === 'block') {
             if (!blPopover.contains(e.target) && (!blBtn || !blBtn.contains(e.target))) {
                 blPopover.style.display = 'none';
+            }
+        }
+
+        const wlPopover = document.getElementById('whitelist-action-popover');
+        const wlBtn = document.getElementById('btn-whitelist-action-menu');
+        if (wlPopover && wlPopover.style.display === 'block') {
+            if (!wlPopover.contains(e.target) && (!wlBtn || !wlBtn.contains(e.target))) {
+                wlPopover.style.display = 'none';
             }
         }
     });
