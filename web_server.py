@@ -951,14 +951,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title" id="access-logs-title">🍯 端口网络访问日志</div>
+                    <div class="card-title" id="access-logs-title">🍯 端口访问日志</div>
                     <div class="val-sub" id="access-logs-sub">实时记录所有外部客户端对本机各诱捕端口与网络端口的连接嗅探</div>
                 </div>
                 <div class="header-action-wrap">
                     <!-- 模式切换分段按钮 -->
                     <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
-                        <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口网络访问</button>
-                        <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 HTTPS 业务网站访问 (443)</button>
+                        <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问</button>
+                        <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 443访问</button>
                     </div>
                     <button class="pill-btn" onclick="exportAccessLogsCSV()">
                         <span>📥</span>
@@ -2114,7 +2114,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (mode === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
             if (btnWeb) { btnWeb.className = 'pill-btn'; btnWeb.style.background = 'transparent'; }
-            if (titleEl) titleEl.innerText = '🍯 端口网络访问日志';
+            if (titleEl) titleEl.innerText = '🍯 端口访问日志';
             if (subEl) subEl.innerText = '实时记录所有外部客户端对本机各诱捕端口与网络端口的连接嗅探';
             if (actionSegments) actionSegments.style.display = 'flex';
             if (theadEl) {
@@ -2132,7 +2132,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         } else {
             if (btnWeb) { btnWeb.className = 'pill-btn accent'; btnWeb.style.background = ''; }
             if (btnPort) { btnPort.className = 'pill-btn'; btnPort.style.background = 'transparent'; }
-            if (titleEl) titleEl.innerText = '🌍 HTTPS 业务网站访问日志 (443 / Web)';
+            if (titleEl) titleEl.innerText = '🌍 443访问日志';
             if (subEl) subEl.innerText = '实时采集并聚合 OpenResty / Nginx 业务站点的客户端域名、访问路径、状态码与设备信息';
             if (actionSegments) actionSegments.style.display = 'none';
             if (theadEl) {
@@ -2209,7 +2209,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         if (totalCount === 0) {
             const emptyColspan = (currentAccessLogMode === 'port') ? 6 : 7;
-            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口网络访问' : 'HTTPS 业务网站访问'}记录</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}记录</td></tr>`;
             return;
         }
 
@@ -2293,11 +2293,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         link.href = URL.createObjectURL(blob);
         link.download = `portsentry_${currentAccessLogMode}_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
-        showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : 'HTTPS业务网站'}审计报表 CSV`, '📥');
+        showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}审计报表 CSV`, '📥');
     }
 
     function clearAccessLogs() {
-        const modeText = (currentAccessLogMode === 'port') ? '端口网络访问日志' : 'HTTPS 业务网站访问日志';
+        const modeText = (currentAccessLogMode === 'port') ? '端口访问日志' : '443访问日志';
         if (!confirm(`确定要清空全部历史【${modeText}】吗？此操作不可恢复。`)) return;
         fetch('/api/access_logs/clear', {
             method: 'POST',
