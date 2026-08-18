@@ -2085,13 +2085,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
-    function switchTrapTab(tab) {
-        currentTrapTab = tab;
-        const btnPort = document.getElementById('btn-trap-tab-port');
-        const btnReq = document.getElementById('btn-trap-tab-req');
-        const titleEl = document.getElementById('traps-main-title');
-        const subEl = document.getElementById('traps-main-sub');
-        const theadEl = document.getElementById('traps-thead');
     function toggleTrapActionMenu(e) {
         if (e) e.stopPropagation();
         const popover = document.getElementById('trap-action-popover');
