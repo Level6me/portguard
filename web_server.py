@@ -1,8 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Portsentry Web Dashboard - 全页面移动端与大屏双端极致响应式标准版
-"""
+import gzip
 import os
 import sys
 import json
@@ -20,6 +16,9 @@ except ImportError:
         daemon_threads = True
         allow_reuse_address = True
 from urllib.parse import urlparse, parse_qs
+
+_RAW_HTML_CACHE = None
+_GZIP_HTML_CACHE = None
 from sentry_daemon import (
     DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db,
     trap_instance, sniffer_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
@@ -1508,7 +1507,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     }
 
+    let currentTabKey = 'overview';
     function switchTab(tabKey, btn) {
+        currentTabKey = tabKey;
         ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
             const el = document.getElementById(`tab-${t}`);
             if (el) el.style.display = (t === tabKey) ? 'block' : 'none';
@@ -1674,15 +1675,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             renderWhitelistTable();
         });
 
-        fetch('/api/access_logs?type=port').then(res => res.json()).then(data => {
-            allPortLogs = data;
-            if (currentAccessLogMode === 'port') renderAccessLogsTable();
-        });
-
-        fetch('/api/access_logs?type=web').then(res => res.json()).then(data => {
-            allWebLogs = data;
-            if (currentAccessLogMode === 'web') renderAccessLogsTable();
-        });
+        // 仅在当前处于审计日志选项卡时加载大体量审计日志，消除首屏与轮询网络阻塞
+        if (currentTabKey === 'access-logs') {
+            fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
+                if (currentAccessLogMode === 'port') allPortLogs = data;
+                else allWebLogs = data;
+                renderAccessLogsTable();
+            });
+        }
     }
 
     function renderGeoRank(geoList) {
@@ -2788,24 +2788,52 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _send_json(self, data, status=200):
+    def _send_response_data(self, data_bytes, content_type="application/json; charset=utf-8", status=200):
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Type', content_type)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
-        self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+        
+        accept_encoding = self.headers.get('Accept-Encoding', '')
+        if 'gzip' in accept_encoding and len(data_bytes) > 256:
+            compressed = gzip.compress(data_bytes, compresslevel=5)
+            self.send_header('Content-Encoding', 'gzip')
+            self.send_header('Content-Length', str(len(compressed)))
+            self.end_headers()
+            self.wfile.write(compressed)
+        else:
+            self.send_header('Content-Length', str(len(data_bytes)))
+            self.end_headers()
+            self.wfile.write(data_bytes)
+
+    def _send_json(self, data, status=200):
+        payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self._send_response_data(payload, content_type="application/json; charset=utf-8", status=status)
 
     def _send_html(self, html, status=200):
+        global _GZIP_HTML_CACHE, _RAW_HTML_CACHE
+        if _RAW_HTML_CACHE is None:
+            _RAW_HTML_CACHE = html.encode('utf-8')
+            _GZIP_HTML_CACHE = gzip.compress(_RAW_HTML_CACHE, compresslevel=6)
+        
+        accept_encoding = self.headers.get('Accept-Encoding', '')
         self.send_response(status)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
-        self.end_headers()
-        self.wfile.write(html.encode('utf-8'))
+        
+        if 'gzip' in accept_encoding:
+            self.send_header('Content-Encoding', 'gzip')
+            self.send_header('Content-Length', str(len(_GZIP_HTML_CACHE)))
+            self.end_headers()
+            self.wfile.write(_GZIP_HTML_CACHE)
+        else:
+            self.send_header('Content-Length', str(len(_RAW_HTML_CACHE)))
+            self.end_headers()
+            self.wfile.write(_RAW_HTML_CACHE)
 
     def do_HEAD(self):
         self.send_response(200)
@@ -2977,16 +3005,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/access_logs":
                 query = parse_qs(parsed.query)
                 log_type = query.get("type", ["port"])[0]
+                try:
+                    limit_cnt = min(int(query.get("limit", [500])[0]), 2000)
+                except Exception:
+                    limit_cnt = 500
                 conn = get_db()
                 c = conn.cursor()
                 if log_type == "web":
-                    c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT 2000")
+                    c.execute("SELECT id, ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
                 else:
-                    c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp FROM port_access_logs ORDER BY id DESC LIMIT 2000")
+                    c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp FROM port_access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
                     if not rows:
-                        c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, status as action, attack_time as access_time, timestamp FROM events ORDER BY id DESC LIMIT 2000")
+                        c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, status as action, attack_time as access_time, timestamp FROM events ORDER BY id DESC LIMIT ?", (limit_cnt,))
                         rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 self._send_json(rows)
