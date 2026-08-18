@@ -1899,20 +1899,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const geoText = formatGeoCN(e);
             const isWatch = (e.status === 'WATCH');
             const statusBadge = isWatch 
-                ? '<span class="tag warning">探测感知 (观察中)</span>' 
-                : '<span class="tag danger">已内核丢弃 (DROP)</span>';
+                ? '<span class="tag warning" style="font-size:11px; font-weight:700;">探测感知 (观察中)</span>' 
+                : '<span class="tag danger" style="font-size:11px; font-weight:700;">已内核丢弃 (DROP)</span>';
             const actionBtn = isWatch
                 ? `<button class="action-btn danger" onclick="quickBanIP('${jsEscape(e.ip)}', '手动封禁观察中IP')">立即封禁</button>`
                 : `<button class="action-btn success" onclick="unbanIP('${jsEscape(e.ip)}')">一键解封</button>`;
 
             html += `
             <tr>
-                <td style="font-size:12px; color:var(--text-sec);">${e.attack_time}</td>
+                <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${e.attack_time}</td>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span></td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
-                <td><b style="color:var(--text); font-size:12px;">${escapeHtml(e.port_name || '自定义诱饵')}</b> <span class="tag accent" style="margin-left:4px; font-size:10px;">${catName}</span></td>
-                <td><span class="tag ${tagClass}">${e.level || '高危'}</span></td>
+                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span></td>
+                <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
                 <td>${actionBtn}</td>
             </tr>
@@ -1957,10 +1957,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span></td>
-                <td><b style="color:var(--text); font-size:12px;">${escapeHtml(b.reason || '自动诱捕阻断')}</b></td>
+                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
-                <td><span class="tag danger">iptables + blackhole</span></td>
-                <td style="font-size:12px; color:var(--text-sec);">${b.ban_time}</td>
+                <td><span class="tag danger" style="font-size:11px; font-weight:700;">iptables + blackhole</span></td>
+                <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${b.ban_time}</td>
                 <td>
                     <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
                 </td>
@@ -2018,7 +2018,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
-                <td><b style="color: var(--text); font-size:12px;">${desc}</b>${bizTag}</td>
+                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${desc}</span>${bizTag}</td>
                 <td><span class="tag accent">${catName}</span></td>
                 <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
                 <td>${statusTag}</td>
@@ -2057,7 +2057,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPaginationUI(totalCount, whitelistPage, PAGE_SIZE, 'whitelist-total-cnt', 'whitelist-page-info', 'btn-whitelist-prev', 'btn-whitelist-next', 'whitelist-page-nums', 'setWhitelistPage');
 
         if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:24px;">暂无信任 IP</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 24px;">当前无白名单记录</td></tr>';
             return;
         }
 
@@ -2067,14 +2067,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         let html = '';
         pageList.forEach(w => {
+            const ipStr = (typeof w === 'object' && w !== null) ? (w.ip || '') : String(w);
+            const remark = (typeof w === 'object' && w !== null) ? (w.remark || '信任IP') : '信任IP';
+            const safeIpParam = ipStr.replace(/'/g, "\\'");
             html += `
             <tr>
-                <td style="font-family:monospace; font-weight:700; color:var(--success); font-size:13px;">
-                    <span class="ip-text" onclick="showIPDetail('${w.ip}')" title="点击查看 IP 详情">${w.ip}</span>
-                </td>
-                <td style="font-weight:600;">${w.remark || '无备注'}</td>
+                <td><span class="ip-text" onclick="showIPDetail('${safeIpParam}')" title="点击查看 IP 详情">${escapeHtml(ipStr)}</span></td>
+                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(remark)}</span></td>
+                <td><span class="tag success" style="font-size:11px; font-weight:700;">● 白名单放行</span></td>
                 <td>
-                    <button class="action-btn danger" onclick="deleteWhitelist('${w.ip}')">删除白名单</button>
+                    <button class="action-btn danger" onclick="removeWhitelist('${safeIpParam}')">删除</button>
                 </td>
             </tr>
             `;
