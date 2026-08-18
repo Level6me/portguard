@@ -91,19 +91,23 @@ def run_firewall_cmd(*args):
 
 
 def parse_packet(raw_data):
-    """解析以太网帧 / 原始帧中的 TCP/UDP 报文。
+    """解析以太网帧 / SLL 帧 / 原始 IP 报文 (IPv4 / IPv6) 中的 TCP/UDP 报文。
 
     返回 (src_ip, dst_port, proto_str) 或 None。支持 IPv4 与 IPv6。
-    自适应以太网头(14B)、SLL 头(16B) 或无头 RAW 三种形态。
+    自适应原始 IP (0B)、以太网头 (14B) 或 SLL 头 (16B) 三种报文形态。
     """
     try:
+        if not raw_data or len(raw_data) < 20:
+            return None
+
         offset = 0
-        if len(raw_data) >= 34 and ((raw_data[14] >> 4) in (4, 6)):
+        # 1. 优先判定 offset=0 (原始 IP 报文，Linux SOCK_RAW 绝大多数形态)
+        if (raw_data[0] >> 4) in (4, 6):
+            offset = 0
+        elif len(raw_data) >= 34 and ((raw_data[14] >> 4) in (4, 6)):
             offset = 14
         elif len(raw_data) >= 36 and ((raw_data[16] >> 4) in (4, 6)):
             offset = 16
-        elif len(raw_data) >= 20 and ((raw_data[0] >> 4) in (4, 6)):
-            offset = 0
         else:
             return None
 
@@ -114,15 +118,17 @@ def parse_packet(raw_data):
             ip_hdr = raw_data[offset:offset + 20]
             proto_num = ip_hdr[9]
             ihl = (ip_hdr[0] & 0x0F) * 4
-            if len(raw_data) < offset + ihl + 4:
+            if ihl < 20 or len(raw_data) < offset + ihl + 4:
                 return None
             src_ip = socket.inet_ntoa(ip_hdr[12:16])
         elif version == 6:
             if len(raw_data) < offset + 40:
                 return None
             ip_hdr = raw_data[offset:offset + 40]
-            proto_num = ip_hdr[6]  # next header（未展开扩展头，直接 TCP/UDP 场景）
+            proto_num = ip_hdr[6]  # next header
             ihl = 40
+            if len(raw_data) < offset + ihl + 4:
+                return None
             src_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[8:24])
         else:
             return None
@@ -132,9 +138,7 @@ def parse_packet(raw_data):
         proto_str = "TCP" if proto_num == 6 else "UDP"
 
         # 若为 TCP 协议：严格判定仅处理 SYN 连接建立握手包 (SYN=1 且 ACK=0)，彻底过滤海量已连接数据流
-        if proto_num == 6:
-            if len(raw_data) < offset + ihl + 14:
-                return None
+        if proto_num == 6 and len(raw_data) >= offset + ihl + 14:
             tcp_flags = raw_data[offset + ihl + 13]
             # 仅放行 SYN 探测请求 (SYN=0x02, ACK=0x10)
             if not (tcp_flags & 0x02) or (tcp_flags & 0x10):
@@ -704,8 +708,15 @@ def ban_ip(ip, port, port_info):
         log_port_access_entry(ip, port, port_info.get("name", f"TCP/{port}"), action="WHITELIST")
         return
 
-    # 2. 蜜罐阈值判定：窗口内探测次数不足时不执行防火墙封禁，仅记录观察（防误封单次连接）
-    threshold = int(cfg.get("trap_threshold", 3) or 3)
+    # 2. 蜜罐阈值判定：严苛模式 (strict) 或勾选了「正常业务诱捕」时首击即封，常规模式按阈值防抖
+    defense_mode = str(cfg.get("defense_mode", "strict")).strip().lower()
+    is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_info.get("name", "")))
+
+    if defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz:
+        threshold = 1
+    else:
+        threshold = int(cfg.get("trap_threshold", 3) or 3)
+
     window = int(cfg.get("trap_window_seconds", 30) or 30)
     try:
         conn_tmp = get_db()
@@ -1054,7 +1065,7 @@ def is_trap_port(port, cfg=None):
             ep = int(norm.get("port_end", norm.get("port")))
             if sp <= port <= ep:
                 # 若勾选了「正常业务端口防护 / is_business」，则即使是核心业务端口也强制作为诱捕蜜罐拦截
-                if norm.get("is_business", False):
+                if norm.get("is_business", False) or norm.get("trap_business", False):
                     return norm
                 # 若未勾选正常业务防护，则排除核心业务端口，防止常规诱饵误伤生产服务
                 if port in KNOWN_SYSTEM_SERVICES:
@@ -1139,9 +1150,9 @@ class GlobalPortSniffer:
 
                 now_ts = time.time()
                 cache_key = (src_ip, dst_port, proto_str)
-                # 5秒内相同 IP + 端口去重防抖 (杜绝单次扫描或重复报文产生海量重复记录)
+                # 1秒内相同 IP + 端口去重防抖 (防单次突发报文风暴)
                 if cache_key in self._recent_cache:
-                    if now_ts - self._recent_cache[cache_key] < 5.0:
+                    if now_ts - self._recent_cache[cache_key] < 1.0:
                         continue
                 self._recent_cache[cache_key] = now_ts
                 
@@ -1169,7 +1180,7 @@ class GlobalPortSniffer:
         # 2. 命中活跃诱饵蜜罐 (包括勾选了「正常业务」同步诱捕的业务端口)
         elif trap_meta:
             action = "INTERCEPTED"
-            is_biz = trap_meta.get("is_business", False)
+            is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
             proc = active_ports_map.get(dst_port, "")
             if is_biz:
                 desc = f"业务诱捕阻断: {proc} (端口 {dst_port})" if proc else (trap_meta.get("name") or f"业务诱捕 (端口 {dst_port})")
@@ -1178,7 +1189,8 @@ class GlobalPortSniffer:
             port_info = {
                 "name": desc,
                 "category": trap_meta.get("category", "custom"),
-                "level": trap_meta.get("level", "高危")
+                "level": trap_meta.get("level", "高危"),
+                "is_business": is_biz
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
         # 3. 系统生产业务端口访问（未勾选业务诱捕时放行并记录）
@@ -1224,6 +1236,21 @@ class GlobalPortSniffer:
                 
         _EXECUTOR.submit(_async_write)
 
+def config_watcher_loop():
+    """实时监听 config.json 文件变更，动态热重载蜜罐监听套接字"""
+    last_mtime = 0
+    while True:
+        try:
+            if os.path.exists(CONFIG_PATH):
+                mtime = os.path.getmtime(CONFIG_PATH)
+                if last_mtime != 0 and mtime > last_mtime:
+                    print("[ConfigWatcher] 检测到 config.json 变更，正在动态热重载蜜罐监听...")
+                    trap_instance.reload()
+                last_mtime = mtime
+        except Exception:
+            pass
+        time.sleep(2)
+
 trap_instance = TrapServer()
 sniffer_instance = GlobalPortSniffer()
 
@@ -1232,5 +1259,6 @@ if __name__ == "__main__":
     trap_instance.start()
     sniffer_instance.start()
     _EXECUTOR.submit(cleanup_loop)
+    _EXECUTOR.submit(config_watcher_loop)
     while True:
         time.sleep(3600)

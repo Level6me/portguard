@@ -97,29 +97,40 @@ class NormalizeTrapTest(unittest.TestCase):
 
 
 class ParsePacketTest(unittest.TestCase):
-    def _ipv4_packet(self, proto, src, dst, sport, dport):
-        eth = b"\x00" * 14
+    def _ipv4_packet(self, proto, src, dst, sport, dport, with_eth=True):
+        eth = (b"\x00" * 14) if with_eth else b""
         ip = bytearray(20)
         ip[0] = 0x45
         ip[9] = proto
         ip[12:16] = socket.inet_aton(src)
         ip[16:20] = socket.inet_aton(dst)
-        l4 = struct.pack("!HH", sport, dport)
+        if proto == 6:
+            l4 = struct.pack("!HHIIBBHHH", sport, dport, 0, 0, 0x50, 0x02, 65535, 0, 0)
+        else:
+            l4 = struct.pack("!HHHH", sport, dport, 8, 0)
         return eth + bytes(ip) + l4
 
-    def _ipv6_packet(self, proto, src, dst, sport, dport):
-        eth = b"\x00" * 14
+    def _ipv6_packet(self, proto, src, dst, sport, dport, with_eth=True):
+        eth = (b"\x00" * 14) if with_eth else b""
         ip = bytearray(40)
         ip[0] = 0x60
         ip[6] = proto
         ip[8:24] = socket.inet_pton(socket.AF_INET6, src)
         ip[24:40] = socket.inet_pton(socket.AF_INET6, dst)
-        l4 = struct.pack("!HH", sport, dport)
+        if proto == 6:
+            l4 = struct.pack("!HHIIBBHHH", sport, dport, 0, 0, 0x50, 0x02, 65535, 0, 0)
+        else:
+            l4 = struct.pack("!HHHH", sport, dport, 8, 0)
         return eth + bytes(ip) + l4
 
-    def test_ipv4_tcp(self):
-        pkt = self._ipv4_packet(6, "1.2.3.4", "5.6.7.8", 12345, 8080)
+    def test_ipv4_tcp_ethernet(self):
+        pkt = self._ipv4_packet(6, "1.2.3.4", "5.6.7.8", 12345, 8080, with_eth=True)
         self.assertEqual(parse_packet(pkt), ("1.2.3.4", 8080, "TCP"))
+
+    def test_ipv4_tcp_raw(self):
+        # 针对带 0x41 字节的特殊 IP 测试 raw socket 模式下的 offset 判定
+        pkt = self._ipv4_packet(6, "1.2.65.4", "43.108.18.47", 12345, 8085, with_eth=False)
+        self.assertEqual(parse_packet(pkt), ("1.2.65.4", 8085, "TCP"))
 
     def test_ipv4_udp(self):
         pkt = self._ipv4_packet(17, "8.8.8.8", "1.1.1.1", 53, 5353)
