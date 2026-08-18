@@ -332,6 +332,16 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertEqual(args[0], "203.0.113.100")
             self.assertEqual(args[1], 22)
 
+    def test_api_analytics_endpoint(self):
+        from web_server import get_db, init_db
+        init_db()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) VALUES ('1.1.1.1', 80, 'TCP', 'HTTP', '中国', '北京', '北京', '电信', 'PROBE', '2026-08-19 00:00:00', ?)", (int(time.time()),))
+        c.execute("INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status) VALUES ('1.1.1.1', 80, 'TCP', 'HTTP', 'web', '极高危', '中国', '北京', '北京', '电信', '2026-08-19 00:00:00', ?, 'BANNED')", (int(time.time()),))
+        conn.commit()
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

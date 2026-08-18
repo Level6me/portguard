@@ -286,6 +286,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
 
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 960px) { .grid-3 { grid-template-columns: 1fr; } }
+
+        .grid-6 {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        @media (max-width: 1100px) { .grid-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { .grid-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } }
+
         /* Cards */
         .card {
             background: var(--card);
@@ -625,7 +642,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <span class="status-dot"></span>
                 <span>PORTSENTRY · 内核防护中</span>
             </div>
-            <h1 class="title" id="page-main-title">安全态势概览</h1>
+            <h1 class="title" id="page-main-title">安全态势分析</h1>
         </div>
         <div class="header-actions">
             <button class="pill-btn" onclick="openSystemSettingsModal()" id="btn-settings-modal" title="系统防御与全局策略设置">
@@ -643,70 +660,265 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Page 1: 态势概览 (Overview) -->
+    <!-- Page 1: 态势分析 (Overview & Multi-dimensional Deep Analytics) -->
     <div id="tab-overview">
-        <!-- 4 核心统计卡 (支持交互点击跳转过滤) -->
-        <div class="grid-4">
-            <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看所有拦截记录">
-                <div class="val-sub" style="color:var(--danger);">🚫 累计阻断 IP</div>
-                <div class="val-big" id="stat-total" style="color: var(--danger);">--</div>
-                <div class="val-sub">iptables + 路由黑洞</div>
+        <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+            <div class="segmented-control" style="max-width: 320px; width: 100%;">
+                <button class="segment-btn active" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)">
+                    📊 全局概览
+                </button>
+                <button class="segment-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)">
+                    🔬 多维深度分析
+                </button>
             </div>
-            <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看今日拦截记录">
-                <div class="val-sub" style="color:var(--warning);">⚡ 今日捕获扫描</div>
-                <div class="val-big" id="stat-today" style="color: var(--warning);">--</div>
-                <div class="val-sub">毫秒级自动指纹识别</div>
-            </div>
-            <div class="card interactive" onclick="switchTab('traps')" title="点击管理蜜罐诱饵端口">
-                <div class="val-sub" style="color:var(--accent);">🍯 活跃诱捕蜜罐</div>
-                <div class="val-big" id="stat-traps" style="color: var(--accent);">--</div>
-                <div class="val-sub">智能避让生产业务端口</div>
-            </div>
-            <div class="card interactive" onclick="switchTab('whitelist')" title="点击管理安全白名单">
-                <div class="val-sub" style="color:var(--success);">🛡️ 安全信任白名单</div>
-                <div class="val-big" id="stat-white" style="color: var(--success);">--</div>
-                <div class="val-sub">运维专线防误封保护</div>
+            <div id="analytics-toolbar" style="display: none; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <div class="segmented-control" style="background: var(--card); border: 1px solid var(--border);">
+                    <button class="segment-btn" id="filter-range-24h" onclick="changeAnalyticsRange('24h', this)">近 24 小时</button>
+                    <button class="segment-btn active" id="filter-range-7d" onclick="changeAnalyticsRange('7d', this)">近 7 天</button>
+                    <button class="segment-btn" id="filter-range-30d" onclick="changeAnalyticsRange('30d', this)">近 30 天</button>
+                    <button class="segment-btn" id="filter-range-all" onclick="changeAnalyticsRange('all', this)">全部历史</button>
+                </div>
+                <button class="pill-btn accent" onclick="exportAnalyticsJSON()" title="导出当前多维态势分析完整数据集 (JSON)">
+                    <span>📥</span><span>导出分析报告</span>
+                </button>
             </div>
         </div>
 
-        <!-- 24小时攻击趋势与端口排行图 -->
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">📈 24 小时扫描拦截趋势</div>
-                        <div class="val-sub">触碰诱饵频次分布 (按小时)</div>
-                    </div>
+        <!-- 子页 1: 全局概览 (subview-overview) -->
+        <div id="subview-overview">
+            <!-- 4 核心统计卡 (支持交互点击跳转过滤) -->
+            <div class="grid-4">
+                <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看所有拦截记录">
+                    <div class="val-sub" style="color:var(--danger);">🚫 累计阻断 IP</div>
+                    <div class="val-big" id="stat-total" style="color: var(--danger);">--</div>
+                    <div class="val-sub">iptables + 路由黑洞</div>
                 </div>
-                <div style="height: 200px;"><canvas id="trendChart"></canvas></div>
+                <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看今日拦截记录">
+                    <div class="val-sub" style="color:var(--warning);">⚡ 今日捕获扫描</div>
+                    <div class="val-big" id="stat-today" style="color: var(--warning);">--</div>
+                    <div class="val-sub">毫秒级自动指纹识别</div>
+                </div>
+                <div class="card interactive" onclick="switchTab('traps')" title="点击管理蜜罐诱饵端口">
+                    <div class="val-sub" style="color:var(--accent);">🍯 活跃诱捕蜜罐</div>
+                    <div class="val-big" id="stat-traps" style="color: var(--accent);">--</div>
+                    <div class="val-sub">智能避让生产业务端口</div>
+                </div>
+                <div class="card interactive" onclick="switchTab('whitelist')" title="点击管理安全白名单">
+                    <div class="val-sub" style="color:var(--success);">🛡️ 安全信任白名单</div>
+                    <div class="val-big" id="stat-white" style="color: var(--success);">--</div>
+                    <div class="val-sub">运维专线防误封保护</div>
+                </div>
             </div>
-            <div class="card">
-                <div class="card-header">
-                    <div>
-                        <div class="card-title">🎯 诱饵命中排行 Top 5</div>
-                        <div class="val-sub">高危服务探针类型分布</div>
+
+            <!-- 24小时攻击趋势与端口排行图 -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">📈 24 小时扫描拦截趋势</div>
+                            <div class="val-sub">触碰诱饵频次分布 (按小时)</div>
+                        </div>
                     </div>
+                    <div style="height: 200px;"><canvas id="trendChart"></canvas></div>
                 </div>
-                <div style="height: 200px;"><canvas id="portChart"></canvas></div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🎯 诱饵命中排行 Top 5</div>
+                            <div class="val-sub">高危服务探针类型分布</div>
+                        </div>
+                    </div>
+                    <div style="height: 200px;"><canvas id="portChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- 地域排行与近期威胁列表 -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">🌍 攻击来源地域排行</div>
+                    </div>
+                    <div id="geo-rank-box" style="padding-top: 4px;">正在统计地域流量...</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">⚡ 实时最新拦截快报</div>
+                        <button class="action-btn" onclick="switchTab('logs')">查看全部</button>
+                    </div>
+                    <div id="recent-threats-box">正在加载最新事件...</div>
+                </div>
             </div>
         </div>
 
-        <!-- 地域排行与近期威胁列表 -->
-        <div class="grid-2">
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">🌍 攻击来源地域排行</div>
+        <!-- 子页 2: 多维深度分析 (subview-analysis) -->
+        <div id="subview-analysis" style="display: none;">
+            <!-- 6 维度核心指标概览看板 -->
+            <div class="grid-6">
+                <div class="card">
+                    <div class="val-sub" style="color: var(--accent);">🛡️ 捕获探测总量</div>
+                    <div class="val-big" id="akpi-probes" style="color: var(--accent); font-size: 24px;">--</div>
+                    <div class="val-sub">网络层 SYN 嗅探统计</div>
                 </div>
-                <div id="geo-rank-box" style="padding-top: 4px;">正在统计地域流量...</div>
+                <div class="card">
+                    <div class="val-sub" style="color: var(--danger);">🚫 核心拦截阻断</div>
+                    <div class="val-big" id="akpi-intercepted" style="color: var(--danger); font-size: 24px;">--</div>
+                    <div class="val-sub">黑洞路由与防火墙处置</div>
+                </div>
+                <div class="card">
+                    <div class="val-sub" style="color: var(--warning);">🌐 独立攻击者 IP</div>
+                    <div class="val-big" id="akpi-attackers" style="color: var(--warning); font-size: 24px;">--</div>
+                    <div class="val-sub">非重叠威胁实体数</div>
+                </div>
+                <div class="card">
+                    <div class="val-sub" style="color: var(--success);">🎯 威胁阻断转化率</div>
+                    <div class="val-big" id="akpi-banrate" style="color: var(--success); font-size: 24px;">--</div>
+                    <div class="val-sub">拦截数 / 探测总数</div>
+                </div>
+                <div class="card">
+                    <div class="val-sub" style="color: #af52de;">🌍 涉及国家/地区</div>
+                    <div class="val-big" id="akpi-countries" style="color: #af52de; font-size: 24px;">--</div>
+                    <div class="val-sub">跨国境威胁来源广度</div>
+                </div>
+                <div class="card">
+                    <div class="val-sub" style="color: #ff9500;">🚦 Web 异常请求</div>
+                    <div class="val-big" id="akpi-webprobes" style="color: #ff9500; font-size: 24px;">--</div>
+                    <div class="val-sub">4xx/5xx 与敏感探针</div>
+                </div>
             </div>
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">⚡ 实时最新拦截快报</div>
-                    <button class="action-btn" onclick="switchTab('logs')">查看全部</button>
+
+            <!-- 时间与时序多维趋势 -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">📈 多维安全流量时序演进趋势</div>
+                            <div class="val-sub">蜜罐拦截 vs 端口探测 vs Web访问 对比</div>
+                        </div>
+                    </div>
+                    <div style="height: 220px;"><canvas id="analyticsTrendChart"></canvas></div>
                 </div>
-                <div id="recent-threats-box">正在加载最新事件...</div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">⏰ 24 小时全天候攻击活跃时段分布</div>
+                            <div class="val-sub">按每日 00:00~23:00 统计攻击活跃峰值区间</div>
+                        </div>
+                    </div>
+                    <div style="height: 220px;"><canvas id="analyticsHourlyChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- 地理空间与威胁源网络构成 -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🌍 攻击来源国家与地区分布</div>
+                            <div class="val-sub">TOP 8 全球威胁发源地理分布</div>
+                        </div>
+                    </div>
+                    <div style="height: 220px;"><canvas id="analyticsGeoChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🏢 恶意扫描源网络运营商 (ISP / ASN)</div>
+                            <div class="val-sub">TOP 8 频繁发起探测的云计算或电信运营商</div>
+                        </div>
+                    </div>
+                    <div style="height: 220px;"><canvas id="analyticsIspChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- 端口特征与防护动作矩阵 (Grid 3) -->
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🔌 高危服务分类构成</div>
+                            <div class="val-sub">目标服务类型占比</div>
+                        </div>
+                    </div>
+                    <div style="height: 210px;"><canvas id="analyticsCategoryChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🛡️ 流量处置动作分布</div>
+                            <div class="val-sub">阻断 / 探测 / 业务 / 放行</div>
+                        </div>
+                    </div>
+                    <div style="height: 210px;"><canvas id="analyticsActionChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🏷️ 威胁危险等级分布</div>
+                            <div class="val-sub">极高危 / 高危 / 中危 / 低危</div>
+                        </div>
+                    </div>
+                    <div style="height: 210px;"><canvas id="analyticsLevelChart"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Web 应用与探测特征多维分析 (Grid 2) -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🚦 HTTP 响应状态码与健康度</div>
+                            <div class="val-sub">正常访问 (200) vs 敏感探针/异常 (4xx/5xx)</div>
+                        </div>
+                    </div>
+                    <div style="height: 210px;"><canvas id="analyticsHttpStatusChart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <div class="card-title">🔍 敏感文件探针 & 扫描工具指纹</div>
+                            <div class="val-sub">Web 嗅探特征排行 TOP 10</div>
+                        </div>
+                        <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
+                            <button class="pill-btn accent" id="btn-webdiag-path" onclick="switchWebDiagTab('path')" style="padding: 3px 8px; font-size: 11px; border-radius: 99px;">📁 敏感路径</button>
+                            <button class="pill-btn" id="btn-webdiag-ua" onclick="switchWebDiagTab('ua')" style="padding: 3px 8px; font-size: 11px; border-radius: 99px; background: transparent;">🤖 扫描器 UA</button>
+                        </div>
+                    </div>
+                    <div id="web-diag-container" style="max-height: 210px; min-height: 210px; overflow-y: auto; padding-right: 4px;">
+                        正在加载特征指纹...
+                    </div>
+                </div>
+            </div>
+
+            <!-- TOP 10 持续活跃威胁源情报档案 -->
+            <div class="card" style="margin-top: 16px;">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">🚨 TOP 10 持续活跃恶意威胁源档案</div>
+                        <div class="val-sub">最高频次探测实体、嗅探端口组合及实时封禁状态</div>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>威胁源 IP</th>
+                                <th>归属地域 / 运营商</th>
+                                <th>嗅探目标端口集</th>
+                                <th>累计触碰频次</th>
+                                <th>危险等级</th>
+                                <th>防护状态</th>
+                                <th>最后活动时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="analytics-attackers-tbody">
+                            <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">正在分析威胁档案...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
+
         <div class="bottom-spacer"></div>
     </div>
 
@@ -1044,7 +1256,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="dock">
     <button class="dock-btn active" id="dock-btn-overview" onclick="switchTab('overview', this)">
         <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-        <span>态势概览</span>
+        <span>态势分析</span>
     </button>
     <button class="dock-btn" id="dock-btn-logs" onclick="switchTab('logs', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
@@ -1568,8 +1780,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let trendChartInstance = null;
     let portChartInstance = null;
 
+    let currentOverviewSubTab = 'overview';
+    let currentAnalyticsRange = '7d';
+    let currentWebDiagTab = 'path';
+    let analyticsDataCache = null;
+
+    let analyticsTrendChartInstance = null;
+    let analyticsHourlyChartInstance = null;
+    let analyticsGeoChartInstance = null;
+    let analyticsIspChartInstance = null;
+    let analyticsCategoryChartInstance = null;
+    let analyticsActionChartInstance = null;
+    let analyticsLevelChartInstance = null;
+    let analyticsHttpStatusChartInstance = null;
+
     const PAGE_TITLES = {
-        'overview': '安全态势概览',
+        'overview': '安全态势分析',
         'logs': '蜜罐拦截日志',
         'access-logs': '端口与控制台访问日志',
         'blacklist': '内核黑名单池',
@@ -1584,6 +1810,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'web': '管理控制台',
         'ftp': 'FTP 嗅探',
         'telnet': 'Telnet 弱口令',
+        'scan': '未开放端口探测',
+        'business': '生产业务端口',
         'custom': '自定义诱饵'
     };
 
@@ -1606,49 +1834,450 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
         const textColor = isDark ? '#98989d' : '#8e8e93';
 
-        const ctxTrend = document.getElementById('trendChart').getContext('2d');
-        trendChartInstance = new Chart(ctxTrend, {
-            type: 'line',
-            data: {
-                labels: Array(24).fill(''),
-                datasets: [{
-                    label: '扫描探测频次',
-                    data: Array(24).fill(0),
-                    borderColor: '#007aff',
-                    backgroundColor: 'rgba(0, 122, 255, 0.12)',
-                    fill: true,
-                    tension: 0.35,
-                    borderWidth: 2.5,
-                    pointRadius: 2.5,
-                    pointBackgroundColor: '#007aff'
-                }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
-                    y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
+        const ctxTrend = document.getElementById('trendChart')?.getContext('2d');
+        if (ctxTrend) {
+            trendChartInstance = new Chart(ctxTrend, {
+                type: 'line',
+                data: {
+                    labels: Array(24).fill(''),
+                    datasets: [{
+                        label: '扫描探测频次',
+                        data: Array(24).fill(0),
+                        borderColor: '#007aff',
+                        backgroundColor: 'rgba(0, 122, 255, 0.12)',
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 2.5,
+                        pointBackgroundColor: '#007aff'
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
+                    }
                 }
-            }
-        });
+            });
+        }
 
-        const ctxPort = document.getElementById('portChart').getContext('2d');
-        portChartInstance = new Chart(ctxPort, {
-            type: 'doughnut',
-            data: {
-                labels: ['暂无数据'],
-                datasets: [{
-                    data: [1],
-                    backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'],
-                    borderWidth: 0
-                }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 11, weight: 600 } } } }
+        const ctxPort = document.getElementById('portChart')?.getContext('2d');
+        if (ctxPort) {
+            portChartInstance = new Chart(ctxPort, {
+                type: 'doughnut',
+                data: {
+                    labels: ['暂无数据'],
+                    datasets: [{
+                        data: [1],
+                        backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 11, weight: 600 } } } }
+                }
+            });
+        }
+
+        initAnalyticsCharts();
+    }
+
+    function initAnalyticsCharts() {
+        const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+        const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+        const textColor = isDark ? '#98989d' : '#8e8e93';
+
+        destroyAnalyticsCharts();
+
+        const ctxTrend = document.getElementById('analyticsTrendChart')?.getContext('2d');
+        if (ctxTrend) {
+            analyticsTrendChartInstance = new Chart(ctxTrend, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: '蜜罐拦截', data: [], borderColor: '#007aff', backgroundColor: 'rgba(0, 122, 255, 0.12)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 },
+                        { label: '端口嗅探', data: [], borderColor: '#af52de', backgroundColor: 'rgba(175, 82, 222, 0.08)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 },
+                        { label: 'Web访问', data: [], borderColor: '#ff9500', backgroundColor: 'rgba(255, 149, 0, 0.06)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top', labels: { color: textColor, font: { size: 10, weight: 600 }, boxWidth: 10 } } },
+                    scales: {
+                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        const ctxHourly = document.getElementById('analyticsHourlyChart')?.getContext('2d');
+        if (ctxHourly) {
+            analyticsHourlyChartInstance = new Chart(ctxHourly, {
+                type: 'bar',
+                data: {
+                    labels: Array.from({length: 24}, (_, i) => `${String(i).padStart(2, '0')}:00`),
+                    datasets: [{
+                        label: '攻击触碰频次',
+                        data: Array(24).fill(0),
+                        backgroundColor: 'rgba(255, 59, 48, 0.75)',
+                        hoverBackgroundColor: '#ff3b30',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 9 }, maxRotation: 0 } },
+                        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        const ctxGeo = document.getElementById('analyticsGeoChart')?.getContext('2d');
+        if (ctxGeo) {
+            analyticsGeoChartInstance = new Chart(ctxGeo, {
+                type: 'doughnut',
+                data: { labels: ['暂无数据'], datasets: [{ data: [1], backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93'], borderWidth: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                }
+            });
+        }
+
+        const ctxIsp = document.getElementById('analyticsIspChart')?.getContext('2d');
+        if (ctxIsp) {
+            analyticsIspChartInstance = new Chart(ctxIsp, {
+                type: 'bar',
+                data: { labels: [], datasets: [{ label: '威胁源实体', data: [], backgroundColor: 'rgba(0, 122, 255, 0.75)', borderRadius: 4 }] },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 9 } } },
+                        y: { grid: { display: false }, ticks: { color: textColor, font: { size: 10, weight: 600 } } }
+                    }
+                }
+            });
+        }
+
+        const ctxCat = document.getElementById('analyticsCategoryChart')?.getContext('2d');
+        if (ctxCat) {
+            analyticsCategoryChartInstance = new Chart(ctxCat, {
+                type: 'bar',
+                data: { labels: [], datasets: [{ label: '攻击拦截量', data: [], backgroundColor: ['#ff3b30', '#ff9500', '#af52de', '#007aff', '#34c759', '#5856d6'], borderRadius: 4 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 9 } } },
+                        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 9 } } }
+                    }
+                }
+            });
+        }
+
+        const ctxAction = document.getElementById('analyticsActionChart')?.getContext('2d');
+        if (ctxAction) {
+            analyticsActionChartInstance = new Chart(ctxAction, {
+                type: 'doughnut',
+                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#007aff', '#34c759', '#8e8e93'], borderWidth: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                }
+            });
+        }
+
+        const ctxLevel = document.getElementById('analyticsLevelChart')?.getContext('2d');
+        if (ctxLevel) {
+            analyticsLevelChartInstance = new Chart(ctxLevel, {
+                type: 'doughnut',
+                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#ffd60a', '#30b0c7'], borderWidth: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                }
+            });
+        }
+
+        const ctxHttp = document.getElementById('analyticsHttpStatusChart')?.getContext('2d');
+        if (ctxHttp) {
+            analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
+                type: 'doughnut',
+                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93'], borderWidth: 0 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                }
+            });
+        }
+    }
+
+    function destroyAnalyticsCharts() {
+        [
+            analyticsTrendChartInstance,
+            analyticsHourlyChartInstance,
+            analyticsGeoChartInstance,
+            analyticsIspChartInstance,
+            analyticsCategoryChartInstance,
+            analyticsActionChartInstance,
+            analyticsLevelChartInstance,
+            analyticsHttpStatusChartInstance
+        ].forEach(inst => {
+            if (inst) {
+                try { inst.destroy(); } catch (e) {}
             }
         });
+        analyticsTrendChartInstance = null;
+        analyticsHourlyChartInstance = null;
+        analyticsGeoChartInstance = null;
+        analyticsIspChartInstance = null;
+        analyticsCategoryChartInstance = null;
+        analyticsActionChartInstance = null;
+        analyticsLevelChartInstance = null;
+        analyticsHttpStatusChartInstance = null;
+    }
+
+    function switchOverviewSubTab(subTab, btn) {
+        currentOverviewSubTab = subTab;
+        const subviewOverview = document.getElementById('subview-overview');
+        const subviewAnalysis = document.getElementById('subview-analysis');
+        const toolbar = document.getElementById('analytics-toolbar');
+        const btnOverview = document.getElementById('subtab-btn-overview');
+        const btnAnalysis = document.getElementById('subtab-btn-analysis');
+
+        if (subTab === 'overview') {
+            if (subviewOverview) subviewOverview.style.display = 'block';
+            if (subviewAnalysis) subviewAnalysis.style.display = 'none';
+            if (toolbar) toolbar.style.display = 'none';
+            if (btnOverview) btnOverview.classList.add('active');
+            if (btnAnalysis) btnAnalysis.classList.remove('active');
+            fetchData(false);
+        } else {
+            if (subviewOverview) subviewOverview.style.display = 'none';
+            if (subviewAnalysis) subviewAnalysis.style.display = 'block';
+            if (toolbar) toolbar.style.display = 'flex';
+            if (btnOverview) btnOverview.classList.remove('active');
+            if (btnAnalysis) btnAnalysis.classList.add('active');
+            if (!analyticsTrendChartInstance) {
+                initAnalyticsCharts();
+            }
+            fetchAnalyticsData(false);
+        }
+    }
+
+    function changeAnalyticsRange(range, btn) {
+        currentAnalyticsRange = range;
+        ['24h', '7d', '30d', 'all'].forEach(r => {
+            const b = document.getElementById(`filter-range-${r}`);
+            if (b) b.classList.remove('active');
+        });
+        if (btn) btn.classList.add('active');
+        fetchAnalyticsData(true);
+    }
+
+    function fetchAnalyticsData(showNotice = false) {
+        fetch(`/api/analytics?range=${currentAnalyticsRange}`).then(res => res.json()).then(data => {
+            analyticsDataCache = data;
+            
+            // 1. KPI Cards
+            if (data.kpis) {
+                const kp = data.kpis;
+                const elProbes = document.getElementById('akpi-probes');
+                const elInter = document.getElementById('akpi-intercepted');
+                const elAttacker = document.getElementById('akpi-attackers');
+                const elBanRate = document.getElementById('akpi-banrate');
+                const elCountries = document.getElementById('akpi-countries');
+                const elWeb = document.getElementById('akpi-webprobes');
+
+                if (elProbes) elProbes.innerText = (kp.total_probes || 0).toLocaleString();
+                if (elInter) elInter.innerText = (kp.total_intercepted || 0).toLocaleString();
+                if (elAttacker) elAttacker.innerText = (kp.unique_attackers || 0).toLocaleString();
+                if (elBanRate) elBanRate.innerText = `${kp.ban_rate || 0}%`;
+                if (elCountries) elCountries.innerText = (kp.unique_countries || 0).toLocaleString();
+                if (elWeb) elWeb.innerText = (kp.abnormal_web_requests || 0).toLocaleString();
+            }
+
+            // 2. Trend Multi-series Chart
+            if (data.trend && analyticsTrendChartInstance) {
+                analyticsTrendChartInstance.data.labels = data.trend.labels || [];
+                analyticsTrendChartInstance.data.datasets[0].data = data.trend.events || [];
+                analyticsTrendChartInstance.data.datasets[1].data = data.trend.probes || [];
+                analyticsTrendChartInstance.data.datasets[2].data = data.trend.web || [];
+                analyticsTrendChartInstance.update();
+            }
+
+            // 3. Hourly Distribution Chart
+            if (data.hourly_distribution && analyticsHourlyChartInstance) {
+                analyticsHourlyChartInstance.data.labels = data.hourly_distribution.map(h => h.hour);
+                analyticsHourlyChartInstance.data.datasets[0].data = data.hourly_distribution.map(h => h.count);
+                analyticsHourlyChartInstance.update();
+            }
+
+            // 4. Geo Countries
+            if (data.geo_countries && analyticsGeoChartInstance && data.geo_countries.length > 0) {
+                analyticsGeoChartInstance.data.labels = data.geo_countries.map(g => `${g.country} (${g.count})`);
+                analyticsGeoChartInstance.data.datasets[0].data = data.geo_countries.map(g => g.count);
+                analyticsGeoChartInstance.update();
+            }
+
+            // 5. Geo ISPs
+            if (data.geo_isps && analyticsIspChartInstance && data.geo_isps.length > 0) {
+                analyticsIspChartInstance.data.labels = data.geo_isps.map(g => (g.isp.length > 18 ? g.isp.substring(0, 16) + '...' : g.isp));
+                analyticsIspChartInstance.data.datasets[0].data = data.geo_isps.map(g => g.count);
+                analyticsIspChartInstance.update();
+            }
+
+            // 6. Categories
+            if (data.category_distribution && analyticsCategoryChartInstance && data.category_distribution.length > 0) {
+                analyticsCategoryChartInstance.data.labels = data.category_distribution.map(c => CATEGORY_LABELS[c.category] || c.category);
+                analyticsCategoryChartInstance.data.datasets[0].data = data.category_distribution.map(c => c.count);
+                analyticsCategoryChartInstance.update();
+            }
+
+            // 7. Actions
+            if (data.action_distribution && analyticsActionChartInstance && data.action_distribution.length > 0) {
+                const actionNames = { 'INTERCEPTED': '诱捕阻断', 'PROBE': '外部探测', 'BUSINESS': '业务访问', 'WHITELIST': '白名单放行', 'WATCH': '持续观察' };
+                analyticsActionChartInstance.data.labels = data.action_distribution.map(a => `${actionNames[a.action] || a.action} (${a.count})`);
+                analyticsActionChartInstance.data.datasets[0].data = data.action_distribution.map(a => a.count);
+                analyticsActionChartInstance.update();
+            }
+
+            // 8. Levels
+            if (data.threat_level_distribution && analyticsLevelChartInstance && data.threat_level_distribution.length > 0) {
+                analyticsLevelChartInstance.data.labels = data.threat_level_distribution.map(l => `${l.level} (${l.count})`);
+                analyticsLevelChartInstance.data.datasets[0].data = data.threat_level_distribution.map(l => l.count);
+                analyticsLevelChartInstance.update();
+            }
+
+            // 9. HTTP Status Codes
+            if (data.http_status_distribution && analyticsHttpStatusChartInstance && data.http_status_distribution.length > 0) {
+                analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
+                analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
+                analyticsHttpStatusChartInstance.update();
+            }
+
+            // 10. Web Diagnostics List (Paths / UAs)
+            renderWebDiagList(data.top_sensitive_paths || [], data.top_user_agents || []);
+
+            // 11. Top Attackers Table
+            renderAnalyticsAttackersTable(data.top_attackers || []);
+
+            if (showNotice) showToast(`已切换多维分析周期: ${currentAnalyticsRange}`, '🔬');
+        }).catch(err => {
+            console.error('Failed to load analytics data:', err);
+        });
+    }
+
+    function switchWebDiagTab(tab) {
+        currentWebDiagTab = tab;
+        const btnPath = document.getElementById('btn-webdiag-path');
+        const btnUa = document.getElementById('btn-webdiag-ua');
+        if (tab === 'path') {
+            if (btnPath) { btnPath.className = 'pill-btn accent'; btnPath.style.background = ''; }
+            if (btnUa) { btnUa.className = 'pill-btn'; btnUa.style.background = 'transparent'; }
+        } else {
+            if (btnPath) { btnPath.className = 'pill-btn'; btnPath.style.background = 'transparent'; }
+            if (btnUa) { btnUa.className = 'pill-btn accent'; btnUa.style.background = ''; }
+        }
+        if (analyticsDataCache) {
+            renderWebDiagList(analyticsDataCache.top_sensitive_paths || [], analyticsDataCache.top_user_agents || []);
+        }
+    }
+
+    function renderWebDiagList(paths, uas) {
+        const container = document.getElementById('web-diag-container');
+        if (!container) return;
+        const isPath = currentWebDiagTab === 'path';
+        const list = isPath ? paths : uas;
+
+        if (!list || list.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: var(--text-sec); padding: 30px; font-size: 12px;">暂无该维度的访问指纹记录</div>';
+            return;
+        }
+
+        const maxCount = Math.max(...list.map(x => x.count), 1);
+        let html = '<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">';
+        list.forEach((item, idx) => {
+            const title = isPath ? `${item.method ? item.method + ' ' : ''}${item.path}` : item.ua;
+            const pct = Math.round((item.count / maxCount) * 100);
+            html += `
+                <div style="background: var(--card-sec); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px;">
+                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;" title="${title}">
+                            #${idx + 1} ${title}
+                        </span>
+                        <span style="color: var(--accent); font-weight: 700;">${item.count} 次</span>
+                    </div>
+                    <div style="height: 4px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden;">
+                        <div style="height: 100%; width: ${pct}%; background: ${isPath ? 'linear-gradient(90deg, #007aff, #5856d6)' : 'linear-gradient(90deg, #ff9500, #ff3b30)'}; border-radius: 99px;"></div>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    function renderAnalyticsAttackersTable(attackers) {
+        const tbody = document.getElementById('analytics-attackers-tbody');
+        if (!tbody) return;
+        if (!attackers || attackers.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">暂无持续攻击者记录</td></tr>';
+            return;
+        }
+
+        let html = '';
+        attackers.forEach(att => {
+            const levelClass = (att.level === '极高危' || att.level === '高危') ? 'badge-danger' : 'badge-warning';
+            const banStatusBadge = att.is_banned ?
+                '<span class="badge badge-danger">🚫 已下发封禁</span>' :
+                '<span class="badge badge-warning">👀 监控中</span>';
+            const portsBadge = (att.ports || '').split(',').slice(0, 8).map(p => `<span style="display: inline-block; background: var(--card-sec); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: monospace; margin: 1px;">${p}</span>`).join(' ');
+
+            html += `
+                <tr>
+                    <td>
+                        <div style="font-weight: 700; font-family: monospace; color: var(--text);">${att.ip}</div>
+                    </td>
+                    <td>
+                        <div style="font-size: 12px;">🌐 ${att.country}</div>
+                        <div style="font-size: 10px; color: var(--text-sec);">${att.isp}</div>
+                    </td>
+                    <td>
+                        <div style="max-width: 260px; line-height: 1.4;">${portsBadge}</div>
+                    </td>
+                    <td>
+                        <b style="color: var(--danger); font-size: 13px;">${att.hit_count}</b> <span style="font-size: 10px; color: var(--text-sec);">次</span>
+                    </td>
+                    <td><span class="badge ${levelClass}">${att.level}</span></td>
+                    <td>${banStatusBadge}</td>
+                    <td style="font-size: 11px; color: var(--text-sec); font-family: monospace;">${att.last_seen}</td>
+                </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+    }
+
+    function exportAnalyticsJSON() {
+        if (!analyticsDataCache) return showToast('暂无可导出的多维分析数据', '⚠️');
+        const blob = new Blob([JSON.stringify(analyticsDataCache, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `portsentry-analytics-${currentAnalyticsRange}-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('态势分析完整数据集 (JSON) 导出成功', '📥');
     }
 
     let currentTabKey = 'overview';
@@ -1715,6 +2344,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             portChartInstance.destroy();
             initCharts();
             fetchData(false);
+            if (currentOverviewSubTab === 'analysis') {
+                fetchAnalyticsData(false);
+            }
         }
         if (notify) {
             const desc = mode === 'auto' ? '跟随系统 (自动)' : (mode === 'dark' ? '暗黑模式' : '明亮模式');
@@ -1824,13 +2456,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             renderWhitelistTable();
         });
 
-        // 仅在当前处于审计日志选项卡时加载大体量审计日志，消除首屏与轮询网络阻塞
         if (currentTabKey === 'access-logs') {
             fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
                 if (currentAccessLogMode === 'port') allPortLogs = data;
                 else allWebLogs = data;
                 renderAccessLogsTable();
             });
+        }
+
+        if (currentTabKey === 'overview' && currentOverviewSubTab === 'analysis') {
+            fetchAnalyticsData(false);
         }
     }
 
@@ -3531,6 +4166,164 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "labels": labels,
                         "data": data_points
                     }
+                })
+                return
+
+            if path == "/api/analytics":
+                query_params = parse_qs(parsed.query)
+                range_param = query_params.get("range", ["7d"])[0]
+                now_ts = int(time.time())
+
+                if range_param == "24h":
+                    cutoff_ts = now_ts - 86400
+                    step_seconds = 3600
+                    num_steps = 24
+                    date_format = "%H:00"
+                elif range_param == "30d":
+                    cutoff_ts = now_ts - 30 * 86400
+                    step_seconds = 86400
+                    num_steps = 30
+                    date_format = "%m/%d"
+                elif range_param == "all":
+                    cutoff_ts = 0
+                    step_seconds = 86400
+                    num_steps = 30
+                    date_format = "%m/%d"
+                else: # 7d
+                    cutoff_ts = now_ts - 7 * 86400
+                    step_seconds = 86400
+                    num_steps = 7
+                    date_format = "%m/%d"
+
+                conn = get_db()
+                c = conn.cursor()
+
+                c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ?", (cutoff_ts,))
+                total_probes = c.fetchone()[0]
+
+                c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?", (cutoff_ts,))
+                total_intercepted = c.fetchone()[0]
+
+                c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ?", (cutoff_ts,))
+                unique_attackers = c.fetchone()[0]
+
+                c.execute("SELECT COUNT(DISTINCT country) FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环')", (cutoff_ts,))
+                unique_countries = c.fetchone()[0]
+
+                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ?", (cutoff_ts,))
+                total_web_requests = c.fetchone()[0]
+
+                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%')", (cutoff_ts,))
+                abnormal_web_requests = c.fetchone()[0]
+
+                ban_rate = round((total_intercepted / total_probes * 100), 1) if total_probes > 0 else (100.0 if total_intercepted > 0 else 0.0)
+
+                labels = []
+                events_trend = []
+                probes_trend = []
+                web_trend = []
+                for i in range(num_steps - 1, -1, -1):
+                    s_ts = now_ts - ((i + 1) * step_seconds)
+                    e_ts = now_ts - (i * step_seconds)
+                    label = time.strftime(date_format, time.localtime(e_ts))
+                    labels.append(label)
+
+                    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    events_trend.append(c.fetchone()[0])
+
+                    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    probes_trend.append(c.fetchone()[0])
+
+                    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    web_trend.append(c.fetchone()[0])
+
+                c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY hr ORDER BY hr ASC", (cutoff_ts,))
+                hourly_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
+                hourly_dist = [{"hour": f"{h:02d}:00", "count": hourly_map.get(f"{h:02d}", 0)} for h in range(24)]
+
+                c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') GROUP BY country ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                geo_countries = [{"country": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT isp, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') GROUP BY isp ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                geo_isps = [{"isp": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT category, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY category ORDER BY cnt DESC", (cutoff_ts,))
+                category_dist = [{"category": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY port ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                port_dist = [{"port": row[0], "name": row[1] or f"端口 {row[0]}", "count": row[2]} for row in c.fetchall()]
+
+                c.execute("SELECT action, COUNT(*) as cnt FROM port_access_logs WHERE timestamp >= ? GROUP BY action ORDER BY cnt DESC", (cutoff_ts,))
+                action_dist = [{"action": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT level, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY level ORDER BY cnt DESC", (cutoff_ts,))
+                level_dist = [{"level": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY status_code ORDER BY cnt DESC", (cutoff_ts,))
+                http_status_dist = [{"code": str(row[0]), "count": row[1]} for row in c.fetchall()]
+
+                c.execute("SELECT path, method, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY path ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
+                top_paths = [{"path": row[0], "method": row[1], "count": row[2]} for row in c.fetchall()]
+
+                c.execute("SELECT user_agent, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND user_agent IS NOT NULL AND user_agent != '' GROUP BY user_agent ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
+                top_uas = [{"ua": row[0], "count": row[1]} for row in c.fetchall()]
+
+                c.execute("""
+                    SELECT ip, country, isp, level, COUNT(*) as hits, MAX(attack_time) as last_seen, GROUP_CONCAT(DISTINCT port) as ports 
+                    FROM events 
+                    WHERE timestamp >= ? 
+                    GROUP BY ip 
+                    ORDER BY hits DESC 
+                    LIMIT 10
+                """, (cutoff_ts,))
+                attacker_rows = c.fetchall()
+
+                c.execute("SELECT DISTINCT ip FROM blacklist")
+                banned_ips_set = set(r[0] for r in c.fetchall())
+
+                top_attackers = []
+                for row in attacker_rows:
+                    top_attackers.append({
+                        "ip": row[0],
+                        "country": row[1] or "未知",
+                        "isp": row[2] or "未知",
+                        "level": row[3] or "极高危",
+                        "hit_count": row[4],
+                        "last_seen": row[5] or "--",
+                        "ports": row[6] or "--",
+                        "is_banned": row[0] in banned_ips_set
+                    })
+
+                conn.close()
+
+                self._send_json({
+                    "range": range_param,
+                    "kpis": {
+                        "total_probes": total_probes,
+                        "total_intercepted": total_intercepted,
+                        "unique_attackers": unique_attackers,
+                        "unique_countries": unique_countries,
+                        "total_web_requests": total_web_requests,
+                        "abnormal_web_requests": abnormal_web_requests,
+                        "ban_rate": ban_rate
+                    },
+                    "trend": {
+                        "labels": labels,
+                        "events": events_trend,
+                        "probes": probes_trend,
+                        "web": web_trend
+                    },
+                    "hourly_distribution": hourly_dist,
+                    "geo_countries": geo_countries,
+                    "geo_isps": geo_isps,
+                    "category_distribution": category_dist,
+                    "port_distribution": port_dist,
+                    "action_distribution": action_dist,
+                    "threat_level_distribution": level_dist,
+                    "http_status_distribution": http_status_dist,
+                    "top_sensitive_paths": top_paths,
+                    "top_user_agents": top_uas,
+                    "top_attackers": top_attackers
                 })
                 return
             if path == "/api/settings":
