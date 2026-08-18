@@ -1909,9 +1909,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <tr>
                 <td style="font-size:12px; color:var(--text-sec);">${e.attack_time}</td>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span></td>
-                <td>${geoText}</td>
-                <td><span class="tag neutral">TCP / ${e.port}</span></td>
-                <td style="font-weight:600;">${e.port_name || '自定义诱饵'} <span class="tag accent" style="margin-left:4px;">${catName}</span></td>
+                <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
+                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
+                <td><b style="color:var(--text); font-size:12px;">${escapeHtml(e.port_name || '自定义诱饵')}</b> <span class="tag accent" style="margin-left:4px; font-size:10px;">${catName}</span></td>
                 <td><span class="tag ${tagClass}">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
                 <td>${actionBtn}</td>
@@ -1957,8 +1957,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span></td>
-                <td>${b.reason || '自动诱捕阻断'}</td>
-                <td>${geoText}</td>
+                <td><b style="color:var(--text); font-size:12px;">${escapeHtml(b.reason || '自动诱捕阻断')}</b></td>
+                <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag danger">iptables + blackhole</span></td>
                 <td style="font-size:12px; color:var(--text-sec);">${b.ban_time}</td>
                 <td>
@@ -2018,7 +2018,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
-                <td><b style="color: var(--text);">${desc}</b>${bizTag}</td>
+                <td><b style="color: var(--text); font-size:12px;">${desc}</b>${bizTag}</td>
                 <td><span class="tag accent">${catName}</span></td>
                 <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
                 <td>${statusTag}</td>
