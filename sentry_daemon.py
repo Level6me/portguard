@@ -1315,38 +1315,56 @@ class SiteLogCollector:
     def _discover_log_files(self):
         """自动发现系统中的 OpenResty / Nginx 站点访问日志文件"""
         files = []
-        # 1. 1Panel OpenResty 站点目录
-        for p in glob.glob("/opt/1panel/apps/openresty/openresty/www/sites/*/log/access.log"):
-            if os.path.exists(p):
-                parts = p.split(os.sep)
-                try:
-                    site_idx = parts.index("sites")
-                    domain = parts[site_idx + 1]
-                except Exception:
-                    domain = "1Panel站点"
-                files.append((p, domain))
+        seen_paths = set()
+        
+        # 1. 1Panel OpenResty 站点目录 (覆盖各版本路径层级)
+        site_globs = [
+            "/opt/1panel/www/sites/*/log/access.log",
+            "/opt/1panel/apps/openresty/openresty/www/sites/*/log/access.log",
+            "/www/wwwlogs/*.log",
+            "/var/log/nginx/domains/*.log"
+        ]
+        for pattern in site_globs:
+            for p in glob.glob(pattern):
+                if os.path.exists(p) and p not in seen_paths:
+                    seen_paths.add(p)
+                    parts = p.split(os.sep)
+                    try:
+                        if "sites" in parts:
+                            site_idx = parts.index("sites")
+                            domain = parts[site_idx + 1]
+                        elif "wwwlogs" in parts:
+                            domain = os.path.basename(p).replace(".log", "").replace(".access", "")
+                        else:
+                            domain = os.path.basename(os.path.dirname(os.path.dirname(p)))
+                    except Exception:
+                        domain = "1Panel站点"
+                    files.append((p, domain))
 
         # 2. 1Panel 全局访问日志
-        global_p = "/opt/1panel/apps/openresty/openresty/log/access.log"
-        if os.path.exists(global_p):
-            files.append((global_p, "全局反代"))
+        for global_p in ["/opt/1panel/apps/openresty/openresty/log/access.log", "/opt/1panel/log/access.log"]:
+            if os.path.exists(global_p) and global_p not in seen_paths:
+                seen_paths.add(global_p)
+                files.append((global_p, "全局反代"))
 
         # 3. 标准系统 Nginx 路径
         for p in glob.glob("/var/log/nginx/*access*.log"):
-            if os.path.exists(p):
+            if os.path.exists(p) and p not in seen_paths:
+                seen_paths.add(p)
                 bname = os.path.basename(p).replace(".access.log", "").replace("access.log", "").replace(".log", "")
                 domain = bname if bname and bname != "nginx" else "Nginx主站"
                 files.append((p, domain))
 
         for p in glob.glob("/www/server/nginx/logs/*access*.log"):
-            if os.path.exists(p):
+            if os.path.exists(p) and p not in seen_paths:
+                seen_paths.add(p)
                 files.append((p, "BT-Nginx"))
 
         return files
 
     def _collector_loop(self):
         log_regex = re.compile(
-            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d+)\s+\S+(?:\s+"[^"]*"\s+"(?P<ua>[^"]*)")?'
+            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d+)\s+\S+(?:\s+"(?P<ref>[^"]*)"\s+"(?P<ua>[^"]*)")?'
         )
         
         while self.running:
@@ -1399,7 +1417,18 @@ class SiteLogCollector:
                             time_str = m.group("time")
                             request = m.group("request") or ""
                             status = int(m.group("status") or 200)
+                            ref = (m.group("ref") or "").strip()
                             ua = m.group("ua") or ""
+
+                            # 域名解析：优先站点目录域名，若是全局日志且 Referer 中包含完整 URL 则提取 Host
+                            req_domain = default_domain
+                            if (req_domain in ("全局反代", "Nginx主站", "")) and ref and (ref.startswith("http://") or ref.startswith("https://")):
+                                try:
+                                    extracted = ref.split("/")[2].split(":")[0]
+                                    if extracted and not extracted.replace(".", "").isdigit():
+                                        req_domain = extracted
+                                except Exception:
+                                    pass
 
                             req_parts = request.split()
                             if len(req_parts) >= 2:
@@ -1421,7 +1450,7 @@ class SiteLogCollector:
                                 ftime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 ts = int(time.time())
 
-                            new_records.append((ip, default_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
+                            new_records.append((ip, req_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
                     except Exception:
                         pass
 
