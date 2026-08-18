@@ -788,18 +788,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <span>⚡</span>
                         <span>一键拉黑历史探测IP</span>
                     </button>
-                    <button class="pill-btn" onclick="openImportModal('blacklist')">
-                        <span>📥</span>
-                        <span>导入黑名单</span>
-                    </button>
-                    <button class="pill-btn" onclick="exportBlacklistJSON()">
-                        <span>📤</span>
-                        <span>导出 JSON</span>
-                    </button>
-                    <button class="pill-btn danger" onclick="openManualBanModal()">
-                        <span>➕</span>
-                        <span>手动拉黑 IP</span>
-                    </button>
+                    <!-- 统一弹出式黑名单配置卡片按钮 -->
+                    <div style="position: relative; display: inline-block;">
+                        <button class="pill-btn danger" id="btn-blacklist-action-menu" onclick="toggleBlacklistActionMenu(event)" style="font-weight: 700;">
+                            <span>⚙️ 黑名单管理与操作</span>
+                            <span style="font-size: 10px; margin-left: 2px;">▾</span>
+                        </button>
+                        <div id="blacklist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
+                            <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🚫 黑名单操作配置</div>
+                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openManualBanModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>➕</span><span>手动拉黑 IP</span>
+                            </a>
+                            <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openImportModal('blacklist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>📥</span><span>导入黑名单 (JSON)</span>
+                            </a>
+                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); exportBlacklistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                <span>📤</span><span>导出黑名单 (JSON)</span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -2105,6 +2113,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function toggleTrapActionMenu(e) {
         if (e) e.stopPropagation();
+        closeBlacklistActionMenu();
         const popover = document.getElementById('trap-action-popover');
         if (!popover) return;
         if (popover.style.display === 'block') {
@@ -2120,13 +2129,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (popover) popover.style.display = 'none';
     }
 
+    function toggleBlacklistActionMenu(e) {
+        if (e) e.stopPropagation();
+        closeTrapActionMenu();
+        const popover = document.getElementById('blacklist-action-popover');
+        if (!popover) return;
+        if (popover.style.display === 'block') {
+            popover.style.display = 'none';
+        } else {
+            popover.style.display = 'block';
+        }
+    }
+
+    function closeBlacklistActionMenu() {
+        const popover = document.getElementById('blacklist-action-popover');
+        if (popover) popover.style.display = 'none';
+    }
+
     // 点击页面任意外部区域关闭弹出菜单
     document.addEventListener('click', function(e) {
-        const popover = document.getElementById('trap-action-popover');
-        const btn = document.getElementById('btn-trap-action-menu');
-        if (popover && popover.style.display === 'block') {
-            if (!popover.contains(e.target) && (!btn || !btn.contains(e.target))) {
-                popover.style.display = 'none';
+        const trapPopover = document.getElementById('trap-action-popover');
+        const trapBtn = document.getElementById('btn-trap-action-menu');
+        if (trapPopover && trapPopover.style.display === 'block') {
+            if (!trapPopover.contains(e.target) && (!trapBtn || !trapBtn.contains(e.target))) {
+                trapPopover.style.display = 'none';
+            }
+        }
+
+        const blPopover = document.getElementById('blacklist-action-popover');
+        const blBtn = document.getElementById('btn-blacklist-action-menu');
+        if (blPopover && blPopover.style.display === 'block') {
+            if (!blPopover.contains(e.target) && (!blBtn || !blBtn.contains(e.target))) {
+                blPopover.style.display = 'none';
             }
         }
     });
