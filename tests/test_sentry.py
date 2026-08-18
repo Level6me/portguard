@@ -229,6 +229,49 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertTrue(res_sqlmap)
             mock_ban_ua.assert_called_once()
 
+    def test_ban_ip_comprehensive_logs_and_blacklist(self):
+        from sentry_daemon import ban_ip, get_db, init_db
+        init_db()
+        test_ip = "198.51.100.99"
+        
+        # 执行封禁
+        ban_ip(test_ip, port=443, reason="Web特征: 探测高危敏感配置文件", category="web", level="极高危")
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # 1. 验证拦截日志 events 表有记录
+        c.execute("SELECT ip, port, category, level, port_name, status FROM events WHERE ip = ?", (test_ip,))
+        ev = c.fetchone()
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev[0], test_ip)
+        self.assertEqual(ev[1], 443)
+        self.assertEqual(ev[2], "web")
+        self.assertEqual(ev[3], "极高危")
+        self.assertEqual(ev[5], "BANNED")
+        
+        # 2. 验证黑名单 blacklist 表有记录
+        c.execute("SELECT ip, reason, level FROM blacklist WHERE ip = ?", (test_ip,))
+        bl = c.fetchone()
+        self.assertIsNotNone(bl)
+        self.assertEqual(bl[0], test_ip)
+        self.assertEqual(bl[1], "Web特征: 探测高危敏感配置文件")
+        self.assertEqual(bl[2], "极高危")
+        
+        # 3. 验证端口访问日志 port_access_logs 有记录
+        c.execute("SELECT ip, port, action FROM port_access_logs WHERE ip = ?", (test_ip,))
+        pl = c.fetchone()
+        self.assertIsNotNone(pl)
+        self.assertEqual(pl[0], test_ip)
+        self.assertEqual(pl[2], "INTERCEPTED")
+        
+        # 清理测试数据
+        c.execute("DELETE FROM events WHERE ip = ?", (test_ip,))
+        c.execute("DELETE FROM blacklist WHERE ip = ?", (test_ip,))
+        c.execute("DELETE FROM port_access_logs WHERE ip = ?", (test_ip,))
+        conn.commit()
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

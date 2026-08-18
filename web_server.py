@@ -850,25 +850,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
                         <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 请求特征</button>
                     </div>
-                    <div id="trap-port-actions" style="display: inline-flex; gap: 6px;">
-                        <button class="pill-btn" onclick="openImportModal('traps')">
-                            <span>📥</span>
-                            <span>导入策略 (JSON)</span>
+                    <!-- 统一弹出式策略配置卡片按钮 -->
+                    <div style="position: relative; display: inline-block;">
+                        <button class="pill-btn accent" id="btn-trap-action-menu" onclick="toggleTrapActionMenu(event)" style="font-weight: 700;">
+                            <span>⚙️ 策略管理与配置</span>
+                            <span style="font-size: 10px; margin-left: 2px;">▾</span>
                         </button>
-                        <button class="pill-btn" onclick="exportTrapsJSON()">
-                            <span>📤</span>
-                            <span>导出策略 (JSON)</span>
-                        </button>
-                        <button class="pill-btn accent" onclick="openAddTrapModal()">
-                            <span>➕</span>
-                            <span>添加端口诱饵</span>
-                        </button>
-                    </div>
-                    <div id="trap-req-actions" style="display: none; gap: 6px;">
-                        <button class="pill-btn accent" onclick="openAddHttpTrapModal()">
-                            <span>➕</span>
-                            <span>添加请求特征策略</span>
-                        </button>
+                        <div id="trap-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
+                            <div id="trap-popover-content"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2102,16 +2092,102 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const titleEl = document.getElementById('traps-main-title');
         const subEl = document.getElementById('traps-main-sub');
         const theadEl = document.getElementById('traps-thead');
-        const portActions = document.getElementById('trap-port-actions');
-        const reqActions = document.getElementById('trap-req-actions');
+    function toggleTrapActionMenu(e) {
+        if (e) e.stopPropagation();
+        const popover = document.getElementById('trap-action-popover');
+        if (!popover) return;
+        if (popover.style.display === 'block') {
+            popover.style.display = 'none';
+        } else {
+            renderTrapPopoverContent();
+            popover.style.display = 'block';
+        }
+    }
+
+    function closeTrapActionMenu() {
+        const popover = document.getElementById('trap-action-popover');
+        if (popover) popover.style.display = 'none';
+    }
+
+    // 点击页面任意外部区域关闭弹出菜单
+    document.addEventListener('click', function(e) {
+        const popover = document.getElementById('trap-action-popover');
+        const btn = document.getElementById('btn-trap-action-menu');
+        if (popover && popover.style.display === 'block') {
+            if (!popover.contains(e.target) && (!btn || !btn.contains(e.target))) {
+                popover.style.display = 'none';
+            }
+        }
+    });
+
+    function renderTrapPopoverContent() {
+        const container = document.getElementById('trap-popover-content');
+        if (!container) return;
+        if (currentTrapTab === 'port') {
+            container.innerHTML = `
+                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🔌 端口策略配置</div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openAddTrapModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>➕</span><span>添加端口诱饵</span>
+                </a>
+                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openImportModal('traps');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📥</span><span>导入策略 (JSON)</span>
+                </a>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); exportTrapsJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📤</span><span>导出策略 (JSON)</span>
+                </a>
+            `;
+        } else {
+            container.innerHTML = `
+                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🎯 请求特征配置</div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openAddHttpTrapModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>➕</span><span>添加特征策略</span>
+                </a>
+                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openImportModal('http_traps');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📥</span><span>导入特征策略 (JSON)</span>
+                </a>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); exportHttpTrapsJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📤</span><span>导出特征策略 (JSON)</span>
+                </a>
+            `;
+        }
+    }
+
+    function exportHttpTrapsJSON() {
+        if (!allHttpTraps || allHttpTraps.length === 0) return showToast('暂无请求特征策略可导出', '⚠️');
+        const exportList = allHttpTraps.map(r => ({
+            name: r.name,
+            match_type: r.match_type,
+            pattern: r.pattern || '',
+            threshold: r.threshold || 6,
+            window: r.window || 30,
+            level: r.level || '极高危',
+            enabled: r.enabled !== false,
+            description: r.description || ''
+        }));
+        const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `portsentry_http_traps_${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        showToast('已开始导出请求特征策略 (JSON)', '📤');
+    }
+
+    function switchTrapTab(tab) {
+        currentTrapTab = tab;
+        const btnPort = document.getElementById('btn-trap-tab-port');
+        const btnReq = document.getElementById('btn-trap-tab-req');
+        const titleEl = document.getElementById('traps-main-title');
+        const subEl = document.getElementById('traps-main-sub');
+        const theadEl = document.getElementById('traps-thead');
+        closeTrapActionMenu();
 
         if (tab === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
             if (btnReq) { btnReq.className = 'pill-btn'; btnReq.style.background = 'transparent'; }
             if (titleEl) titleEl.innerText = '🍯 活跃蜜罐策略与诱饵端口';
             if (subEl) subEl.innerText = '模拟高危服务静默监听，一旦连入即自动封禁';
-            if (portActions) portActions.style.display = 'inline-flex';
-            if (reqActions) reqActions.style.display = 'none';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -2129,8 +2205,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (btnPort) { btnPort.className = 'pill-btn'; btnPort.style.background = 'transparent'; }
             if (titleEl) titleEl.innerText = '🎯 Web 请求特征与防扫描策略';
             if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、后台爆破、扫描工具指纹与高频 404 熔断';
-            if (portActions) portActions.style.display = 'none';
-            if (reqActions) reqActions.style.display = 'inline-flex';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -2904,6 +2978,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <i>系统会自动容错清洗末尾多余逗号 (<code>, ]</code>) 与宽松语法！</i>
             `;
             textVal.placeholder = `粘贴蜜罐策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "1000-3000",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "自定义高危端口段"\n  }\n]`;
+        } else if (type === 'http_traps') {
+            titleEl.innerText = '🎯 智能导入请求特征策略';
+            tipEl.innerHTML = `
+                支持导入 <b>JSON 格式策略数组</b>：<br>
+                <code>[{"name":"敏感配置嗅探","match_type":"path_keyword","pattern":"\\\\.env|\\\\.git","level":"极高危","description":"探测关键敏感配置"}]</code><br>
+                • <code>match_type</code>: 匹配类型 (<code>path_keyword</code>: URL路径特征 / <code>ua_keyword</code>: 工具指纹 / <code>status_rate</code>: 404频次熔断)<br>
+                • <code>pattern</code>: 特征正则表达式或关键词 (支持 | 分隔)<br>
+                • <code>threshold / window</code>: 熔断频次与时间窗口(秒)<br>
+                • <code>level</code>: 威胁等级 (极高危 / 高危 / 中危)
+            `;
+            textVal.placeholder = `粘贴特征策略 JSON 数组，例如：\n[\n  {\n    "name": "敏感配置嗅探",\n    "match_type": "path_keyword",\n    "pattern": "\\\\.env|\\\\.git",\n    "level": "极高危",\n    "description": "探测配置文件"\n  }\n]`;
         } else if (type === 'blacklist') {
             titleEl.innerText = '🚫 批量导入内核黑名单';
             tipEl.innerHTML = `
@@ -2962,6 +3047,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     "protocol": "tcp",
                     "strategy": "reject",
                     "description": "宝塔控制台探针(已停用)"
+                }
+            ], null, 2);
+        } else if (currentImportType === 'http_traps') {
+            textVal.value = JSON.stringify([
+                {
+                    "name": "敏感配置与备份嗅探",
+                    "match_type": "path_keyword",
+                    "pattern": "\\.env|\\.git|\\.svn|config\\.json|backup\\.zip|database\\.sql",
+                    "level": "极高危",
+                    "description": "探测系统关键配置文件与数据库备份"
+                },
+                {
+                    "name": "黑客扫描器工具指纹",
+                    "match_type": "ua_keyword",
+                    "pattern": "sqlmap|nikto|dirsearch|gobuster|wpscan",
+                    "level": "高危",
+                    "description": "拦截自动化扫描工具探测"
+                },
+                {
+                    "name": "高频 404 爆破熔断",
+                    "match_type": "status_rate",
+                    "threshold": 6,
+                    "window": 30,
+                    "level": "高危",
+                    "description": "30秒内连续 6 次 404 熔断"
                 }
             ], null, 2);
         } else if (currentImportType === 'blacklist') {
@@ -3971,6 +4081,53 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn.commit()
                 conn.close()
                 self._send_json({"success": True, "msg": "已删除请求特征策略"})
+                return
+
+            if path == "/api/http_traps/import":
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的请求特征策略数据，请检查格式"}, status=400)
+                    return
+
+                conn = get_db()
+                c = conn.cursor()
+                if mode == "replace":
+                    c.execute("DELETE FROM http_traps")
+
+                count = 0
+                now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                for idx, item in enumerate(parsed_items):
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name", f"导入策略-{idx+1}")).strip()
+                    mtype = str(item.get("match_type", "path_keyword")).strip()
+                    pattern = str(item.get("pattern", "")).strip()
+                    threshold = int(item.get("threshold") or 6)
+                    window = int(item.get("window") or 30)
+                    level = str(item.get("level", "极高危")).strip()
+                    desc = str(item.get("description", "")).strip()
+                    enabled = 1 if item.get("enabled") is not False else 0
+                    rule_id = str(item.get("rule_id") or f"ht_{int(time.time())}_{idx}")
+
+                    c.execute("""
+                    INSERT OR REPLACE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, ?, ?, ?)
+                    """, (rule_id, name, mtype, pattern, threshold, window, level, enabled, desc, now_dt))
+                    count += 1
+
+                conn.commit()
+                conn.close()
+                self._send_json({"success": True, "msg": f"成功{'全量覆盖' if mode=='replace' else '增量导入'} {count} 条请求特征策略"})
                 return
 
             if path == "/api/traps/import":

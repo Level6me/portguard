@@ -877,7 +877,7 @@ def resolve_ip_geo(ip):
 
     return {"country": "公网探测", "region": "", "city": "", "isp": ""}
 
-def ban_ip(ip, port, port_info):
+def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None):
     cfg = load_config()
     now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     now_ts = int(time.time())
@@ -890,17 +890,24 @@ def ban_ip(ip, port, port_info):
     ip = valid_ip
     
     # 1. 白名单拦截保护
-    whitelist = cfg.get("whitelist", [])
-    if ip_in_whitelist(ip, whitelist):
-        print(f"[WHITELIST] 忽略安全白名单 IP: {ip} 探测端口 {port}")
-        log_port_access_entry(ip, port, port_info.get("name", f"TCP/{port}"), action="WHITELIST")
+    if ip_in_whitelist(ip):
+        print(f"[WHITELIST] 忽略安全白名单 IP: {ip}")
+        if port:
+            log_port_access_entry(ip, port, (port_info or {}).get("name", f"TCP/{port}"), action="WHITELIST")
         return
 
-    # 2. 蜜罐阈值判定：严苛模式 (strict) 或勾选了「正常业务诱捕」时首击即封，常规模式按阈值防抖
-    defense_mode = str(cfg.get("defense_mode", "strict")).strip().lower()
-    is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_info.get("name", "")))
+    port_info = port_info or {}
+    port_val = port if port is not None else (port_info.get("port") or 443)
+    port_name = reason or port_info.get("name") or f"TCP/{port_val}"
+    event_category = category or port_info.get("category") or ("web" if port_val in (80, 443, 8080, 8888) else "other")
+    event_level = level or port_info.get("level", "高危")
+    ban_reason = reason or f"探测蜜罐端口 {port_val} ({port_name})"
 
-    if defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz:
+    # 2. 蜜罐阈值判定（若非直接指定原因或业务诱捕，按阈值防抖）
+    defense_mode = str(cfg.get("defense_mode", "strict")).strip().lower()
+    is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_name))
+
+    if reason or defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz:
         threshold = 1
     else:
         threshold = int(cfg.get("trap_threshold", 3) or 3)
@@ -926,14 +933,13 @@ def ban_ip(ip, port, port_info):
             cw.execute(
                 "INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status, hit_count) "
                 "VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'WATCH', ?)",
-                (ip, port, port_info.get("name", f"TCP/{port}"), port_info.get("category", "other"),
-                 port_info.get("level", "高危"), now_str, now_ts, hit_count)
+                (ip, port_val, port_name, event_category, event_level, now_str, now_ts, hit_count)
             )
             w_event_id = cw.lastrowid
             cw.execute(
                 "INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) "
                 "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
-                (ip, port, port_info.get("name", f"TCP/{port}"), now_str, now_ts)
+                (ip, port_val, port_name, now_str, now_ts)
             )
             w_port_id = cw.lastrowid
             conn_w.commit()
@@ -960,7 +966,7 @@ def ban_ip(ip, port, port_info):
             pass
         return
         
-    # 3. 达到阈值：毫秒级优先执行内核防火墙阻断与黑洞路由（参数数组，无 shell）
+    # 3. 达到阈值：毫秒级优先执行内核防火墙阻断与黑洞路由
     if cfg.get("ban_action_iptables", True):
         run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
         run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
@@ -969,9 +975,6 @@ def ban_ip(ip, port, port_info):
     if cfg.get("ban_action_blackhole", True):
         run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
         
-    port_name = port_info.get("name", f"TCP/{port}")
-    category = port_info.get("category", "other")
-    level = port_info.get("level", "高危")
     auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
     ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
@@ -981,23 +984,23 @@ def ban_ip(ip, port, port_info):
     c.execute("""
     INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
     VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'BANNED')
-    """, (ip, port, port_name, category, level, now_str, now_ts))
+    """, (ip, port_val, port_name, event_category, event_level, now_str, now_ts))
     event_id = c.lastrowid
     
     c.execute("""
     INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
     VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'INTERCEPTED', ?, ?)
-    """, (ip, port, port_name, now_str, now_ts))
+    """, (ip, port_val, port_name, now_str, now_ts))
     port_log_id = c.lastrowid
 
     c.execute("""
     INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
     VALUES (?, ?, '分析中...', ?, ?, ?, ?)
-    """, (ip, f"探测蜜罐端口 {port} ({port_name})", level, now_str, now_ts, ban_expire))
+    """, (ip, ban_reason, event_level, now_str, now_ts, ban_expire))
     conn.commit()
     conn.close()
     
-    # 5. 后台异步解析地理位置并回填（线程池 + 缓存，避免风暴与限流）
+    # 5. 后台异步解析地理位置并回填
     def _async_geo():
         geo = resolve_ip_geo(ip)
         try:
