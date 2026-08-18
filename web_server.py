@@ -3494,7 +3494,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(normalized)
                 return
 
-            if path == "/api/http_traps":
+            if path in ("/api/http_traps", "/api/http_traps/export"):
                 rules = get_http_traps()
                 self._send_json(rules)
                 return
