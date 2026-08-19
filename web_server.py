@@ -131,6 +131,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            overflow-x: hidden;
+            width: 100%;
+            max-width: 100vw;
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
             background-color: var(--bg);
@@ -140,7 +145,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             -webkit-font-smoothing: antialiased;
             transition: background-color 0.3s ease, color 0.3s ease;
         }
-        .container { max-width: 1100px; margin: 0 auto; }
+        .container { max-width: 1100px; width: 100%; min-width: 0; margin: 0 auto; }
 
         /* Toast Notifications */
         .toast-container {
@@ -341,6 +346,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             box-shadow: var(--shadow-sm);
             transition: transform 0.2s ease, box-shadow 0.2s ease;
             position: relative;
+            max-width: 100%;
+            min-width: 0;
+            overflow: hidden;
         }
         .card.interactive {
             cursor: pointer;
@@ -538,8 +546,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             background: var(--card-sec);
             border: 1px solid var(--border-subtle);
             border-radius: 10px;
-            padding: 8px 12px;
+            padding: 8px 10px;
             transition: background 0.15s ease;
+            width: 100%;
+            min-width: 0;
+            overflow: hidden;
+            box-sizing: border-box;
         }
         .diag-row-item:hover {
             background: var(--card-hover);
@@ -548,23 +560,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 6px;
-            gap: 8px;
+            margin-bottom: 5px;
+            gap: 6px;
+            width: 100%;
+            min-width: 0;
         }
         .diag-row-left {
             display: flex;
             align-items: center;
             flex: 1;
             min-width: 0;
-            gap: 6px;
+            gap: 5px;
+            overflow: hidden;
         }
         .diag-rank-badge {
             font-size: 10px;
             font-weight: 800;
             color: var(--text-sec);
             background: rgba(120, 120, 128, 0.12);
-            padding: 2px 6px;
-            border-radius: 6px;
+            padding: 2px 5px;
+            border-radius: 5px;
             flex-shrink: 0;
             font-family: inherit;
         }
@@ -581,7 +596,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             font-family: inherit;
         }
         .diag-count-text {
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 700;
             color: var(--accent);
             flex-shrink: 0;
@@ -593,6 +608,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             background: rgba(120, 120, 128, 0.12);
             border-radius: 99px;
             overflow: hidden;
+            width: 100%;
         }
         .diag-bar-fill {
             height: 100%;
@@ -2041,6 +2057,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
         }
 
+        const isNarrow = window.innerWidth <= 600;
+        const doughnutLegendPos = isNarrow ? 'bottom' : 'right';
+        const doughnutLegendLabels = {
+            color: textColor,
+            font: { size: isNarrow ? 9 : 10, weight: 600 },
+            boxWidth: isNarrow ? 8 : 10,
+            padding: isNarrow ? 4 : 8
+        };
+
         const ctxGeo = document.getElementById('analyticsGeoChart')?.getContext('2d');
         if (ctxGeo) {
             analyticsGeoChartInstance = new Chart(ctxGeo, {
@@ -2048,7 +2073,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 data: { labels: ['暂无数据'], datasets: [{ data: [1], backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93'], borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                    plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
         }
@@ -2093,7 +2118,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#007aff', '#34c759', '#8e8e93'], borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                    plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
         }
@@ -2105,7 +2130,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#ffd60a', '#30b0c7'], borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                    plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
         }
@@ -2114,10 +2139,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (ctxHttp) {
             analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
                 type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93'], borderWidth: 0 }] },
+                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'], borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                    plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
         }
@@ -4491,10 +4516,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                     if matched:
                         tag, is_scanner, name = matched
-                        display_str = f"{name} ({ua_str[:32]}...)" if len(ua_str) > 32 else name
                         top_uas.append({
                             "ua": ua_str,
-                            "display_name": display_str,
+                            "display_name": name,
                             "count": cnt,
                             "tag": tag,
                             "is_scanner": is_scanner
