@@ -2039,7 +2039,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }, 2400);
     }
 
-    // 图表分类点击与图例联动聚焦动效引擎 (Doughnut 扇区外弹隔离 + Bar 柱形聚焦淡化 + Multi-Line 分类加粗)
+    // 纯净图表调色板与不可变色彩引擎 (彻底根除反复切换导致的色彩污染/全变灰问题)
+    const PALETTE_GLOBAL = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93', '#ffd60a', '#ff2d55'];
+
     function setChartAlpha(colorStr, alpha) {
         if (!colorStr) return `rgba(142, 142, 147, ${alpha})`;
         if (colorStr.startsWith('#')) {
@@ -2057,65 +2059,62 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         return colorStr;
     }
 
-    // 环形图 (Doughnut) 分类点击与图例联动：被选分类扇区向外弹出，未选分类半透明暗淡
-    function applyDoughnutInteractive(chart) {
+    function getPureColorList(palette, count) {
+        return Array.from({length: count}, (_, i) => palette[i % palette.length]);
+    }
+
+    // 环形图 (Doughnut) 分类点击与图例联动聚焦动效
+    function applyDoughnutInteractive(chart, customPalette) {
         if (!chart) return;
+        const palette = customPalette || PALETTE_GLOBAL;
         chart._selectedCategoryIndex = -1;
+        chart._defaultPalette = palette;
 
         chart.resetCategoryFocus = function() {
             chart._selectedCategoryIndex = -1;
             const dataset = chart.data.datasets[0];
-            if (dataset && chart._baseBgColors) {
-                dataset.offset = Array(dataset.data?.length || 0).fill(0);
-                dataset.backgroundColor = [...chart._baseBgColors];
+            if (dataset && dataset.data) {
+                const total = dataset.data.length;
+                dataset.offset = Array(total).fill(0);
+                dataset.backgroundColor = getPureColorList(palette, total);
                 chart.update();
             }
         };
-        
+
         function toggleCategory(targetIdx) {
             const dataset = chart.data.datasets[0];
             if (!dataset || !dataset.data || dataset.data.length === 0) return;
-            
-            if (!chart._baseBgColors || chart._baseBgColors.length !== dataset.data.length) {
-                chart._baseBgColors = Array.isArray(dataset.backgroundColor) 
-                    ? [...dataset.backgroundColor] 
-                    : Array(dataset.data.length).fill(dataset.backgroundColor || '#007aff');
-            }
-            
-            const origColors = chart._baseBgColors;
             const total = dataset.data.length;
+            const fullColors = getPureColorList(palette, total);
 
             if (targetIdx >= 0 && targetIdx < total) {
                 if (chart._selectedCategoryIndex === targetIdx) {
-                    chart._selectedCategoryIndex = -1;
-                    dataset.offset = Array(total).fill(0);
-                    dataset.backgroundColor = [...origColors];
+                    chart.resetCategoryFocus();
                 } else {
                     chart._selectedCategoryIndex = targetIdx;
                     dataset.offset = Array(total).fill(0);
                     dataset.offset[targetIdx] = 16;
-                    dataset.backgroundColor = origColors.map((col, i) => 
+                    dataset.backgroundColor = fullColors.map((col, i) => 
                         (i === targetIdx) ? col : setChartAlpha(col, 0.22)
                     );
+                    chart.update();
                 }
             } else {
                 chart.resetCategoryFocus();
-                return;
             }
-            chart.update();
         }
 
-        // 使用 point + intersect: true 精准判断是否真正点在扇区内部
-        chart.options.onClick = (evt) => {
-            const e = evt.native || evt;
-            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
-            if (elements && elements.length > 0) {
-                toggleCategory(elements[0].index);
-            } else {
-                // 点击空心圆孔或空白处：立即还原
-                chart.resetCategoryFocus();
-            }
-        };
+        const canvas = chart.canvas;
+        if (canvas) {
+            canvas.onclick = (e) => {
+                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                if (elements && elements.length > 0) {
+                    toggleCategory(elements[0].index);
+                } else {
+                    chart.resetCategoryFocus();
+                }
+            };
+        }
 
         if (chart.options.plugins && chart.options.plugins.legend) {
             chart.options.plugins.legend.onClick = (evt, legendItem) => {
@@ -2126,133 +2125,126 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // 柱状图 / 条形图 (Bar) 分类点击：被选分类柱子保持鲜明高亮，未选分类淡化
-    function applyBarInteractive(chart) {
+    // 柱状图 / 条形图 (Bar) 分类点击聚焦动效
+    function applyBarInteractive(chart, defaultColorOrPalette) {
         if (!chart) return;
         chart._selectedCategoryIndex = -1;
+        chart._defaultBarPalette = defaultColorOrPalette;
+
+        function getFullBarColors(count) {
+            if (Array.isArray(defaultColorOrPalette)) {
+                return getPureColorList(defaultColorOrPalette, count);
+            }
+            return Array(count).fill(defaultColorOrPalette || '#007aff');
+        }
 
         chart.resetCategoryFocus = function() {
             chart._selectedCategoryIndex = -1;
             const dataset = chart.data.datasets[0];
-            if (dataset && chart._baseBgColors) {
-                dataset.backgroundColor = [...chart._baseBgColors];
+            if (dataset && dataset.data) {
+                const total = dataset.data.length;
+                dataset.backgroundColor = getFullBarColors(total);
                 chart.update();
             }
         };
-        
+
         function toggleBarCategory(targetIdx) {
             const dataset = chart.data.datasets[0];
             if (!dataset || !dataset.data || dataset.data.length === 0) return;
-            
-            if (!chart._baseBgColors || chart._baseBgColors.length !== dataset.data.length) {
-                chart._baseBgColors = Array.isArray(dataset.backgroundColor) 
-                    ? [...dataset.backgroundColor] 
-                    : Array(dataset.data.length).fill(dataset.backgroundColor || '#ff3b30');
-            }
-            
-            const origColors = chart._baseBgColors;
             const total = dataset.data.length;
+            const fullColors = getFullBarColors(total);
 
             if (targetIdx >= 0 && targetIdx < total) {
                 if (chart._selectedCategoryIndex === targetIdx) {
-                    chart._selectedCategoryIndex = -1;
-                    dataset.backgroundColor = [...origColors];
+                    chart.resetCategoryFocus();
                 } else {
                     chart._selectedCategoryIndex = targetIdx;
-                    dataset.backgroundColor = origColors.map((col, i) => 
+                    dataset.backgroundColor = fullColors.map((col, i) => 
                         (i === targetIdx) ? col : setChartAlpha(col, 0.18)
                     );
+                    chart.update();
                 }
             } else {
                 chart.resetCategoryFocus();
-                return;
             }
-            chart.update();
         }
 
-        chart.options.onClick = (evt) => {
-            const e = evt.native || evt;
-            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
-            if (elements && elements.length > 0) {
-                toggleBarCategory(elements[0].index);
-            } else {
-                // 点击柱间空白或边缘空白：立即还原
-                chart.resetCategoryFocus();
-            }
-        };
+        const canvas = chart.canvas;
+        if (canvas) {
+            canvas.onclick = (e) => {
+                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                if (elements && elements.length > 0) {
+                    toggleBarCategory(elements[0].index);
+                } else {
+                    chart.resetCategoryFocus();
+                }
+            };
+        }
     }
 
-    // 多数据集折线图 (Multi-Line) 分类曲线点击：被选分类折线加粗，未选分类淡化
-    function applyMultiLineInteractive(chart) {
+    // 多数据集折线图 (Multi-Line) 分类曲线点击聚焦动效
+    function applyMultiLineInteractive(chart, defaultLineConfigs) {
         if (!chart) return;
         chart._selectedDatasetIndex = -1;
+        chart._defaultLineConfigs = defaultLineConfigs;
 
         chart.resetCategoryFocus = function() {
             chart._selectedDatasetIndex = -1;
-            if (chart.data.datasets && chart._baseLines) {
+            if (chart.data.datasets) {
                 chart.data.datasets.forEach((ds, i) => {
-                    if (chart._baseLines[i]) {
-                        ds.borderColor = chart._baseLines[i].borderColor;
-                        ds.backgroundColor = chart._baseLines[i].backgroundColor;
-                        ds.borderWidth = chart._baseLines[i].borderWidth;
-                        ds.pointRadius = chart._baseLines[i].pointRadius;
+                    const cfg = defaultLineConfigs[i];
+                    if (cfg) {
+                        ds.borderColor = cfg.borderColor;
+                        ds.backgroundColor = cfg.backgroundColor;
+                        ds.borderWidth = cfg.borderWidth;
+                        ds.pointRadius = cfg.pointRadius;
                     }
                 });
                 chart.update();
             }
         };
-        
+
         function toggleLineCategory(targetDsIdx) {
             if (!chart.data.datasets || chart.data.datasets.length === 0) return;
-            
-            if (!chart._baseLines || chart._baseLines.length !== chart.data.datasets.length) {
-                chart._baseLines = chart.data.datasets.map(ds => ({
-                    borderColor: ds.borderColor,
-                    backgroundColor: ds.backgroundColor,
-                    borderWidth: ds.borderWidth || 2.2,
-                    pointRadius: ds.pointRadius || 2
-                }));
-            }
-            
-            const orig = chart._baseLines;
             const total = chart.data.datasets.length;
 
             if (targetDsIdx >= 0 && targetDsIdx < total) {
                 if (chart._selectedDatasetIndex === targetDsIdx) {
                     chart.resetCategoryFocus();
-                    return;
                 } else {
                     chart._selectedDatasetIndex = targetDsIdx;
                     chart.data.datasets.forEach((ds, i) => {
+                        const cfg = defaultLineConfigs[i] || {};
                         if (i === targetDsIdx) {
-                            ds.borderColor = orig[i].borderColor;
-                            ds.backgroundColor = orig[i].backgroundColor;
+                            ds.borderColor = cfg.borderColor;
+                            ds.backgroundColor = cfg.backgroundColor;
                             ds.borderWidth = 3.6;
                             ds.pointRadius = 4;
                         } else {
-                            ds.borderColor = setChartAlpha(orig[i].borderColor, 0.15);
+                            ds.borderColor = setChartAlpha(cfg.borderColor || '#999', 0.15);
                             ds.backgroundColor = 'transparent';
                             ds.borderWidth = 1.2;
                             ds.pointRadius = 0;
                         }
                     });
+                    chart.update();
                 }
             } else {
                 chart.resetCategoryFocus();
-                return;
             }
-            chart.update();
         }
 
-        chart.options.onClick = (evt) => {
-            const e = evt.native || evt;
-            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
-            if (elements && elements.length > 0) {
-                toggleLineCategory(elements[0].datasetIndex);
-            } else {
-                chart.resetCategoryFocus();
-            }
-        };
+        const canvas = chart.canvas;
+        if (canvas) {
+            canvas.onclick = (e) => {
+                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                if (elements && elements.length > 0) {
+                    toggleLineCategory(elements[0].datasetIndex);
+                } else {
+                    chart.resetCategoryFocus();
+                }
+            };
+        }
 
         if (chart.options.plugins && chart.options.plugins.legend) {
             chart.options.plugins.legend.onClick = (evt, legendItem) => {
@@ -2276,27 +2268,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 chart.update();
             }
         };
-        
-        chart.options.onClick = (evt) => {
-            const e = evt.native || evt;
-            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
-            const dataset = chart.data.datasets[0];
-            if (!dataset || !dataset.data) return;
-            const total = dataset.data.length;
 
-            if (elements && elements.length > 0) {
-                const clickedIdx = elements[0].index;
-                if (chart._selectedPointIndex === clickedIdx) {
-                    chart.resetCategoryFocus();
+        const canvas = chart.canvas;
+        if (canvas) {
+            canvas.onclick = (e) => {
+                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                const dataset = chart.data.datasets[0];
+                if (!dataset || !dataset.data) return;
+                const total = dataset.data.length;
+
+                if (elements && elements.length > 0) {
+                    const clickedIdx = elements[0].index;
+                    if (chart._selectedPointIndex === clickedIdx) {
+                        chart.resetCategoryFocus();
+                    } else {
+                        chart._selectedPointIndex = clickedIdx;
+                        dataset.pointRadius = Array(total).fill(2).map((r, i) => (i === clickedIdx ? 6 : 2));
+                        chart.update();
+                    }
                 } else {
-                    chart._selectedPointIndex = clickedIdx;
-                    dataset.pointRadius = Array(total).fill(2).map((r, i) => (i === clickedIdx ? 6 : 2));
-                    chart.update();
+                    chart.resetCategoryFocus();
                 }
-            } else {
-                chart.resetCategoryFocus();
-            }
-        };
+            };
+        }
     }
 
     function initCharts() {
@@ -2336,13 +2330,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         const ctxPort = document.getElementById('portChart')?.getContext('2d');
         if (ctxPort) {
+            const portPalette = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'];
             portChartInstance = new Chart(ctxPort, {
                 type: 'doughnut',
                 data: {
                     labels: ['暂无数据'],
                     datasets: [{
                         data: [1],
-                        backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'],
+                        backgroundColor: portPalette,
                         borderWidth: 0
                     }]
                 },
@@ -2351,7 +2346,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 11, weight: 600 } } } }
                 }
             });
-            applyDoughnutInteractive(portChartInstance);
+            applyDoughnutInteractive(portChartInstance, portPalette);
         }
     }
 
@@ -2364,14 +2359,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         const ctxTrend = document.getElementById('analyticsTrendChart')?.getContext('2d');
         if (ctxTrend) {
+            const trendConfigs = [
+                { borderColor: '#007aff', backgroundColor: 'rgba(0, 122, 255, 0.12)', borderWidth: 2.2, pointRadius: 2 },
+                { borderColor: '#af52de', backgroundColor: 'rgba(175, 82, 222, 0.08)', borderWidth: 2.2, pointRadius: 2 },
+                { borderColor: '#ff9500', backgroundColor: 'rgba(255, 149, 0, 0.06)', borderWidth: 2.2, pointRadius: 2 }
+            ];
             analyticsTrendChartInstance = new Chart(ctxTrend, {
                 type: 'line',
                 data: {
                     labels: [],
                     datasets: [
-                        { label: '蜜罐拦截', data: [], borderColor: '#007aff', backgroundColor: 'rgba(0, 122, 255, 0.12)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 },
-                        { label: '端口嗅探', data: [], borderColor: '#af52de', backgroundColor: 'rgba(175, 82, 222, 0.08)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 },
-                        { label: 'Web访问', data: [], borderColor: '#ff9500', backgroundColor: 'rgba(255, 149, 0, 0.06)', fill: true, tension: 0.35, borderWidth: 2.2, pointRadius: 2 }
+                        { label: '蜜罐拦截', data: [], ...trendConfigs[0], fill: true, tension: 0.35 },
+                        { label: '端口嗅探', data: [], ...trendConfigs[1], fill: true, tension: 0.35 },
+                        { label: 'Web访问', data: [], ...trendConfigs[2], fill: true, tension: 0.35 }
                     ]
                 },
                 options: {
@@ -2383,7 +2383,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyMultiLineInteractive(analyticsTrendChartInstance);
+            applyMultiLineInteractive(analyticsTrendChartInstance, trendConfigs);
         }
 
         const ctxHourly = document.getElementById('analyticsHourlyChart')?.getContext('2d');
@@ -2395,7 +2395,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     datasets: [{
                         label: '攻击触碰频次',
                         data: Array(24).fill(0),
-                        backgroundColor: 'rgba(255, 59, 48, 0.75)',
+                        backgroundColor: 'rgba(255, 59, 48, 0.8)',
                         hoverBackgroundColor: '#ff3b30',
                         borderRadius: 4
                     }]
@@ -2409,7 +2409,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyBarInteractive(analyticsHourlyChartInstance);
+            applyBarInteractive(analyticsHourlyChartInstance, 'rgba(255, 59, 48, 0.8)');
         }
 
         const isNarrow = window.innerWidth <= 600;
@@ -2423,22 +2423,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         const ctxGeo = document.getElementById('analyticsGeoChart')?.getContext('2d');
         if (ctxGeo) {
+            const geoPalette = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93'];
             analyticsGeoChartInstance = new Chart(ctxGeo, {
                 type: 'doughnut',
-                data: { labels: ['暂无数据'], datasets: [{ data: [1], backgroundColor: ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93'], borderWidth: 0 }] },
+                data: { labels: ['暂无数据'], datasets: [{ data: [1], backgroundColor: geoPalette, borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
-            applyDoughnutInteractive(analyticsGeoChartInstance);
+            applyDoughnutInteractive(analyticsGeoChartInstance, geoPalette);
         }
 
         const ctxIsp = document.getElementById('analyticsIspChart')?.getContext('2d');
         if (ctxIsp) {
             analyticsIspChartInstance = new Chart(ctxIsp, {
                 type: 'bar',
-                data: { labels: [], datasets: [{ label: '威胁源实体', data: [], backgroundColor: 'rgba(0, 122, 255, 0.75)', borderRadius: 4 }] },
+                data: { labels: [], datasets: [{ label: '威胁源实体', data: [], backgroundColor: 'rgba(0, 122, 255, 0.8)', borderRadius: 4 }] },
                 options: {
                     indexAxis: 'y',
                     responsive: true, maintainAspectRatio: false,
@@ -2449,14 +2450,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyBarInteractive(analyticsIspChartInstance);
+            applyBarInteractive(analyticsIspChartInstance, 'rgba(0, 122, 255, 0.8)');
         }
 
         const ctxCat = document.getElementById('analyticsCategoryChart')?.getContext('2d');
         if (ctxCat) {
+            const catPalette = ['#ff3b30', '#ff9500', '#af52de', '#007aff', '#34c759', '#5856d6', '#30b0c7'];
             analyticsCategoryChartInstance = new Chart(ctxCat, {
                 type: 'bar',
-                data: { labels: [], datasets: [{ label: '攻击拦截量', data: [], backgroundColor: ['#ff3b30', '#ff9500', '#af52de', '#007aff', '#34c759', '#5856d6'], borderRadius: 4 }] },
+                data: { labels: [], datasets: [{ label: '攻击拦截量', data: [], backgroundColor: catPalette, borderRadius: 4 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { display: false } },
@@ -2466,46 +2468,49 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyBarInteractive(analyticsCategoryChartInstance);
+            applyBarInteractive(analyticsCategoryChartInstance, catPalette);
         }
 
         const ctxAction = document.getElementById('analyticsActionChart')?.getContext('2d');
         if (ctxAction) {
+            const actionPalette = ['#ff3b30', '#ff9500', '#007aff', '#34c759', '#8e8e93'];
             analyticsActionChartInstance = new Chart(ctxAction, {
                 type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#007aff', '#34c759', '#8e8e93'], borderWidth: 0 }] },
+                data: { labels: [], datasets: [{ data: [], backgroundColor: actionPalette, borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
-            applyDoughnutInteractive(analyticsActionChartInstance);
+            applyDoughnutInteractive(analyticsActionChartInstance, actionPalette);
         }
 
         const ctxLevel = document.getElementById('analyticsLevelChart')?.getContext('2d');
         if (ctxLevel) {
+            const levelPalette = ['#ff3b30', '#ff9500', '#ffd60a', '#30b0c7'];
             analyticsLevelChartInstance = new Chart(ctxLevel, {
                 type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#ff3b30', '#ff9500', '#ffd60a', '#30b0c7'], borderWidth: 0 }] },
+                data: { labels: [], datasets: [{ data: [], backgroundColor: levelPalette, borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
-            applyDoughnutInteractive(analyticsLevelChartInstance);
+            applyDoughnutInteractive(analyticsLevelChartInstance, levelPalette);
         }
 
         const ctxHttp = document.getElementById('analyticsHttpStatusChart')?.getContext('2d');
         if (ctxHttp) {
+            const httpPalette = ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'];
             analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
                 type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'], borderWidth: 0 }] },
+                data: { labels: [], datasets: [{ data: [], backgroundColor: httpPalette, borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
-            applyDoughnutInteractive(analyticsHttpStatusChartInstance);
+            applyDoughnutInteractive(analyticsHttpStatusChartInstance, httpPalette);
         }
     }
 
@@ -2610,7 +2615,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.hourly_distribution && analyticsHourlyChartInstance) {
                 analyticsHourlyChartInstance.data.labels = data.hourly_distribution.map(h => h.hour);
                 analyticsHourlyChartInstance.data.datasets[0].data = data.hourly_distribution.map(h => h.count);
-                analyticsHourlyChartInstance._baseBgColors = null;
+                analyticsHourlyChartInstance.data.datasets[0].backgroundColor = Array(data.hourly_distribution.length).fill('rgba(255, 59, 48, 0.8)');
                 analyticsHourlyChartInstance._selectedCategoryIndex = -1;
                 analyticsHourlyChartInstance.resize();
                 analyticsHourlyChartInstance.update();
@@ -2618,11 +2623,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 4. Geo Countries
             if (data.geo_countries && analyticsGeoChartInstance && data.geo_countries.length > 0) {
+                const geoPalette = analyticsGeoChartInstance._defaultPalette || PALETTE_GLOBAL;
                 analyticsGeoChartInstance.data.labels = data.geo_countries.map(g => `${g.country} (${g.count})`);
                 analyticsGeoChartInstance.data.datasets[0].data = data.geo_countries.map(g => g.count);
-                analyticsGeoChartInstance._baseBgColors = null;
-                analyticsGeoChartInstance._selectedCategoryIndex = -1;
+                analyticsGeoChartInstance.data.datasets[0].backgroundColor = getPureColorList(geoPalette, data.geo_countries.length);
                 analyticsGeoChartInstance.data.datasets[0].offset = Array(data.geo_countries.length).fill(0);
+                analyticsGeoChartInstance._selectedCategoryIndex = -1;
                 analyticsGeoChartInstance.resize();
                 analyticsGeoChartInstance.update();
             }
@@ -2631,7 +2637,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.geo_isps && analyticsIspChartInstance && data.geo_isps.length > 0) {
                 analyticsIspChartInstance.data.labels = data.geo_isps.map(g => (g.isp.length > 18 ? g.isp.substring(0, 16) + '...' : g.isp));
                 analyticsIspChartInstance.data.datasets[0].data = data.geo_isps.map(g => g.count);
-                analyticsIspChartInstance._baseBgColors = null;
+                analyticsIspChartInstance.data.datasets[0].backgroundColor = Array(data.geo_isps.length).fill('rgba(0, 122, 255, 0.8)');
                 analyticsIspChartInstance._selectedCategoryIndex = -1;
                 analyticsIspChartInstance.resize();
                 analyticsIspChartInstance.update();
@@ -2639,9 +2645,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 6. Categories
             if (data.category_distribution && analyticsCategoryChartInstance && data.category_distribution.length > 0) {
+                const catPalette = analyticsCategoryChartInstance._defaultBarPalette || PALETTE_GLOBAL;
                 analyticsCategoryChartInstance.data.labels = data.category_distribution.map(c => CATEGORY_LABELS[c.category] || c.category);
                 analyticsCategoryChartInstance.data.datasets[0].data = data.category_distribution.map(c => c.count);
-                analyticsCategoryChartInstance._baseBgColors = null;
+                analyticsCategoryChartInstance.data.datasets[0].backgroundColor = getPureColorList(catPalette, data.category_distribution.length);
                 analyticsCategoryChartInstance._selectedCategoryIndex = -1;
                 analyticsCategoryChartInstance.resize();
                 analyticsCategoryChartInstance.update();
@@ -2649,23 +2656,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 7. Actions
             if (data.action_distribution && analyticsActionChartInstance && data.action_distribution.length > 0) {
+                const actPalette = analyticsActionChartInstance._defaultPalette || PALETTE_GLOBAL;
                 const actionNames = { 'INTERCEPTED': '诱捕阻断', 'PROBE': '外部探测', 'BUSINESS': '业务访问', 'WHITELIST': '白名单放行', 'WATCH': '持续观察' };
                 analyticsActionChartInstance.data.labels = data.action_distribution.map(a => `${actionNames[a.action] || a.action} (${a.count})`);
                 analyticsActionChartInstance.data.datasets[0].data = data.action_distribution.map(a => a.count);
-                analyticsActionChartInstance._baseBgColors = null;
-                analyticsActionChartInstance._selectedCategoryIndex = -1;
+                analyticsActionChartInstance.data.datasets[0].backgroundColor = getPureColorList(actPalette, data.action_distribution.length);
                 analyticsActionChartInstance.data.datasets[0].offset = Array(data.action_distribution.length).fill(0);
+                analyticsActionChartInstance._selectedCategoryIndex = -1;
                 analyticsActionChartInstance.resize();
                 analyticsActionChartInstance.update();
             }
 
             // 8. Levels
             if (data.threat_level_distribution && analyticsLevelChartInstance && data.threat_level_distribution.length > 0) {
+                const lvlPalette = analyticsLevelChartInstance._defaultPalette || PALETTE_GLOBAL;
                 analyticsLevelChartInstance.data.labels = data.threat_level_distribution.map(l => `${l.level} (${l.count})`);
                 analyticsLevelChartInstance.data.datasets[0].data = data.threat_level_distribution.map(l => l.count);
-                analyticsLevelChartInstance._baseBgColors = null;
-                analyticsLevelChartInstance._selectedCategoryIndex = -1;
+                analyticsLevelChartInstance.data.datasets[0].backgroundColor = getPureColorList(lvlPalette, data.threat_level_distribution.length);
                 analyticsLevelChartInstance.data.datasets[0].offset = Array(data.threat_level_distribution.length).fill(0);
+                analyticsLevelChartInstance._selectedCategoryIndex = -1;
                 analyticsLevelChartInstance.resize();
                 analyticsLevelChartInstance.update();
             }
@@ -2682,23 +2691,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         if (ctxHttp) {
                             const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
                             const textColor = isDark ? '#98989d' : '#8e8e93';
+                            const httpPalette = ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'];
                             analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
                                 type: 'doughnut',
-                                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'], borderWidth: 0 }] },
+                                data: { labels: [], datasets: [{ data: [], backgroundColor: httpPalette, borderWidth: 0 }] },
                                 options: {
                                     responsive: true, maintainAspectRatio: false,
                                     plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
                                 }
                             });
-                            applyDoughnutInteractive(analyticsHttpStatusChartInstance);
+                            applyDoughnutInteractive(analyticsHttpStatusChartInstance, httpPalette);
                         }
                     }
                     if (analyticsHttpStatusChartInstance) {
+                        const httpPalette = analyticsHttpStatusChartInstance._defaultPalette || PALETTE_GLOBAL;
                         analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
                         analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
-                        analyticsHttpStatusChartInstance._baseBgColors = null;
-                        analyticsHttpStatusChartInstance._selectedCategoryIndex = -1;
+                        analyticsHttpStatusChartInstance.data.datasets[0].backgroundColor = getPureColorList(httpPalette, data.http_status_distribution.length);
                         analyticsHttpStatusChartInstance.data.datasets[0].offset = Array(data.http_status_distribution.length).fill(0);
+                        analyticsHttpStatusChartInstance._selectedCategoryIndex = -1;
                         analyticsHttpStatusChartInstance.resize();
                         analyticsHttpStatusChartInstance.update();
                     }
@@ -2970,11 +2981,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             if (data.port_distribution && portChartInstance && data.port_distribution.length > 0) {
+                const portPalette = portChartInstance._defaultPalette || ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'];
                 portChartInstance.data.labels = data.port_distribution.map(p => `${p.port} (${p.name})`);
                 portChartInstance.data.datasets[0].data = data.port_distribution.map(p => p.count);
-                portChartInstance._baseBgColors = null;
-                portChartInstance._selectedCategoryIndex = -1;
+                portChartInstance.data.datasets[0].backgroundColor = getPureColorList(portPalette, data.port_distribution.length);
                 portChartInstance.data.datasets[0].offset = Array(data.port_distribution.length).fill(0);
+                portChartInstance._selectedCategoryIndex = -1;
                 portChartInstance.update();
             }
 
@@ -4826,21 +4838,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             thresholdSelect.addEventListener('change', updateThresholdBadge);
         }
 
-        // 点击图表卡片外部空白区域时，自动还原卡片内图表的分类聚焦状态
+        // 点击页面任意空白背景或卡片外部空白时，自动还原所有图表的分类聚焦状态
         document.addEventListener('click', (e) => {
-            if (e.target.tagName === 'CANVAS' || e.target.closest('.chartjs-legend') || e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) {
+            if (e.target.tagName === 'CANVAS' || e.target.closest('button') || e.target.closest('input') || e.target.closest('select') || e.target.closest('a')) {
                 return;
             }
-            const card = e.target.closest('.card');
-            if (card) {
-                const canvas = card.querySelector('canvas');
-                if (canvas && typeof Chart !== 'undefined') {
-                    const inst = Chart.getChart(canvas);
-                    if (inst && typeof inst.resetCategoryFocus === 'function') {
-                        inst.resetCategoryFocus();
+            [
+                trendChartInstance, portChartInstance, analyticsTrendChartInstance,
+                analyticsHourlyChartInstance, analyticsGeoChartInstance, analyticsIspChartInstance,
+                analyticsCategoryChartInstance, analyticsActionChartInstance, analyticsLevelChartInstance,
+                analyticsHttpStatusChartInstance
+            ].forEach(chart => {
+                if (chart && (chart._selectedCategoryIndex >= 0 || chart._selectedDatasetIndex >= 0 || chart._selectedPointIndex >= 0)) {
+                    if (typeof chart.resetCategoryFocus === 'function') {
+                        chart.resetCategoryFocus();
                     }
                 }
-            }
+            });
         });
     });
 </script>
