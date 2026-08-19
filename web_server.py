@@ -2219,6 +2219,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         if (analyticsDataCache) {
             renderWebDiagList(analyticsDataCache.top_sensitive_paths || [], analyticsDataCache.top_user_agents || []);
+        } else {
+            fetchAnalyticsData(false);
         }
     }
 
@@ -2226,25 +2228,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const container = document.getElementById('web-diag-container');
         if (!container) return;
         const isPath = currentWebDiagTab === 'path';
-        const list = isPath ? paths : uas;
+        const list = Array.isArray(isPath ? paths : uas) ? (isPath ? paths : uas) : [];
 
         if (!list || list.length === 0) {
             container.innerHTML = '<div style="text-align: center; color: var(--text-sec); padding: 30px; font-size: 12px;">暂无该维度的访问指纹记录</div>';
             return;
         }
 
-        const maxCount = Math.max(...list.map(x => x.count), 1);
+        const counts = list.map(x => parseInt(x.count) || 0);
+        const maxCount = Math.max(...counts, 1);
         let html = '<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">';
         list.forEach((item, idx) => {
-            const title = isPath ? `${item.method ? item.method + ' ' : ''}${item.path}` : item.ua;
-            const pct = Math.round((item.count / maxCount) * 100);
+            const rawTitle = isPath ? `${item.method ? item.method + ' ' : ''}${item.path || ''}` : (item.ua || '未知 UA / 空指纹');
+            const safeTitle = escapeHtml(rawTitle);
+            const count = parseInt(item.count) || 0;
+            const pct = Math.min(100, Math.max(0, Math.round((count / maxCount) * 100)));
             html += `
                 <div style="background: var(--card-sec); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 10px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px;">
-                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;" title="${title}">
-                            #${idx + 1} ${title}
+                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; cursor: help;" title="${safeTitle}">
+                            #${idx + 1} ${safeTitle}
                         </span>
-                        <span style="color: var(--accent); font-weight: 700;">${item.count} 次</span>
+                        <span style="color: var(--accent); font-weight: 700;">${count} 次</span>
                     </div>
                     <div style="height: 4px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden;">
                         <div style="height: 100%; width: ${pct}%; background: ${isPath ? 'linear-gradient(90deg, #007aff, #5856d6)' : 'linear-gradient(90deg, #ff9500, #ff3b30)'}; border-radius: 99px;"></div>
@@ -4291,10 +4296,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 http_status_dist = [{"code": str(row[0]), "count": row[1]} for row in c.fetchall()]
 
                 c.execute("SELECT path, method, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY path ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
-                top_paths = [{"path": row[0], "method": row[1], "count": row[2]} for row in c.fetchall()]
+                top_paths = [{"path": str(row[0] or "/"), "method": str(row[1] or "GET"), "count": int(row[2] or 0)} for row in c.fetchall()]
 
                 c.execute("SELECT user_agent, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND user_agent IS NOT NULL AND user_agent != '' GROUP BY user_agent ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
-                top_uas = [{"ua": row[0], "count": row[1]} for row in c.fetchall()]
+                top_uas = [{"ua": str(row[0] or "未知 UA / 空指纹"), "count": int(row[1] or 0)} for row in c.fetchall()]
 
                 c.execute("""
                     SELECT ip, country, isp, level, COUNT(*) as hits, MAX(attack_time) as last_seen, GROUP_CONCAT(DISTINCT port) as ports 
