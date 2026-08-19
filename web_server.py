@@ -1856,6 +1856,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function csvEscape(s) {
         return String(s == null ? '' : s).replace(/"/g, '""');
     }
+
+    function getUATagInfo(ua) {
+        if (!ua || ua === '-' || ua === 'null' || ua === 'None' || ua === 'undefined' || ua === 'Unknown') {
+            return { tag: '未知指纹', cls: 'neutral', icon: '❓' };
+        }
+        const lower = ua.toLowerCase();
+        if (/sqlmap|nmap|nikto|nuclei|fscan|acunetix|awvs|nessus|dirsearch|gobuster|ffuf|hydra|wpscan/.test(lower)) {
+            return { tag: '漏洞扫描器', cls: 'danger', icon: '🔥' };
+        }
+        if (/censys|shodan|zoomeye|zgrab|masscan|netcraft|infrawatch|whatweb|httpx|probe|scan/.test(lower)) {
+            return { tag: '资产测绘', cls: 'danger', icon: '📡' };
+        }
+        if (/libredtail|xmr|miner/.test(lower)) {
+            return { tag: '恶意脚本', cls: 'danger', icon: '☠️' };
+        }
+        if (/python|requests|urllib|aiohttp|go-http|curl|wget|java|httpclient|axios/.test(lower)) {
+            return { tag: '脚本工具', cls: 'accent', icon: '⚡' };
+        }
+        if (/gptbot|oai-searchbot|bytespider|googlebot|bingbot|baiduspider|yandex|bot|crawler|spider/.test(lower)) {
+            return { tag: '网络爬虫', cls: 'accent', icon: '🕷️' };
+        }
+        if (/iphone|ipad|android|mobile/.test(lower)) {
+            return { tag: '移动端', cls: 'neutral', icon: '📱' };
+        }
+        if (/macintosh|windows nt|linux|x11|chrome|safari|firefox|edge/.test(lower)) {
+            return { tag: '桌面端', cls: 'neutral', icon: '💻' };
+        }
+        return { tag: '自定义UA', cls: 'neutral', icon: '🤖' };
+    }
     const COUNTRY_CN_MAP = {
         "United States": "美国", "Canada": "加拿大", "Mexico": "墨西哥",
         "Brazil": "巴西", "Argentina": "阿根廷", "Chile": "智利", "Colombia": "哥伦比亚",
@@ -2856,13 +2885,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ? `<button class="action-btn danger" onclick="quickBanIP('${jsEscape(e.ip)}', '手动封禁观察中IP')">立即封禁</button>`
                 : `<button class="action-btn success" onclick="unbanIP('${jsEscape(e.ip)}')">一键解封</button>`;
 
+            const uaInfo = getUATagInfo(e.user_agent);
+            let uaBadge = '';
+            if (e.user_agent && uaInfo && uaInfo.tag !== '未知指纹') {
+                uaBadge = `<span class="tag ${uaInfo.cls}" style="margin-left:4px; font-size:10px; padding:1px 6px; cursor:help; font-weight:700; display:inline-inline-flex; align-items:center; gap:2px;" title="扫描器/客户端指纹: ${escapeHtml(e.user_agent)}">${uaInfo.icon} ${escapeHtml(uaInfo.tag)}</span>`;
+            }
+
             html += `
             <tr>
                 <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${e.attack_time}</td>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span></td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
-                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span></td>
+                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
                 <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
                 <td>${actionBtn}</td>
@@ -3495,8 +3530,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <th style="width: 150px;">归属地域</th>
                         <th style="width: 180px;">访问域名 (Host)</th>
                         <th>请求方法 & 访问路径 (URI)</th>
-                        <th style="width: 100px;">状态码</th>
-                        <th style="width: 200px;">客户端设备 (User-Agent)</th>
+                        <th style="width: 90px;">状态码</th>
+                        <th style="width: 130px;">指纹标签 (UA)</th>
                     </tr>
                 `;
             }
@@ -3608,7 +3643,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 const geoText = formatGeoCN(l);
                 const domain = l.domain || '默认站点';
-                const uaShort = (l.user_agent || 'Unknown').slice(0, 36);
+                const uaInfo = getUATagInfo(l.user_agent);
+                const uaTagHtml = `<span class="tag ${uaInfo.cls}" style="font-size:11px; font-weight:700; cursor:help; display:inline-flex; align-items:center; gap:3px;" title="${escapeHtml(l.user_agent || '无详细 UA 标头')}">${uaInfo.icon} ${escapeHtml(uaInfo.tag)}</span>`;
                 const rawPath = l.path || '/';
                 const pathDisplay = (rawPath.length > 45) ? (rawPath.slice(0, 42) + '...') : rawPath;
                 html += `
@@ -3624,7 +3660,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </div>
                     </td>
                     <td>${statusTag}</td>
-                    <td><span style="font-size:11px; color:var(--text-sec); max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(l.user_agent || '')}">${escapeHtml(uaShort)}</span></td>
+                    <td>${uaTagHtml}</td>
                 </tr>
                 `;
             });
@@ -4614,7 +4650,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/events":
                 conn = get_db()
                 c = conn.cursor()
-                c.execute("SELECT id, ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, status FROM events ORDER BY id DESC LIMIT 200")
+                c.execute("""
+                    SELECT e.id, e.ip, e.port, e.proto, e.port_name, e.category, e.level, e.country, e.region, e.city, e.isp, e.attack_time, e.status,
+                           (SELECT a.user_agent FROM access_logs a WHERE a.ip = e.ip AND a.user_agent IS NOT NULL AND TRIM(a.user_agent) NOT IN ('', '-', 'null', 'None') ORDER BY a.id DESC LIMIT 1) as user_agent
+                    FROM events e 
+                    ORDER BY e.id DESC 
+                    LIMIT 200
+                """)
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 for r in rows:
