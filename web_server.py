@@ -136,6 +136,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             overflow-x: hidden;
             width: 100%;
             max-width: 100vw;
+            touch-action: manipulation;
+            -webkit-text-size-adjust: 100%;
+            overscroll-behavior: none;
+            overscroll-behavior-y: none;
+            position: relative;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -1522,9 +1527,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
                     被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                    <input type="text" id="input-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP (如 1.2.3.4)" style="flex: 1; min-width: 180px; padding: 8px 12px; font-size: 12px; font-family: monospace;">
-                    <input type="text" id="input-hidden-remark" class="input-field" placeholder="备注 (可选)" style="width: 130px; padding: 8px 10px; font-size: 12px;">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="input-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP 地址 (如 1.2.3.4)" style="flex: 1; padding: 8px 12px; font-size: 12px; font-family: monospace;">
                     <button class="pill-btn accent" onclick="addCustomHiddenIP()" style="padding: 8px 16px; font-size: 12px; font-weight: 700; white-space: nowrap;">+ 添加隐藏</button>
                 </div>
             </div>
@@ -1541,7 +1545,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec);">
                                 <th style="padding: 8px 12px;">IP 地址 / 归属</th>
                                 <th style="padding: 8px 12px;">隐藏时间</th>
-                                <th style="padding: 8px 12px;">备注说明</th>
                                 <th style="padding: 8px 12px; text-align: right;">操作</th>
                             </tr>
                         </thead>
@@ -4370,7 +4373,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (!list || list.length === 0) {
             tbody.innerHTML = `
             <tr>
-                <td colspan="4" style="text-align: center; padding: 28px 14px; color: var(--text-sec);">
+                <td colspan="3" style="text-align: center; padding: 28px 14px; color: var(--text-sec);">
                     <div style="font-size: 24px; margin-bottom: 6px;">🙈</div>
                     <div style="font-size: 13px; font-weight: 600;">暂无隐藏 IP</div>
                     <div style="font-size: 11px; margin-top: 2px;">在日志中点击任意 IP 详情卡片即可一键全局隐藏</div>
@@ -4392,12 +4395,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec); white-space: nowrap;">
                     ${escapeHtml(item.create_time || '--')}
                 </td>
-                <td style="padding: 10px 12px; font-size: 12px; color: var(--text);">
-                    ${escapeHtml(item.remark || '手动隐藏')}
-                </td>
                 <td style="padding: 10px 12px; text-align: right; white-space: nowrap;">
-                    <button class="pill-btn success" onclick="removeHiddenIP('${escapeHtml(item.ip)}')" style="padding: 3px 8px; font-size: 11px;" title="恢复该 IP 日志在前台全部模块的显示">
-                        👁️ 恢复显示
+                    <button class="pill-btn danger" onclick="removeHiddenIP('${escapeHtml(item.ip)}')" style="padding: 4px 10px; font-size: 11px;" title="取消隐藏此 IP 并恢复其在前台全部日志与图表中的显示">
+                        删除
                     </button>
                 </td>
             </tr>
@@ -4408,9 +4408,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     async function addCustomHiddenIP() {
         const ipInput = document.getElementById('input-hidden-ip');
-        const remarkInput = document.getElementById('input-hidden-remark');
         const ip = (ipInput ? ipInput.value : '').trim();
-        const remark = (remarkInput ? remarkInput.value : '').trim();
 
         if (!ip) {
             showToast('请输入有效的 IP 地址', '⚠️');
@@ -4421,13 +4419,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const res = await fetch('/api/hidden-ips', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ip, remark: remark || '自定义隐藏' })
+                body: JSON.stringify({ ip, remark: '手动隐藏' })
             });
             const data = await res.json();
             if (data.success) {
                 showToast(data.msg || `已全局隐藏 IP: ${ip}`, '🙈');
                 if (ipInput) ipInput.value = '';
-                if (remarkInput) remarkInput.value = '';
                 loadHiddenIPs();
                 fetchData(false);
             } else {
@@ -4503,6 +4500,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             showToast('请求异常: ' + e, '⚠️');
         }
     }
+
+    // 全局禁止手势双指缩放、多指触控拖动及双击放大
+    document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+
+    document.addEventListener('touchmove', function(e) {
+        if (e.touches && e.touches.length > 1) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    let _lastTouchEnd = 0;
+    document.addEventListener('touchend', function(e) {
+        const now = Date.now();
+        if (now - _lastTouchEnd <= 300) {
+            e.preventDefault();
+        }
+        _lastTouchEnd = now;
+    }, { passive: false });
 
     document.addEventListener('DOMContentLoaded', () => {
         applyTheme(currentThemeMode, false);
