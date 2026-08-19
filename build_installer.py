@@ -99,11 +99,26 @@ chmod 644 "${INSTALL_DIR}/chart.min.js"
 echo -e "${GREEN}[✓] 核心代码、更新模块与卸载工具已成功解包并写入完毕！${NC}"
 
 echo -e "\n${BLUE}[3/5] 正在生成智能防误封白名单与诱饵策略...${NC}"
-CURRENT_SSH_IP=$(echo "${SSH_CLIENT:-}" | awk '{print $1}')
+# 多途径精准提取当前管理员公网 IP (兼容 sudo / su / 普通用户 / 各种云环境)
+CURRENT_SSH_IP=""
 if [[ -z "${CURRENT_SSH_IP}" ]]; then
-    CURRENT_SSH_IP=$(echo "${SSH_CONNECTION:-}" | awk '{print $1}')
+    CURRENT_SSH_IP=$(who -m 2>/dev/null | awk '{print $NF}' | tr -d '()' | awk -F: '{print $1}')
 fi
+if [[ -z "${CURRENT_SSH_IP}" || "${CURRENT_SSH_IP}" == "localhost" ]]; then
+    CURRENT_SSH_IP=$(who am i 2>/dev/null | awk '{print $NF}' | tr -d '()' | awk -F: '{print $1}')
+fi
+if [[ -z "${CURRENT_SSH_IP}" && -n "${SUDO_USER}" ]]; then
+    CURRENT_SSH_IP=$(grep -z "SSH_CLIENT=" /proc/$PPID/environ 2>/dev/null | tr '\0' '\n' | grep "^SSH_CLIENT=" | cut -d= -f2 | awk '{print $1}')
+fi
+if [[ -z "${CURRENT_SSH_IP}" ]]; then
+    CURRENT_SSH_IP=$(echo "${SSH_CLIENT:-${SSH_CONNECTION:-}}" | awk '{print $1}')
+fi
+if [[ -z "${CURRENT_SSH_IP}" ]] && command -v ss >/dev/null 2>&1; then
+    CURRENT_SSH_IP=$(ss -tn state established '( sport = :22 or sport = :29675 )' 2>/dev/null | awk 'NR>1 {print $4}' | awk -F: '{print $(NF-1)}' | grep -v '^127\.' | head -n 1)
+fi
+
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1)
+LOCAL_IP=${LOCAL_IP:-127.0.0.1}
 
 if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
     cat << EOF > "${INSTALL_DIR}/config.json"
@@ -112,11 +127,16 @@ if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
   "web_port": 9099,
   "whitelist": [
     {"ip": "127.0.0.1", "remark": "本地回环"},
-    {"ip": "${CURRENT_SSH_IP:-127.0.0.1}", "remark": "当前部署管理端IP"},
-    {"ip": "${LOCAL_IP:-127.0.0.1}", "remark": "本机内网IP"}
+    {"ip": "::1", "remark": "IPv6 本地回环"},
+    {"ip": "10.0.0.0/8", "remark": "私网 A 类地址"},
+    {"ip": "172.16.0.0/12", "remark": "私网 B 类地址"},
+    {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"},
+    {"ip": "100.64.0.0/10", "remark": "运营商 CGNAT / 云专网"},
+    {"ip": "${CURRENT_SSH_IP:-127.0.0.1}", "remark": "当前部署管理端IP"}
   ],
   "trap_ports": [
     {"port": 21, "name": "FTP 弱口令嗅探", "category": "ftp", "enabled": true, "level": "高危"},
+    {"port": 23, "name": "Telnet 弱口令嗅探", "category": "telnet", "enabled": true, "level": "高危"},
     {"port": 135, "name": "RPC 远程端点映射", "category": "smb", "enabled": true, "level": "高危"},
     {"port": 139, "name": "NetBIOS 局域网嗅探", "category": "smb", "enabled": true, "level": "中危"},
     {"port": 445, "name": "SMB / 永恒之蓝高危探针", "category": "smb", "enabled": true, "level": "极高危"},
@@ -128,11 +148,22 @@ if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
     {"port": 9200, "name": "Elasticsearch RCE 探测", "category": "db", "enabled": true, "level": "高危"},
     {"port": 27017, "name": "MongoDB 未授权探针", "category": "db", "enabled": true, "level": "高危"}
   ],
+  "defense_mode": "standard",
   "ban_action_iptables": true,
-  "ban_action_blackhole": true
+  "ban_action_blackhole": true,
+  "trap_threshold": 2,
+  "trap_window_seconds": 30,
+  "trap_all_ports": false,
+  "trap_all_unopened_ports": false,
+  "trap_business_ports": false,
+  "auto_clean_days": 30
 }
 EOF
-    echo -e "${GREEN}[✓] 已自动将当前运维 IP (${CURRENT_SSH_IP}) 加入防误封白名单！${NC}"
+    if [[ -n "${CURRENT_SSH_IP}" && "${CURRENT_SSH_IP}" != "127.0.0.1" ]]; then
+        echo -e "${GREEN}[✓] 已成功探测并自动将当前运维 IP (${CURRENT_SSH_IP}) 加入安全白名单！${NC}"
+    else
+        echo -e "${GREEN}[✓] 智能防误封白名单已初始化（SSH 端口与 Web 管理端口已启用内核级硬编码保护）${NC}"
+    fi
 else
     echo -e "${YELLOW}[!] 检测到已存在配置文件，保留现有配置 (不覆盖用户策略)。${NC}"
 fi

@@ -47,20 +47,21 @@ DEFAULT_CONFIG = {
         {"ip": "::1", "remark": "IPv6 本地回环"},
         {"ip": "10.0.0.0/8", "remark": "私网 A 类地址"},
         {"ip": "172.16.0.0/12", "remark": "私网 B 类地址"},
-        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"}
+        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"},
+        {"ip": "100.64.0.0/10", "remark": "运营商 CGNAT / 云专网"}
     ],
     "web_port": 9099,
     "web_bind": "0.0.0.0",
     "admin_password": "admin",
-    "defense_mode": "strict",
+    "defense_mode": "standard",
     "ban_action_iptables": True,
     "ban_action_blackhole": True,
     "auto_clean_days": 30,
-    "trap_threshold": 1,
+    "trap_threshold": 2,
     "trap_window_seconds": 30,
-    "trap_business_ports": True,
-    "trap_all_unopened_ports": True,
-    "trap_all_ports": True
+    "trap_business_ports": False,
+    "trap_all_unopened_ports": False,
+    "trap_all_ports": False
 }
 
 DEFAULT_HTTP_TRAPS = [
@@ -841,9 +842,77 @@ def save_config(cfg):
     except Exception:
         return False
 
+_DYNAMIC_SSH_IPS_CACHE = set()
+_DYNAMIC_SSH_IPS_LAST_CHECK = 0
+
+def get_system_ssh_ports():
+    """动态获取系统中 SSH 服务监听的端口 (包括 22 以及自定义高位端口如 29675)"""
+    ports = {22}
+    try:
+        sshd_configs = ["/etc/ssh/sshd_config", "/etc/ssh/sshd_config.d/*.conf"]
+        for p in sshd_configs:
+            for fpath in glob.glob(p):
+                if os.path.exists(fpath):
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("Port ") or line.startswith("port "):
+                                parts = line.split()
+                                if len(parts) >= 2 and parts[1].isdigit():
+                                    ports.add(int(parts[1]))
+    except Exception:
+        pass
+    return ports
+
+def get_active_ssh_client_ips():
+    """动态探测当前系统所有活跃 SSH 会话的客户端 IP (防管理员自杀保护机制)"""
+    global _DYNAMIC_SSH_IPS_CACHE, _DYNAMIC_SSH_IPS_LAST_CHECK
+    now = time.time()
+    if (now - _DYNAMIC_SSH_IPS_LAST_CHECK < 5) and _DYNAMIC_SSH_IPS_CACHE:
+        return _DYNAMIC_SSH_IPS_CACHE
+    
+    ips = set()
+    try:
+        # 1. 从 who 命令读取登录客户端 IP
+        out = subprocess.check_output("who 2>/dev/null || true", shell=True, text=True)
+        for line in out.splitlines():
+            m = re.search(r'\(([\d\w\.\:]+)\)', line)
+            if m:
+                clean_ip = m.group(1).split(':')[0].strip('[]')
+                if clean_ip and not clean_ip.startswith("127."):
+                    ips.add(clean_ip)
+    except Exception:
+        pass
+    
+    try:
+        # 2. 从 ss 命令读取已建立的 SSH 连接来源
+        ssh_ports = get_system_ssh_ports()
+        port_filter = " or ".join([f"sport = :{p}" for p in ssh_ports])
+        cmd = f"ss -tn state established '( {port_filter} )' 2>/dev/null || true"
+        out = subprocess.check_output(cmd, shell=True, text=True)
+        for line in out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) >= 4:
+                peer = parts[3]
+                peer_ip = peer.rsplit(':', 1)[0].strip('[]').replace('::ffff:', '')
+                if peer_ip and not peer_ip.startswith("127."):
+                    ips.add(peer_ip)
+    except Exception:
+        pass
+    
+    _DYNAMIC_SSH_IPS_CACHE = ips
+    _DYNAMIC_SSH_IPS_LAST_CHECK = now
+    return ips
+
 def ip_in_whitelist(ip, whitelist_items=None):
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
+
+    # 核心防自锁盾：只要当前是正在连接服务器的管理员活跃 SSH 会话，内核级永久放行！
+    active_ssh_ips = get_active_ssh_client_ips()
+    if ip in active_ssh_ips:
+        return True
+
     if whitelist_items is None:
         try:
             cfg = load_config()
@@ -1526,16 +1595,22 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 2. Web 管理控制台保护（避免管理员未加白名单时被直接拉黑）
+        # 2. 核心远程运维与 Web 控制台绝对放行保护（SSH 与 Web 端口绝对免封，彻底杜绝误锁管理员）
         web_port = int(cfg.get("web_port", 9099) or 9099)
+        ssh_ports = get_system_ssh_ports()
         if dst_port == web_port:
             action = "BUSINESS"
             desc = "Portsentry Web控制台"
             _EXECUTOR.submit(_async_write, action, desc)
             return
+        if dst_port in ssh_ports:
+            action = "BUSINESS"
+            desc = f"SSH 远程运维连接 (端口 {dst_port})"
+            _EXECUTOR.submit(_async_write, action, desc)
+            return
 
-        # 3. 全局全端口全量诱捕（开启后探测任何端口均立即拉黑）
-        trap_all_ports = bool(cfg.get("trap_all_ports", True))
+        # 3. 全局全端口全量诱捕（仅在用户显式开启时生效，默认关闭）
+        trap_all_ports = bool(cfg.get("trap_all_ports", False))
         if trap_all_ports:
             proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
             if proc:
@@ -1595,7 +1670,7 @@ class GlobalPortSniffer:
             return
 
         # 6. 其他未开放端口常规探测 / 全端口隐蔽诱捕
-        trap_all_unopened = bool(cfg.get("trap_all_unopened_ports", True))
+        trap_all_unopened = bool(cfg.get("trap_all_unopened_ports", False))
         if trap_all_unopened:
             action = "INTERCEPTED"
             desc = f"全端口嗅探诱捕 (未开放端口 {dst_port})"
