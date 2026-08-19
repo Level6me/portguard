@@ -2061,6 +2061,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function applyDoughnutInteractive(chart) {
         if (!chart) return;
         chart._selectedCategoryIndex = -1;
+
+        chart.resetCategoryFocus = function() {
+            chart._selectedCategoryIndex = -1;
+            const dataset = chart.data.datasets[0];
+            if (dataset && chart._baseBgColors) {
+                dataset.offset = Array(dataset.data?.length || 0).fill(0);
+                dataset.backgroundColor = [...chart._baseBgColors];
+                chart.update();
+            }
+        };
         
         function toggleCategory(targetIdx) {
             const dataset = chart.data.datasets[0];
@@ -2089,18 +2099,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     );
                 }
             } else {
-                chart._selectedCategoryIndex = -1;
-                dataset.offset = Array(total).fill(0);
-                dataset.backgroundColor = [...origColors];
+                chart.resetCategoryFocus();
+                return;
             }
             chart.update();
         }
 
-        chart.options.onClick = (evt, elements) => {
+        // 使用 point + intersect: true 精准判断是否真正点在扇区内部
+        chart.options.onClick = (evt) => {
+            const e = evt.native || evt;
+            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
             if (elements && elements.length > 0) {
                 toggleCategory(elements[0].index);
             } else {
-                toggleCategory(-1);
+                // 点击空心圆孔或空白处：立即还原
+                chart.resetCategoryFocus();
             }
         };
 
@@ -2117,6 +2130,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function applyBarInteractive(chart) {
         if (!chart) return;
         chart._selectedCategoryIndex = -1;
+
+        chart.resetCategoryFocus = function() {
+            chart._selectedCategoryIndex = -1;
+            const dataset = chart.data.datasets[0];
+            if (dataset && chart._baseBgColors) {
+                dataset.backgroundColor = [...chart._baseBgColors];
+                chart.update();
+            }
+        };
         
         function toggleBarCategory(targetIdx) {
             const dataset = chart.data.datasets[0];
@@ -2142,17 +2164,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     );
                 }
             } else {
-                chart._selectedCategoryIndex = -1;
-                dataset.backgroundColor = [...origColors];
+                chart.resetCategoryFocus();
+                return;
             }
             chart.update();
         }
 
-        chart.options.onClick = (evt, elements) => {
+        chart.options.onClick = (evt) => {
+            const e = evt.native || evt;
+            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
             if (elements && elements.length > 0) {
                 toggleBarCategory(elements[0].index);
             } else {
-                toggleBarCategory(-1);
+                // 点击柱间空白或边缘空白：立即还原
+                chart.resetCategoryFocus();
             }
         };
     }
@@ -2161,6 +2186,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function applyMultiLineInteractive(chart) {
         if (!chart) return;
         chart._selectedDatasetIndex = -1;
+
+        chart.resetCategoryFocus = function() {
+            chart._selectedDatasetIndex = -1;
+            if (chart.data.datasets && chart._baseLines) {
+                chart.data.datasets.forEach((ds, i) => {
+                    if (chart._baseLines[i]) {
+                        ds.borderColor = chart._baseLines[i].borderColor;
+                        ds.backgroundColor = chart._baseLines[i].backgroundColor;
+                        ds.borderWidth = chart._baseLines[i].borderWidth;
+                        ds.pointRadius = chart._baseLines[i].pointRadius;
+                    }
+                });
+                chart.update();
+            }
+        };
         
         function toggleLineCategory(targetDsIdx) {
             if (!chart.data.datasets || chart.data.datasets.length === 0) return;
@@ -2179,13 +2219,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             if (targetDsIdx >= 0 && targetDsIdx < total) {
                 if (chart._selectedDatasetIndex === targetDsIdx) {
-                    chart._selectedDatasetIndex = -1;
-                    chart.data.datasets.forEach((ds, i) => {
-                        ds.borderColor = orig[i].borderColor;
-                        ds.backgroundColor = orig[i].backgroundColor;
-                        ds.borderWidth = orig[i].borderWidth;
-                        ds.pointRadius = orig[i].pointRadius;
-                    });
+                    chart.resetCategoryFocus();
+                    return;
                 } else {
                     chart._selectedDatasetIndex = targetDsIdx;
                     chart.data.datasets.forEach((ds, i) => {
@@ -2203,22 +2238,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     });
                 }
             } else {
-                chart._selectedDatasetIndex = -1;
-                chart.data.datasets.forEach((ds, i) => {
-                    ds.borderColor = orig[i].borderColor;
-                    ds.backgroundColor = orig[i].backgroundColor;
-                    ds.borderWidth = orig[i].borderWidth;
-                    ds.pointRadius = orig[i].pointRadius;
-                });
+                chart.resetCategoryFocus();
+                return;
             }
             chart.update();
         }
 
-        chart.options.onClick = (evt, elements) => {
+        chart.options.onClick = (evt) => {
+            const e = evt.native || evt;
+            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
             if (elements && elements.length > 0) {
                 toggleLineCategory(elements[0].datasetIndex);
             } else {
-                toggleLineCategory(-1);
+                chart.resetCategoryFocus();
             }
         };
 
@@ -2235,8 +2267,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function applySingleLineInteractive(chart) {
         if (!chart) return;
         chart._selectedPointIndex = -1;
+
+        chart.resetCategoryFocus = function() {
+            chart._selectedPointIndex = -1;
+            const dataset = chart.data.datasets[0];
+            if (dataset) {
+                dataset.pointRadius = 2.5;
+                chart.update();
+            }
+        };
         
-        chart.options.onClick = (evt, elements) => {
+        chart.options.onClick = (evt) => {
+            const e = evt.native || evt;
+            const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
             const dataset = chart.data.datasets[0];
             if (!dataset || !dataset.data) return;
             const total = dataset.data.length;
@@ -2244,17 +2287,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (elements && elements.length > 0) {
                 const clickedIdx = elements[0].index;
                 if (chart._selectedPointIndex === clickedIdx) {
-                    chart._selectedPointIndex = -1;
-                    dataset.pointRadius = 2.5;
+                    chart.resetCategoryFocus();
                 } else {
                     chart._selectedPointIndex = clickedIdx;
                     dataset.pointRadius = Array(total).fill(2).map((r, i) => (i === clickedIdx ? 6 : 2));
+                    chart.update();
                 }
             } else {
-                chart._selectedPointIndex = -1;
-                dataset.pointRadius = 2.5;
+                chart.resetCategoryFocus();
             }
-            chart.update();
         };
     }
 
@@ -4784,6 +4825,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (thresholdSelect) {
             thresholdSelect.addEventListener('change', updateThresholdBadge);
         }
+
+        // 点击图表卡片外部空白区域时，自动还原卡片内图表的分类聚焦状态
+        document.addEventListener('click', (e) => {
+            if (e.target.tagName === 'CANVAS' || e.target.closest('.chartjs-legend') || e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) {
+                return;
+            }
+            const card = e.target.closest('.card');
+            if (card) {
+                const canvas = card.querySelector('canvas');
+                if (canvas && typeof Chart !== 'undefined') {
+                    const inst = Chart.getChart(canvas);
+                    if (inst && typeof inst.resetCategoryFocus === 'function') {
+                        inst.resetCategoryFocus();
+                    }
+                }
+            }
+        });
     });
 </script>
 </body>
