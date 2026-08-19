@@ -253,7 +253,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         @media (max-width: 768px) {
             .analytics-subtab-bar {
                 flex-direction: column;
-                align-items: stretch;
+                align-items: flex-start;
                 gap: 8px;
             }
             .analytics-filter-row {
@@ -694,7 +694,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
         <div class="analytics-subtab-bar">
             <!-- 模式切换分段按钮 (采用与访问日志一致的胶囊拟态设计) -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 全局概览</button>
                 <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维度分析</button>
             </div>
