@@ -533,6 +533,73 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .action-btn.danger:hover { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         .action-btn.success:hover { background: var(--success-bg); color: var(--success); border-color: var(--success); }
 
+        /* Web Diagnostics Fingerprints (Paths & UAs) */
+        .diag-row-item {
+            background: var(--card-sec);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            padding: 8px 12px;
+            transition: background 0.15s ease;
+        }
+        .diag-row-item:hover {
+            background: var(--card-hover);
+        }
+        .diag-row-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            gap: 8px;
+        }
+        .diag-row-left {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 0;
+            gap: 6px;
+        }
+        .diag-rank-badge {
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--text-sec);
+            background: rgba(120, 120, 128, 0.12);
+            padding: 2px 6px;
+            border-radius: 6px;
+            flex-shrink: 0;
+            font-family: inherit;
+        }
+        .diag-text-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+            letter-spacing: -0.01em;
+            font-family: inherit;
+        }
+        .diag-count-text {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--accent);
+            flex-shrink: 0;
+            white-space: nowrap;
+            font-family: inherit;
+        }
+        .diag-bar-track {
+            height: 4px;
+            background: rgba(120, 120, 128, 0.12);
+            border-radius: 99px;
+            overflow: hidden;
+        }
+        .diag-bar-fill {
+            height: 100%;
+            border-radius: 99px;
+            transition: width 0.3s ease;
+        }
+
         /* Bottom Spacer (防止 Dock 遮挡) */
         .bottom-spacer { height: 60px; width: 100%; }
 
@@ -2248,32 +2315,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const list = Array.isArray(isPath ? paths : uas) ? (isPath ? paths : uas) : [];
 
         if (!list || list.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: var(--text-sec); padding: 30px; font-size: 12px;">暂无该维度的访问指纹记录</div>';
+            container.innerHTML = '<div style="text-align: center; color: var(--text-sec); padding: 40px 10px; font-size: 12px; font-weight: 600;">暂无该维度的访问指纹记录</div>';
             return;
         }
 
         const counts = list.map(x => parseInt(x.count) || 0);
         const maxCount = Math.max(...counts, 1);
-        let html = '<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px;">';
+        let html = '<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 2px;">';
         list.forEach((item, idx) => {
             const rawTitle = isPath ? `${item.method ? item.method + ' ' : ''}${item.path || ''}` : (item.ua || '未知 UA / 空指纹');
             const safeTitle = escapeHtml(rawTitle);
             const count = parseInt(item.count) || 0;
             const pct = Math.min(100, Math.max(0, Math.round((count / maxCount) * 100)));
-            const tagBadge = (!isPath && item.tag) ? `<span class="tag ${item.is_scanner ? 'danger' : 'accent'}" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; flex-shrink: 0;">${escapeHtml(item.tag)}</span>` : '';
+            const tagBadge = (!isPath && item.tag) ? `<span class="tag ${item.is_scanner ? 'danger' : 'accent'}" style="font-size: 9px; padding: 1px 5px; flex-shrink: 0;">${escapeHtml(item.tag)}</span>` : '';
+            const barBg = isPath ? 'linear-gradient(90deg, #007aff, #5856d6)' : 'linear-gradient(90deg, #ff9500, #ff3b30)';
 
             html += `
-                <div style="background: var(--card-sec); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 10px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px;">
-                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; display: flex; align-items: center;" title="${safeTitle}">
-                            <span style="flex-shrink: 0; margin-right: 4px;">#${idx + 1}</span>
+                <div class="diag-row-item">
+                    <div class="diag-row-header">
+                        <div class="diag-row-left">
+                            <span class="diag-rank-badge">#${idx + 1}</span>
                             ${tagBadge}
-                            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeTitle}</span>
-                        </span>
-                        <span style="color: var(--accent); font-weight: 700; flex-shrink: 0; margin-left: 8px;">${count} 次</span>
+                            <span class="diag-text-title" title="${safeTitle}">${safeTitle}</span>
+                        </div>
+                        <span class="diag-count-text">${count.toLocaleString()} 次</span>
                     </div>
-                    <div style="height: 4px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden;">
-                        <div style="height: 100%; width: ${pct}%; background: ${isPath ? 'linear-gradient(90deg, #007aff, #5856d6)' : 'linear-gradient(90deg, #ff9500, #ff3b30)'}; border-radius: 99px;"></div>
+                    <div class="diag-bar-track">
+                        <div class="diag-bar-fill" style="width: ${pct}%; background: ${barBg};"></div>
                     </div>
                 </div>
             `;
