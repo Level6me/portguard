@@ -2039,7 +2039,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }, 2400);
     }
 
-    // 纯净图表调色板与不可变色彩引擎 (彻底根除反复切换导致的色彩污染/全变灰问题)
+    // 纯净图表调色板与不可变色彩引擎 (采用 Chart.js 原生 Scriptable Options 函数式驱动，从物理上杜绝任何颜色污染与状态滞留)
     const PALETTE_GLOBAL = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#8e8e93', '#ffd60a', '#ff2d55'];
 
     function setChartAlpha(colorStr, alpha) {
@@ -2059,55 +2059,60 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         return colorStr;
     }
 
-    function getPureColorList(palette, count) {
-        return Array.from({length: count}, (_, i) => palette[i % palette.length]);
+    function getPureColor(palette, index) {
+        return palette[index % palette.length];
     }
 
-    // 环形图 (Doughnut) 分类点击与图例联动聚焦动效
+    // 环形图 (Doughnut) 分类点击与图例联动聚焦动效 (函数式驱动)
     function applyDoughnutInteractive(chart, customPalette) {
         if (!chart) return;
         const palette = customPalette || PALETTE_GLOBAL;
         chart._selectedCategoryIndex = -1;
         chart._defaultPalette = palette;
 
+        const dataset = chart.data.datasets[0];
+        if (dataset) {
+            // 采用函数式 backgroundColor 与 offset，每次渲染自动按 _selectedCategoryIndex 取值，绝不修改数据源
+            dataset.backgroundColor = function(context) {
+                const idx = context.dataIndex;
+                const baseColor = getPureColor(palette, idx);
+                if (chart._selectedCategoryIndex === -1 || chart._selectedCategoryIndex === undefined) {
+                    return baseColor;
+                }
+                return (chart._selectedCategoryIndex === idx) ? baseColor : setChartAlpha(baseColor, 0.22);
+            };
+
+            dataset.offset = function(context) {
+                const idx = context.dataIndex;
+                return (chart._selectedCategoryIndex === idx) ? 16 : 0;
+            };
+        }
+
         chart.resetCategoryFocus = function() {
             chart._selectedCategoryIndex = -1;
-            const dataset = chart.data.datasets[0];
-            if (dataset && dataset.data) {
-                const total = dataset.data.length;
-                dataset.offset = Array(total).fill(0);
-                dataset.backgroundColor = getPureColorList(palette, total);
-                chart.update();
-            }
+            chart.update();
         };
 
         function toggleCategory(targetIdx) {
-            const dataset = chart.data.datasets[0];
-            if (!dataset || !dataset.data || dataset.data.length === 0) return;
-            const total = dataset.data.length;
-            const fullColors = getPureColorList(palette, total);
+            const count = chart.data.datasets[0]?.data?.length || 0;
+            if (count === 0) return;
 
-            if (targetIdx >= 0 && targetIdx < total) {
+            if (targetIdx >= 0 && targetIdx < count) {
                 if (chart._selectedCategoryIndex === targetIdx) {
-                    chart.resetCategoryFocus();
+                    chart._selectedCategoryIndex = -1;
                 } else {
                     chart._selectedCategoryIndex = targetIdx;
-                    dataset.offset = Array(total).fill(0);
-                    dataset.offset[targetIdx] = 16;
-                    dataset.backgroundColor = fullColors.map((col, i) => 
-                        (i === targetIdx) ? col : setChartAlpha(col, 0.22)
-                    );
-                    chart.update();
                 }
             } else {
-                chart.resetCategoryFocus();
+                chart._selectedCategoryIndex = -1;
             }
+            chart.update();
         }
 
         const canvas = chart.canvas;
         if (canvas) {
             canvas.onclick = (e) => {
-                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                const elements = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
                 if (elements && elements.length > 0) {
                     toggleCategory(elements[0].index);
                 } else {
@@ -2125,54 +2130,54 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // 柱状图 / 条形图 (Bar) 分类点击聚焦动效
+    // 柱状图 / 条形图 (Bar) 分类点击聚焦动效 (函数式驱动)
     function applyBarInteractive(chart, defaultColorOrPalette) {
         if (!chart) return;
         chart._selectedCategoryIndex = -1;
         chart._defaultBarPalette = defaultColorOrPalette;
 
-        function getFullBarColors(count) {
-            if (Array.isArray(defaultColorOrPalette)) {
-                return getPureColorList(defaultColorOrPalette, count);
-            }
-            return Array(count).fill(defaultColorOrPalette || '#007aff');
+        const dataset = chart.data.datasets[0];
+        if (dataset) {
+            dataset.backgroundColor = function(context) {
+                const idx = context.dataIndex;
+                let baseColor;
+                if (Array.isArray(defaultColorOrPalette)) {
+                    baseColor = getPureColor(defaultColorOrPalette, idx);
+                } else {
+                    baseColor = defaultColorOrPalette || '#007aff';
+                }
+                if (chart._selectedCategoryIndex === -1 || chart._selectedCategoryIndex === undefined) {
+                    return baseColor;
+                }
+                return (chart._selectedCategoryIndex === idx) ? baseColor : setChartAlpha(baseColor, 0.18);
+            };
         }
 
         chart.resetCategoryFocus = function() {
             chart._selectedCategoryIndex = -1;
-            const dataset = chart.data.datasets[0];
-            if (dataset && dataset.data) {
-                const total = dataset.data.length;
-                dataset.backgroundColor = getFullBarColors(total);
-                chart.update();
-            }
+            chart.update();
         };
 
         function toggleBarCategory(targetIdx) {
-            const dataset = chart.data.datasets[0];
-            if (!dataset || !dataset.data || dataset.data.length === 0) return;
-            const total = dataset.data.length;
-            const fullColors = getFullBarColors(total);
+            const count = chart.data.datasets[0]?.data?.length || 0;
+            if (count === 0) return;
 
-            if (targetIdx >= 0 && targetIdx < total) {
+            if (targetIdx >= 0 && targetIdx < count) {
                 if (chart._selectedCategoryIndex === targetIdx) {
-                    chart.resetCategoryFocus();
+                    chart._selectedCategoryIndex = -1;
                 } else {
                     chart._selectedCategoryIndex = targetIdx;
-                    dataset.backgroundColor = fullColors.map((col, i) => 
-                        (i === targetIdx) ? col : setChartAlpha(col, 0.18)
-                    );
-                    chart.update();
                 }
             } else {
-                chart.resetCategoryFocus();
+                chart._selectedCategoryIndex = -1;
             }
+            chart.update();
         }
 
         const canvas = chart.canvas;
         if (canvas) {
             canvas.onclick = (e) => {
-                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                const elements = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
                 if (elements && elements.length > 0) {
                     toggleBarCategory(elements[0].index);
                 } else {
@@ -2188,56 +2193,55 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         chart._selectedDatasetIndex = -1;
         chart._defaultLineConfigs = defaultLineConfigs;
 
+        function refreshLines() {
+            if (!chart.data.datasets) return;
+            chart.data.datasets.forEach((ds, i) => {
+                const cfg = defaultLineConfigs[i] || {};
+                if (chart._selectedDatasetIndex === -1) {
+                    ds.borderColor = cfg.borderColor;
+                    ds.backgroundColor = cfg.backgroundColor;
+                    ds.borderWidth = cfg.borderWidth;
+                    ds.pointRadius = cfg.pointRadius;
+                } else if (chart._selectedDatasetIndex === i) {
+                    ds.borderColor = cfg.borderColor;
+                    ds.backgroundColor = cfg.backgroundColor;
+                    ds.borderWidth = 3.6;
+                    ds.pointRadius = 4;
+                } else {
+                    ds.borderColor = setChartAlpha(cfg.borderColor || '#999', 0.15);
+                    ds.backgroundColor = 'transparent';
+                    ds.borderWidth = 1.2;
+                    ds.pointRadius = 0;
+                }
+            });
+            chart.update();
+        }
+
         chart.resetCategoryFocus = function() {
             chart._selectedDatasetIndex = -1;
-            if (chart.data.datasets) {
-                chart.data.datasets.forEach((ds, i) => {
-                    const cfg = defaultLineConfigs[i];
-                    if (cfg) {
-                        ds.borderColor = cfg.borderColor;
-                        ds.backgroundColor = cfg.backgroundColor;
-                        ds.borderWidth = cfg.borderWidth;
-                        ds.pointRadius = cfg.pointRadius;
-                    }
-                });
-                chart.update();
-            }
+            refreshLines();
         };
 
         function toggleLineCategory(targetDsIdx) {
-            if (!chart.data.datasets || chart.data.datasets.length === 0) return;
-            const total = chart.data.datasets.length;
+            const count = chart.data.datasets?.length || 0;
+            if (count === 0) return;
 
-            if (targetDsIdx >= 0 && targetDsIdx < total) {
+            if (targetDsIdx >= 0 && targetDsIdx < count) {
                 if (chart._selectedDatasetIndex === targetDsIdx) {
-                    chart.resetCategoryFocus();
+                    chart._selectedDatasetIndex = -1;
                 } else {
                     chart._selectedDatasetIndex = targetDsIdx;
-                    chart.data.datasets.forEach((ds, i) => {
-                        const cfg = defaultLineConfigs[i] || {};
-                        if (i === targetDsIdx) {
-                            ds.borderColor = cfg.borderColor;
-                            ds.backgroundColor = cfg.backgroundColor;
-                            ds.borderWidth = 3.6;
-                            ds.pointRadius = 4;
-                        } else {
-                            ds.borderColor = setChartAlpha(cfg.borderColor || '#999', 0.15);
-                            ds.backgroundColor = 'transparent';
-                            ds.borderWidth = 1.2;
-                            ds.pointRadius = 0;
-                        }
-                    });
-                    chart.update();
                 }
             } else {
-                chart.resetCategoryFocus();
+                chart._selectedDatasetIndex = -1;
             }
+            refreshLines();
         }
 
         const canvas = chart.canvas;
         if (canvas) {
             canvas.onclick = (e) => {
-                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
+                const elements = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
                 if (elements && elements.length > 0) {
                     toggleLineCategory(elements[0].datasetIndex);
                 } else {
@@ -2255,40 +2259,39 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // 单线时序图 (Single-Line) 点位点击放大动效
+    // 单线时序图 (Single-Line) 点位点击放大动效 (函数式驱动)
     function applySingleLineInteractive(chart) {
         if (!chart) return;
         chart._selectedPointIndex = -1;
 
+        const dataset = chart.data.datasets[0];
+        if (dataset) {
+            dataset.pointRadius = function(context) {
+                const idx = context.dataIndex;
+                return (chart._selectedPointIndex === idx) ? 6 : 2.5;
+            };
+        }
+
         chart.resetCategoryFocus = function() {
             chart._selectedPointIndex = -1;
-            const dataset = chart.data.datasets[0];
-            if (dataset) {
-                dataset.pointRadius = 2.5;
-                chart.update();
-            }
+            chart.update();
         };
 
         const canvas = chart.canvas;
         if (canvas) {
             canvas.onclick = (e) => {
-                const elements = chart.getElementsAtEventForMode(e, 'point', { intersect: true }, false);
-                const dataset = chart.data.datasets[0];
-                if (!dataset || !dataset.data) return;
-                const total = dataset.data.length;
-
+                const elements = chart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, false);
                 if (elements && elements.length > 0) {
                     const clickedIdx = elements[0].index;
                     if (chart._selectedPointIndex === clickedIdx) {
-                        chart.resetCategoryFocus();
+                        chart._selectedPointIndex = -1;
                     } else {
                         chart._selectedPointIndex = clickedIdx;
-                        dataset.pointRadius = Array(total).fill(2).map((r, i) => (i === clickedIdx ? 6 : 2));
-                        chart.update();
                     }
                 } else {
-                    chart.resetCategoryFocus();
+                    chart._selectedPointIndex = -1;
                 }
+                chart.update();
             };
         }
     }
@@ -2409,7 +2412,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyBarInteractive(analyticsHourlyChartInstance, 'rgba(255, 59, 48, 0.8)');
+            applyBarInteractive(analyticsHourlyChartInstance, '#ff3b30');
         }
 
         const isNarrow = window.innerWidth <= 600;
@@ -2439,7 +2442,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (ctxIsp) {
             analyticsIspChartInstance = new Chart(ctxIsp, {
                 type: 'bar',
-                data: { labels: [], datasets: [{ label: '威胁源实体', data: [], backgroundColor: 'rgba(0, 122, 255, 0.8)', borderRadius: 4 }] },
+                data: { labels: [], datasets: [{ label: '威胁源实体', data: [], backgroundColor: '#007aff', borderRadius: 4 }] },
                 options: {
                     indexAxis: 'y',
                     responsive: true, maintainAspectRatio: false,
@@ -2450,7 +2453,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             });
-            applyBarInteractive(analyticsIspChartInstance, 'rgba(0, 122, 255, 0.8)');
+            applyBarInteractive(analyticsIspChartInstance, '#007aff');
         }
 
         const ctxCat = document.getElementById('analyticsCategoryChart')?.getContext('2d');
@@ -2615,7 +2618,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.hourly_distribution && analyticsHourlyChartInstance) {
                 analyticsHourlyChartInstance.data.labels = data.hourly_distribution.map(h => h.hour);
                 analyticsHourlyChartInstance.data.datasets[0].data = data.hourly_distribution.map(h => h.count);
-                analyticsHourlyChartInstance.data.datasets[0].backgroundColor = Array(data.hourly_distribution.length).fill('rgba(255, 59, 48, 0.8)');
                 analyticsHourlyChartInstance._selectedCategoryIndex = -1;
                 analyticsHourlyChartInstance.resize();
                 analyticsHourlyChartInstance.update();
@@ -2623,11 +2625,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 4. Geo Countries
             if (data.geo_countries && analyticsGeoChartInstance && data.geo_countries.length > 0) {
-                const geoPalette = analyticsGeoChartInstance._defaultPalette || PALETTE_GLOBAL;
                 analyticsGeoChartInstance.data.labels = data.geo_countries.map(g => `${g.country} (${g.count})`);
                 analyticsGeoChartInstance.data.datasets[0].data = data.geo_countries.map(g => g.count);
-                analyticsGeoChartInstance.data.datasets[0].backgroundColor = getPureColorList(geoPalette, data.geo_countries.length);
-                analyticsGeoChartInstance.data.datasets[0].offset = Array(data.geo_countries.length).fill(0);
                 analyticsGeoChartInstance._selectedCategoryIndex = -1;
                 analyticsGeoChartInstance.resize();
                 analyticsGeoChartInstance.update();
@@ -2637,7 +2636,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.geo_isps && analyticsIspChartInstance && data.geo_isps.length > 0) {
                 analyticsIspChartInstance.data.labels = data.geo_isps.map(g => (g.isp.length > 18 ? g.isp.substring(0, 16) + '...' : g.isp));
                 analyticsIspChartInstance.data.datasets[0].data = data.geo_isps.map(g => g.count);
-                analyticsIspChartInstance.data.datasets[0].backgroundColor = Array(data.geo_isps.length).fill('rgba(0, 122, 255, 0.8)');
                 analyticsIspChartInstance._selectedCategoryIndex = -1;
                 analyticsIspChartInstance.resize();
                 analyticsIspChartInstance.update();
@@ -2645,10 +2643,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 6. Categories
             if (data.category_distribution && analyticsCategoryChartInstance && data.category_distribution.length > 0) {
-                const catPalette = analyticsCategoryChartInstance._defaultBarPalette || PALETTE_GLOBAL;
                 analyticsCategoryChartInstance.data.labels = data.category_distribution.map(c => CATEGORY_LABELS[c.category] || c.category);
                 analyticsCategoryChartInstance.data.datasets[0].data = data.category_distribution.map(c => c.count);
-                analyticsCategoryChartInstance.data.datasets[0].backgroundColor = getPureColorList(catPalette, data.category_distribution.length);
                 analyticsCategoryChartInstance._selectedCategoryIndex = -1;
                 analyticsCategoryChartInstance.resize();
                 analyticsCategoryChartInstance.update();
@@ -2656,12 +2652,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 7. Actions
             if (data.action_distribution && analyticsActionChartInstance && data.action_distribution.length > 0) {
-                const actPalette = analyticsActionChartInstance._defaultPalette || PALETTE_GLOBAL;
                 const actionNames = { 'INTERCEPTED': '诱捕阻断', 'PROBE': '外部探测', 'BUSINESS': '业务访问', 'WHITELIST': '白名单放行', 'WATCH': '持续观察' };
                 analyticsActionChartInstance.data.labels = data.action_distribution.map(a => `${actionNames[a.action] || a.action} (${a.count})`);
                 analyticsActionChartInstance.data.datasets[0].data = data.action_distribution.map(a => a.count);
-                analyticsActionChartInstance.data.datasets[0].backgroundColor = getPureColorList(actPalette, data.action_distribution.length);
-                analyticsActionChartInstance.data.datasets[0].offset = Array(data.action_distribution.length).fill(0);
                 analyticsActionChartInstance._selectedCategoryIndex = -1;
                 analyticsActionChartInstance.resize();
                 analyticsActionChartInstance.update();
@@ -2669,11 +2662,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 8. Levels
             if (data.threat_level_distribution && analyticsLevelChartInstance && data.threat_level_distribution.length > 0) {
-                const lvlPalette = analyticsLevelChartInstance._defaultPalette || PALETTE_GLOBAL;
                 analyticsLevelChartInstance.data.labels = data.threat_level_distribution.map(l => `${l.level} (${l.count})`);
                 analyticsLevelChartInstance.data.datasets[0].data = data.threat_level_distribution.map(l => l.count);
-                analyticsLevelChartInstance.data.datasets[0].backgroundColor = getPureColorList(lvlPalette, data.threat_level_distribution.length);
-                analyticsLevelChartInstance.data.datasets[0].offset = Array(data.threat_level_distribution.length).fill(0);
                 analyticsLevelChartInstance._selectedCategoryIndex = -1;
                 analyticsLevelChartInstance.resize();
                 analyticsLevelChartInstance.update();
@@ -2694,7 +2684,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             const httpPalette = ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'];
                             analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
                                 type: 'doughnut',
-                                data: { labels: [], datasets: [{ data: [], backgroundColor: httpPalette, borderWidth: 0 }] },
+                                data: { labels: [], datasets: [{ data: [], borderWidth: 0 }] },
                                 options: {
                                     responsive: true, maintainAspectRatio: false,
                                     plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
@@ -2704,11 +2694,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                     }
                     if (analyticsHttpStatusChartInstance) {
-                        const httpPalette = analyticsHttpStatusChartInstance._defaultPalette || PALETTE_GLOBAL;
                         analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
                         analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
-                        analyticsHttpStatusChartInstance.data.datasets[0].backgroundColor = getPureColorList(httpPalette, data.http_status_distribution.length);
-                        analyticsHttpStatusChartInstance.data.datasets[0].offset = Array(data.http_status_distribution.length).fill(0);
                         analyticsHttpStatusChartInstance._selectedCategoryIndex = -1;
                         analyticsHttpStatusChartInstance.resize();
                         analyticsHttpStatusChartInstance.update();
@@ -2981,11 +2968,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             if (data.port_distribution && portChartInstance && data.port_distribution.length > 0) {
-                const portPalette = portChartInstance._defaultPalette || ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6'];
                 portChartInstance.data.labels = data.port_distribution.map(p => `${p.port} (${p.name})`);
                 portChartInstance.data.datasets[0].data = data.port_distribution.map(p => p.count);
-                portChartInstance.data.datasets[0].backgroundColor = getPureColorList(portPalette, data.port_distribution.length);
-                portChartInstance.data.datasets[0].offset = Array(data.port_distribution.length).fill(0);
                 portChartInstance._selectedCategoryIndex = -1;
                 portChartInstance.update();
             }
