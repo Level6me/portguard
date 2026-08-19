@@ -899,7 +899,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <div class="val-sub">正常访问 (200) vs 敏感探针/异常 (4xx/5xx)</div>
                         </div>
                     </div>
-                    <div style="height: 210px;"><canvas id="analyticsHttpStatusChart"></canvas></div>
+                    <div style="height: 210px; position: relative;">
+                        <canvas id="analyticsHttpStatusChart"></canvas>
+                        <div id="analyticsHttpStatusEmpty" style="display: none; position: absolute; inset: 0; align-items: center; justify-content: center; text-align: center; color: var(--text-sec); font-size: 12px;">
+                            <div>
+                                <div style="font-size: 24px; margin-bottom: 6px;">🚦</div>
+                                <div>暂无 HTTP 访问状态码记录</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="card">
                     <div class="card-header">
@@ -2188,10 +2196,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             // 9. HTTP Status Codes
-            if (data.http_status_distribution && analyticsHttpStatusChartInstance && data.http_status_distribution.length > 0) {
-                analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
-                analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
-                analyticsHttpStatusChartInstance.update();
+            const httpEmptyEl = document.getElementById('analyticsHttpStatusEmpty');
+            const httpCanvas = document.getElementById('analyticsHttpStatusChart');
+            if (data.http_status_distribution && data.http_status_distribution.length > 0) {
+                if (httpEmptyEl) httpEmptyEl.style.display = 'none';
+                if (httpCanvas) httpCanvas.style.display = 'block';
+                if (analyticsHttpStatusChartInstance) {
+                    analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
+                    analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
+                    analyticsHttpStatusChartInstance.update();
+                }
+            } else {
+                if (httpEmptyEl) httpEmptyEl.style.display = 'flex';
+                if (httpCanvas) httpCanvas.style.display = 'none';
             }
 
             // 10. Web Diagnostics List (Paths / UAs)
@@ -2243,13 +2260,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const safeTitle = escapeHtml(rawTitle);
             const count = parseInt(item.count) || 0;
             const pct = Math.min(100, Math.max(0, Math.round((count / maxCount) * 100)));
+            const tagBadge = (!isPath && item.tag) ? `<span class="tag ${item.is_scanner ? 'danger' : 'accent'}" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; flex-shrink: 0;">${escapeHtml(item.tag)}</span>` : '';
+
             html += `
                 <div style="background: var(--card-sec); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 10px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-size: 11px;">
-                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; cursor: help;" title="${safeTitle}">
-                            #${idx + 1} ${safeTitle}
+                        <span style="font-family: monospace; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%; display: flex; align-items: center;" title="${safeTitle}">
+                            <span style="flex-shrink: 0; margin-right: 4px;">#${idx + 1}</span>
+                            ${tagBadge}
+                            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeTitle}</span>
                         </span>
-                        <span style="color: var(--accent); font-weight: 700;">${count} 次</span>
+                        <span style="color: var(--accent); font-weight: 700; flex-shrink: 0; margin-left: 8px;">${count} 次</span>
                     </div>
                     <div style="height: 4px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden;">
                         <div style="height: 100%; width: ${pct}%; background: ${isPath ? 'linear-gradient(90deg, #007aff, #5856d6)' : 'linear-gradient(90deg, #ff9500, #ff3b30)'}; border-radius: 99px;"></div>
@@ -4295,11 +4316,70 @@ class RequestHandler(BaseHTTPRequestHandler):
                 c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY status_code ORDER BY cnt DESC", (cutoff_ts,))
                 http_status_dist = [{"code": str(row[0]), "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT path, method, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY path ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
+                c.execute("""
+                    SELECT path, method, COUNT(*) as cnt 
+                    FROM access_logs 
+                    WHERE timestamp >= ? 
+                    GROUP BY path 
+                    ORDER BY 
+                        (CASE WHEN status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%' OR path LIKE '%api%' OR path LIKE '%.sql%' OR path LIKE '%swagger%' OR path LIKE '%shell%' THEN 1 ELSE 0 END) DESC,
+                        cnt DESC 
+                    LIMIT 10
+                """, (cutoff_ts,))
                 top_paths = [{"path": str(row[0] or "/"), "method": str(row[1] or "GET"), "count": int(row[2] or 0)} for row in c.fetchall()]
 
-                c.execute("SELECT user_agent, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND user_agent IS NOT NULL AND user_agent != '' GROUP BY user_agent ORDER BY cnt DESC LIMIT 10", (cutoff_ts,))
-                top_uas = [{"ua": str(row[0] or "未知 UA / 空指纹"), "count": int(row[1] or 0)} for row in c.fetchall()]
+                SCANNER_KEYWORDS = [
+                    "sqlmap", "nmap", "nikto", "zgrab", "masscan", "nuclei", "fscan", "dirsearch", "gobuster",
+                    "hydra", "acunetix", "nessus", "awvs", "wpscan", "openvas", "censys", "shodan", "zoomeye",
+                    "python", "requests", "urllib", "aiohttp", "curl", "wget", "go-http", "java", "scanner",
+                    "crawler", "spider", "bot", "probe", "scan", "netcraft", "research", "httpx", "ffuf", "whatweb"
+                ]
+
+                c.execute("""
+                    SELECT user_agent, MAX(status_code) as max_status, COUNT(*) as cnt 
+                    FROM access_logs 
+                    WHERE timestamp >= ? 
+                      AND user_agent IS NOT NULL 
+                      AND TRIM(user_agent) NOT IN ('', '-', 'null', 'None', 'undefined')
+                    GROUP BY user_agent 
+                    ORDER BY cnt DESC 
+                    LIMIT 100
+                """, (cutoff_ts,))
+                raw_ua_rows = c.fetchall()
+
+                scanner_uas = []
+                other_uas = []
+
+                for r in raw_ua_rows:
+                    ua_str = str(r[0] or "").strip()
+                    if not ua_str or ua_str in ('-', 'null', 'None'):
+                        continue
+                    cnt = int(r[2] or 0)
+                    ua_lower = ua_str.lower()
+
+                    is_scanner = any(k in ua_lower for k in SCANNER_KEYWORDS)
+                    
+                    tag = "🤖 自动化脚本"
+                    if any(k in ua_lower for k in ["sqlmap", "nmap", "nikto", "nuclei", "fscan", "acunetix", "nessus", "awvs", "hydra"]):
+                        tag = "🔥 漏洞扫描器"
+                    elif any(k in ua_lower for k in ["curl", "wget", "python", "requests", "urllib", "go-http", "java", "httpx"]):
+                        tag = "⚡ 命令行/脚本"
+                    elif any(k in ua_lower for k in ["zgrab", "masscan", "censys", "shodan", "zoomeye", "netcraft", "scan", "probe"]):
+                        tag = "📡 测绘与探测"
+                    elif any(k in ua_lower for k in ["bot", "spider", "crawler"]):
+                        tag = "🕷️ 爬虫/索引器"
+                    elif r[1] and int(r[1]) >= 400:
+                        tag = "⚠️ 异常探针源"
+                    else:
+                        tag = "🌐 客户端 UA"
+
+                    item = {"ua": ua_str, "count": cnt, "tag": tag, "is_scanner": is_scanner}
+                    if is_scanner or tag != "🌐 客户端 UA":
+                        scanner_uas.append(item)
+                    else:
+                        other_uas.append(item)
+
+                top_uas = (scanner_uas + other_uas)[:10]
 
                 c.execute("""
                     SELECT ip, country, isp, level, COUNT(*) as hits, MAX(attack_time) as last_seen, GROUP_CONCAT(DISTINCT port) as ports 
