@@ -982,9 +982,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <div class="card-title">🔍 敏感文件探针 & 扫描工具指纹</div>
                             <div class="val-sub">Web 嗅探特征排行 TOP 10</div>
                         </div>
-                        <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
-                            <button class="pill-btn accent" id="btn-webdiag-path" onclick="switchWebDiagTab('path')" style="padding: 3px 8px; font-size: 11px; border-radius: 99px;">📁 敏感路径</button>
-                            <button class="pill-btn" id="btn-webdiag-ua" onclick="switchWebDiagTab('ua')" style="padding: 3px 8px; font-size: 11px; border-radius: 99px; background: transparent;">🤖 扫描器 UA</button>
+                        <div class="segmented-control" style="padding: 2px;">
+                            <button class="segment-btn active" id="btn-webdiag-path" onclick="switchWebDiagTab('path')" style="padding: 4px 10px; font-size: 11px;">📁 敏感路径</button>
+                            <button class="segment-btn" id="btn-webdiag-ua" onclick="switchWebDiagTab('ua')" style="padding: 4px 10px; font-size: 11px;">🤖 扫描器 UA</button>
                         </div>
                     </div>
                     <div id="web-diag-container" style="max-height: 210px; min-height: 210px; overflow-y: auto; padding-right: 4px;">
@@ -1984,8 +1984,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             });
         }
-
-        initAnalyticsCharts();
     }
 
     function initAnalyticsCharts() {
@@ -2171,9 +2169,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (subviewOverview) subviewOverview.style.display = 'none';
             if (subviewAnalysis) subviewAnalysis.style.display = 'block';
             if (toolbar) toolbar.style.display = 'flex';
-            if (!analyticsTrendChartInstance) {
-                initAnalyticsCharts();
-            }
+            
+            // 确保在父容器 display: block 可见之后初始化或重算尺寸
+            initAnalyticsCharts();
             fetchAnalyticsData(false);
         }
     }
@@ -2216,6 +2214,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 analyticsTrendChartInstance.data.datasets[0].data = data.trend.events || [];
                 analyticsTrendChartInstance.data.datasets[1].data = data.trend.probes || [];
                 analyticsTrendChartInstance.data.datasets[2].data = data.trend.web || [];
+                analyticsTrendChartInstance.resize();
                 analyticsTrendChartInstance.update();
             }
 
@@ -2223,6 +2222,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.hourly_distribution && analyticsHourlyChartInstance) {
                 analyticsHourlyChartInstance.data.labels = data.hourly_distribution.map(h => h.hour);
                 analyticsHourlyChartInstance.data.datasets[0].data = data.hourly_distribution.map(h => h.count);
+                analyticsHourlyChartInstance.resize();
                 analyticsHourlyChartInstance.update();
             }
 
@@ -2230,6 +2230,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.geo_countries && analyticsGeoChartInstance && data.geo_countries.length > 0) {
                 analyticsGeoChartInstance.data.labels = data.geo_countries.map(g => `${g.country} (${g.count})`);
                 analyticsGeoChartInstance.data.datasets[0].data = data.geo_countries.map(g => g.count);
+                analyticsGeoChartInstance.resize();
                 analyticsGeoChartInstance.update();
             }
 
@@ -2237,6 +2238,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.geo_isps && analyticsIspChartInstance && data.geo_isps.length > 0) {
                 analyticsIspChartInstance.data.labels = data.geo_isps.map(g => (g.isp.length > 18 ? g.isp.substring(0, 16) + '...' : g.isp));
                 analyticsIspChartInstance.data.datasets[0].data = data.geo_isps.map(g => g.count);
+                analyticsIspChartInstance.resize();
                 analyticsIspChartInstance.update();
             }
 
@@ -2244,6 +2246,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.category_distribution && analyticsCategoryChartInstance && data.category_distribution.length > 0) {
                 analyticsCategoryChartInstance.data.labels = data.category_distribution.map(c => CATEGORY_LABELS[c.category] || c.category);
                 analyticsCategoryChartInstance.data.datasets[0].data = data.category_distribution.map(c => c.count);
+                analyticsCategoryChartInstance.resize();
                 analyticsCategoryChartInstance.update();
             }
 
@@ -2252,6 +2255,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const actionNames = { 'INTERCEPTED': '诱捕阻断', 'PROBE': '外部探测', 'BUSINESS': '业务访问', 'WHITELIST': '白名单放行', 'WATCH': '持续观察' };
                 analyticsActionChartInstance.data.labels = data.action_distribution.map(a => `${actionNames[a.action] || a.action} (${a.count})`);
                 analyticsActionChartInstance.data.datasets[0].data = data.action_distribution.map(a => a.count);
+                analyticsActionChartInstance.resize();
                 analyticsActionChartInstance.update();
             }
 
@@ -2259,19 +2263,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.threat_level_distribution && analyticsLevelChartInstance && data.threat_level_distribution.length > 0) {
                 analyticsLevelChartInstance.data.labels = data.threat_level_distribution.map(l => `${l.level} (${l.count})`);
                 analyticsLevelChartInstance.data.datasets[0].data = data.threat_level_distribution.map(l => l.count);
+                analyticsLevelChartInstance.resize();
                 analyticsLevelChartInstance.update();
             }
 
-            // 9. HTTP Status Codes
+            // 9. HTTP Status Codes (带自动自愈与resize)
             const httpEmptyEl = document.getElementById('analyticsHttpStatusEmpty');
             const httpCanvas = document.getElementById('analyticsHttpStatusChart');
             if (data.http_status_distribution && data.http_status_distribution.length > 0) {
                 if (httpEmptyEl) httpEmptyEl.style.display = 'none';
-                if (httpCanvas) httpCanvas.style.display = 'block';
-                if (analyticsHttpStatusChartInstance) {
-                    analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
-                    analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
-                    analyticsHttpStatusChartInstance.update();
+                if (httpCanvas) {
+                    httpCanvas.style.display = 'block';
+                    if (!analyticsHttpStatusChartInstance) {
+                        const ctxHttp = httpCanvas.getContext('2d');
+                        if (ctxHttp) {
+                            const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+                            const textColor = isDark ? '#98989d' : '#8e8e93';
+                            analyticsHttpStatusChartInstance = new Chart(ctxHttp, {
+                                type: 'doughnut',
+                                data: { labels: [], datasets: [{ data: [], backgroundColor: ['#34c759', '#ff9500', '#ff3b30', '#af52de', '#8e8e93', '#007aff', '#ffd60a'], borderWidth: 0 }] },
+                                options: {
+                                    responsive: true, maintainAspectRatio: false,
+                                    plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 10, weight: 600 } } } }
+                                }
+                            });
+                        }
+                    }
+                    if (analyticsHttpStatusChartInstance) {
+                        analyticsHttpStatusChartInstance.data.labels = data.http_status_distribution.map(s => `HTTP ${s.code} (${s.count})`);
+                        analyticsHttpStatusChartInstance.data.datasets[0].data = data.http_status_distribution.map(s => s.count);
+                        analyticsHttpStatusChartInstance.resize();
+                        analyticsHttpStatusChartInstance.update();
+                    }
                 }
             } else {
                 if (httpEmptyEl) httpEmptyEl.style.display = 'flex';
@@ -2294,13 +2317,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         currentWebDiagTab = tab;
         const btnPath = document.getElementById('btn-webdiag-path');
         const btnUa = document.getElementById('btn-webdiag-ua');
-        if (tab === 'path') {
-            if (btnPath) { btnPath.className = 'pill-btn accent'; btnPath.style.background = ''; }
-            if (btnUa) { btnUa.className = 'pill-btn'; btnUa.style.background = 'transparent'; }
-        } else {
-            if (btnPath) { btnPath.className = 'pill-btn'; btnPath.style.background = 'transparent'; }
-            if (btnUa) { btnUa.className = 'pill-btn accent'; btnUa.style.background = ''; }
-        }
+        if (btnPath) btnPath.classList.toggle('active', tab === 'path');
+        if (btnUa) btnUa.classList.toggle('active', tab === 'ua');
+
         if (analyticsDataCache) {
             renderWebDiagList(analyticsDataCache.top_sensitive_paths || [], analyticsDataCache.top_user_agents || []);
         } else {
@@ -2323,8 +2342,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const maxCount = Math.max(...counts, 1);
         let html = '<div style="display: flex; flex-direction: column; gap: 8px; padding-top: 2px;">';
         list.forEach((item, idx) => {
-            const rawTitle = isPath ? `${item.method ? item.method + ' ' : ''}${item.path || ''}` : (item.ua || '未知 UA / 空指纹');
+            const rawTitle = isPath ? `${item.method ? item.method + ' ' : ''}${item.path || ''}` : (item.display_name || item.ua || '未知指纹');
             const safeTitle = escapeHtml(rawTitle);
+            const fullTitle = escapeHtml(isPath ? rawTitle : (item.ua || rawTitle));
             const count = parseInt(item.count) || 0;
             const pct = Math.min(100, Math.max(0, Math.round((count / maxCount) * 100)));
             const tagBadge = (!isPath && item.tag) ? `<span class="tag ${item.is_scanner ? 'danger' : 'accent'}" style="font-size: 9px; padding: 1px 5px; flex-shrink: 0;">${escapeHtml(item.tag)}</span>` : '';
@@ -2336,7 +2356,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <div class="diag-row-left">
                             <span class="diag-rank-badge">#${idx + 1}</span>
                             ${tagBadge}
-                            <span class="diag-text-title" title="${safeTitle}">${safeTitle}</span>
+                            <span class="diag-text-title" title="${fullTitle}">${safeTitle}</span>
                         </div>
                         <span class="diag-count-text">${count.toLocaleString()} 次</span>
                     </div>
@@ -4396,58 +4416,102 @@ class RequestHandler(BaseHTTPRequestHandler):
                 """, (cutoff_ts,))
                 top_paths = [{"path": str(row[0] or "/"), "method": str(row[1] or "GET"), "count": int(row[2] or 0)} for row in c.fetchall()]
 
-                SCANNER_KEYWORDS = [
-                    "sqlmap", "nmap", "nikto", "zgrab", "masscan", "nuclei", "fscan", "dirsearch", "gobuster",
-                    "hydra", "acunetix", "nessus", "awvs", "wpscan", "openvas", "censys", "shodan", "zoomeye",
-                    "python", "requests", "urllib", "aiohttp", "curl", "wget", "go-http", "java", "scanner",
-                    "crawler", "spider", "bot", "probe", "scan", "netcraft", "research", "httpx", "ffuf", "whatweb"
+                # 扫描器与自动化工具指纹定义表：(关键词, 标签, 是否恶意扫描器, 显示名称)
+                SCANNER_PATTERNS = [
+                    ("sqlmap", "🔥 漏洞扫描器", True, "SQLMap 注入利用工具"),
+                    ("nmap", "🔥 漏洞扫描器", True, "Nmap 网络映射扫描器"),
+                    ("nikto", "🔥 漏洞扫描器", True, "Nikto Web漏洞扫描器"),
+                    ("nuclei", "🔥 漏洞扫描器", True, "Nuclei 快速漏洞扫描器"),
+                    ("fscan", "🔥 漏洞扫描器", True, "Fscan 内网综合扫描器"),
+                    ("acunetix", "🔥 漏洞扫描器", True, "AWVS 漏洞扫描器"),
+                    ("awvs", "🔥 漏洞扫描器", True, "AWVS 漏洞扫描器"),
+                    ("nessus", "🔥 漏洞扫描器", True, "Nessus 脆弱性评估器"),
+                    ("dirsearch", "🔥 路径爆破", True, "Dirsearch 敏感路径扫描"),
+                    ("gobuster", "🔥 路径爆破", True, "Gobuster 目录枚举工具"),
+                    ("ffuf", "🔥 路径爆破", True, "FFUF 快速模糊测试器"),
+                    ("hydra", "🔥 弱口令爆破", True, "Hydra 自动化爆破工具"),
+                    ("wpscan", "🔥 探针扫描", True, "WPScan WordPress扫描器"),
+                    ("masscan", "📡 高速扫描", True, "Masscan 端口扫描器"),
+                    ("zgrab", "📡 资产测绘", True, "ZGrab 测绘握手工具"),
+                    ("censys", "📡 资产测绘", True, "Censys 测绘探测器"),
+                    ("shodan", "📡 资产测绘", True, "Shodan 空间测绘爬虫"),
+                    ("zoomeye", "📡 资产测绘", True, "ZoomEye 空间指纹探测"),
+                    ("netcraft", "📡 资产测绘", True, "Netcraft 探测探针"),
+                    ("infrawatch", "📡 资产测绘", True, "Infrawatch 基础探针"),
+                    ("httpx", "⚡ 探测脚本", True, "HTTPX 快速探测工具"),
+                    ("whatweb", "⚡ 指纹识别", True, "WhatWeb 技术栈识别器"),
+                    ("libredtail", "⚡ 恶意脚本", True, "Redtail 恶意攻击脚本"),
+                    ("python", "⚡ 脚本工具", False, "Python 自动化脚本"),
+                    ("requests", "⚡ 脚本工具", False, "Python Requests 探测库"),
+                    ("urllib", "⚡ 脚本工具", False, "Python Urllib 探测库"),
+                    ("aiohttp", "⚡ 脚本工具", False, "Python Aiohttp 异步请求"),
+                    ("go-http", "⚡ 脚本工具", False, "Go HTTP 自动化客户端"),
+                    ("curl", "⚡ 命令行工具", False, "cURL 命令行请求"),
+                    ("wget", "⚡ 命令行工具", False, "Wget 命令行下载器"),
+                    ("java", "⚡ 脚本工具", False, "Java 自动化探测客户端"),
+                    ("oai-searchbot", "🕷️ 搜索引擎爬虫", False, "OpenAI SearchBot 搜索引擎"),
+                    ("gptbot", "🕷️ AI 训练爬虫", False, "OpenAI GPTBot 语料抓取"),
+                    ("bytespider", "🕷️ 商业爬虫", False, "ByteSpider 字节跳动爬虫"),
+                    ("googlebot", "🕷️ 商业爬虫", False, "Googlebot 谷歌索引爬虫"),
+                    ("bingbot", "🕷️ 商业爬虫", False, "Bingbot 必应搜索爬虫"),
+                    ("baiduspider", "🕷️ 商业爬虫", False, "BaiduSpider 百度索引爬虫"),
+                    ("yandex", "🕷️ 商业爬虫", False, "Yandex 搜索引擎爬虫"),
+                    ("bot", "🕷️ 爬虫/索引器", False, "网络自动化 Bot"),
+                    ("crawler", "🕷️ 爬虫/索引器", False, "网络爬虫程序"),
+                    ("spider", "🕷️ 爬虫/索引器", False, "网络蜘蛛爬虫"),
+                    ("probe", "📡 测绘与探测", False, "网络探针程序"),
+                    ("scan", "📡 测绘与探测", False, "自动化扫描程序"),
                 ]
 
+                COMMON_BROWSER_TOKENS = ["mozilla/5.0", "applewebkit", "safari", "chrome", "edge", "firefox"]
+
                 c.execute("""
-                    SELECT user_agent, MAX(status_code) as max_status, COUNT(*) as cnt 
+                    SELECT user_agent, COUNT(*) as cnt 
                     FROM access_logs 
                     WHERE timestamp >= ? 
                       AND user_agent IS NOT NULL 
                       AND TRIM(user_agent) NOT IN ('', '-', 'null', 'None', 'undefined')
                     GROUP BY user_agent 
                     ORDER BY cnt DESC 
-                    LIMIT 100
+                    LIMIT 300
                 """, (cutoff_ts,))
                 raw_ua_rows = c.fetchall()
 
-                scanner_uas = []
-                other_uas = []
-
+                top_uas = []
                 for r in raw_ua_rows:
                     ua_str = str(r[0] or "").strip()
-                    if not ua_str or ua_str in ('-', 'null', 'None'):
-                        continue
-                    cnt = int(r[2] or 0)
+                    cnt = int(r[1] or 0)
                     ua_lower = ua_str.lower()
 
-                    is_scanner = any(k in ua_lower for k in SCANNER_KEYWORDS)
-                    
-                    tag = "🤖 自动化脚本"
-                    if any(k in ua_lower for k in ["sqlmap", "nmap", "nikto", "nuclei", "fscan", "acunetix", "nessus", "awvs", "hydra"]):
-                        tag = "🔥 漏洞扫描器"
-                    elif any(k in ua_lower for k in ["curl", "wget", "python", "requests", "urllib", "go-http", "java", "httpx"]):
-                        tag = "⚡ 命令行/脚本"
-                    elif any(k in ua_lower for k in ["zgrab", "masscan", "censys", "shodan", "zoomeye", "netcraft", "scan", "probe"]):
-                        tag = "📡 测绘与探测"
-                    elif any(k in ua_lower for k in ["bot", "spider", "crawler"]):
-                        tag = "🕷️ 爬虫/索引器"
-                    elif r[1] and int(r[1]) >= 400:
-                        tag = "⚠️ 异常探针源"
-                    else:
-                        tag = "🌐 客户端 UA"
+                    matched = None
+                    for key, tag, is_scanner, name in SCANNER_PATTERNS:
+                        if key in ua_lower:
+                            matched = (tag, is_scanner, name)
+                            break
 
-                    item = {"ua": ua_str, "count": cnt, "tag": tag, "is_scanner": is_scanner}
-                    if is_scanner or tag != "🌐 客户端 UA":
-                        scanner_uas.append(item)
+                    if matched:
+                        tag, is_scanner, name = matched
+                        display_str = f"{name} ({ua_str[:32]}...)" if len(ua_str) > 32 else name
+                        top_uas.append({
+                            "ua": ua_str,
+                            "display_name": display_str,
+                            "count": cnt,
+                            "tag": tag,
+                            "is_scanner": is_scanner
+                        })
                     else:
-                        other_uas.append(item)
+                        is_normal_browser = any(b in ua_lower for b in COMMON_BROWSER_TOKENS)
+                        if not is_normal_browser and len(ua_str) < 80:
+                            top_uas.append({
+                                "ua": ua_str,
+                                "display_name": ua_str,
+                                "count": cnt,
+                                "tag": "🤖 自定义探针",
+                                "is_scanner": False
+                            })
 
-                top_uas = (scanner_uas + other_uas)[:10]
+                    if len(top_uas) >= 10:
+                        break
 
                 c.execute("""
                     SELECT ip, country, isp, level, COUNT(*) as hits, MAX(attack_time) as last_seen, GROUP_CONCAT(DISTINCT port) as ports 
