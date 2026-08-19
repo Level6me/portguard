@@ -34,6 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install
   - 暗黑 (Dark) / 明亮 (Light) 双主题无缝切换与 Chart.js 毫秒级重绘
   - 手机移动端与桌面多端 100% 弹性流体自适应
 - 🌍 **全球 ASN / 威胁画像**：自动异步查询攻击者国家、城市、ISP 并生成地域攻击热力排行。
+- 🙈 **全局 IP 隐藏与审计过滤**：支持在 IP 详情卡片一键全局隐藏指定 IP 的所有日志与统计，并在右上角设置弹窗中通过「IP 隐藏列表」独立管理与一键恢复。
 - 📥 **审计报表一键导出**：支持一键导出完整的 CSV 安全事件审计清单。
 
 ---

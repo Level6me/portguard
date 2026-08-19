@@ -24,7 +24,8 @@ from sentry_daemon import (
     trap_instance, sniffer_instance, site_collector_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
     DEFAULT_HTTP_TRAPS, get_http_traps, check_http_request_traps,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
-    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR
+    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
+    get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips
 )
 
 def parse_loose_json_or_lines(text):
@@ -1399,18 +1400,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
 </div>
 
-<!-- Modal: 系统设置弹窗 -->
+<!-- Modal: 系统设置与高级策略弹窗 -->
 <div class="modal-overlay" id="modal-settings">
-    <div class="modal-sheet" style="max-width: 620px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+    <div class="modal-sheet" style="max-width: 680px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+            <h3 style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; margin: 0;">
                 <span>⚙️</span>
-                <span>系统防御参数与全局设置</span>
+                <span>系统策略与高级设置</span>
             </h3>
             <button class="action-btn" onclick="closeModals()" style="font-size: 16px; padding: 4px 8px;">✕</button>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 16px; max-height: 75vh; overflow-y: auto; padding-right: 4px;">
+        <!-- 选项卡分段切换器 -->
+        <div style="display: flex; background: var(--card-sec); border-radius: 10px; padding: 3px; border: 1px solid var(--border-subtle); margin-bottom: 14px;">
+            <button class="seg-btn active" id="settings-tab-btn-defense" onclick="switchSettingsTab('defense')" style="flex: 1; padding: 6px 12px; font-size: 12px; font-weight: 700; border-radius: 7px; border: none; cursor: pointer; background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                🛡️ 系统防御参数
+            </button>
+            <button class="seg-btn" id="settings-tab-btn-hidden" onclick="switchSettingsTab('hidden')" style="flex: 1; padding: 6px 12px; font-size: 12px; font-weight: 700; border-radius: 7px; border: none; cursor: pointer; background: transparent; color: var(--text-sec);">
+                🚫 IP 隐藏列表 <span class="badge" id="badge-hidden-ips-count" style="margin-left: 4px; padding: 1px 6px; font-size: 10px; border-radius: 10px; background: var(--card-sec); color: var(--text-sec);">0</span>
+            </button>
+        </div>
+
+        <!-- Tab 1: 系统防御参数 -->
+        <div id="settings-pane-defense" style="display: flex; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px;">
             <!-- 1. 封禁灵敏度与阈值 -->
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -1493,11 +1505,56 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </label>
                 </div>
             </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px;">
+                <button class="pill-btn" onclick="closeModals()">取消</button>
+                <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 8px 20px; font-weight: 700;">💾 保存设置</button>
+            </div>
         </div>
 
-        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
-            <button class="pill-btn" onclick="closeModals()">取消</button>
-            <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 8px 20px; font-weight: 700;">💾 保存设置</button>
+        <!-- Tab 2: IP 隐藏列表 -->
+        <div id="settings-pane-hidden" style="display: none; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
+                    <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
+                    被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <input type="text" id="input-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP (如 1.2.3.4)" style="flex: 1; min-width: 180px; padding: 8px 12px; font-size: 12px; font-family: monospace;">
+                    <input type="text" id="input-hidden-remark" class="input-field" placeholder="备注 (可选)" style="width: 130px; padding: 8px 10px; font-size: 12px;">
+                    <button class="pill-btn accent" onclick="addCustomHiddenIP()" style="padding: 8px 16px; font-size: 12px; font-weight: 700; white-space: nowrap;">+ 添加隐藏</button>
+                </div>
+            </div>
+
+            <!-- 隐藏 IP 表格 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--card);">
+                    <span style="font-size: 12px; font-weight: 700; color: var(--text);">已隐藏 IP 名单 (<span id="hidden-ips-table-count">0</span>)</span>
+                    <button class="pill-btn danger" onclick="clearAllHiddenIPs()" style="padding: 3px 8px; font-size: 11px;">🗑️ 清空全部隐藏</button>
+                </div>
+                <div style="max-height: 280px; overflow-y: auto;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec);">
+                                <th style="padding: 8px 12px;">IP 地址 / 归属</th>
+                                <th style="padding: 8px 12px;">隐藏时间</th>
+                                <th style="padding: 8px 12px;">备注说明</th>
+                                <th style="padding: 8px 12px; text-align: right;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="hidden-ips-table-body">
+                            <!-- JS 动态渲染 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px;">
+                <button class="pill-btn" onclick="closeModals()">关闭</button>
+            </div>
         </div>
     </div>
 </div>
@@ -1787,6 +1844,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <button class="pill-btn" onclick="closeModals()">关闭</button>
             <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
             <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 一键拉黑</button>
+            <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在全站控制台中全局隐藏此 IP 的所有日志记录与态势统计">🙈 隐藏此 IP 日志</button>
         </div>
     </div>
 </div>
@@ -1920,6 +1978,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let currentAccessLogMode = 'port';
     let allBlacklist = [];
     let allWhitelist = [];
+    let allHiddenIPs = [];
     let allTraps = [];
     let currentTrapTab = 'port';
     let allHttpTraps = [];
@@ -2652,6 +2711,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             renderWhitelistTable();
         });
 
+        fetch('/api/hidden-ips').then(res => res.json()).then(data => {
+            allHiddenIPs = data || [];
+            updateHiddenBadge(allHiddenIPs.length);
+        }).catch(() => {});
+
         if (currentTabKey === 'access-logs') {
             fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
                 if (currentAccessLogMode === 'port') allPortLogs = data;
@@ -2711,12 +2775,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         
         const isBanned = allBlacklist && allBlacklist.some(b => b.ip === ip);
         const isWhite = allWhitelist && allWhitelist.some(w => w.ip === ip);
+        const isHidden = allHiddenIPs && allHiddenIPs.some(h => h.ip === ip);
         
         let statusHtml = '<span class="tag warning">● 未封禁 (正常)</span>';
         if (isBanned) {
             statusHtml = '<span class="tag danger">🚫 内核黑名单 (已阻断)</span>';
         } else if (isWhite) {
             statusHtml = '<span class="tag success">🛡️ 信任白名单 (已放行)</span>';
+        }
+        if (isHidden) {
+            statusHtml += ' <span class="tag" style="background: rgba(255, 149, 0, 0.15); color: var(--warning); border: 1px solid rgba(255, 149, 0, 0.3);">🙈 日志已隐藏</span>';
         }
         document.getElementById('ip-detail-status').innerHTML = statusHtml;
         
@@ -2728,6 +2796,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             } else {
                 banBtn.innerText = '🚫 一键拉黑 IP';
                 banBtn.className = 'pill-btn danger';
+            }
+        }
+
+        const hideBtn = document.getElementById('btn-ip-detail-hide');
+        if (hideBtn) {
+            if (isHidden) {
+                hideBtn.innerText = '👁️ 恢复显示此 IP 日志';
+                hideBtn.className = 'pill-btn success';
+                hideBtn.style.color = '';
+                hideBtn.style.borderColor = '';
+            } else {
+                hideBtn.innerText = '🙈 隐藏此 IP 日志';
+                hideBtn.className = 'pill-btn';
+                hideBtn.style.color = 'var(--warning)';
+                hideBtn.style.borderColor = 'rgba(255, 149, 0, 0.4)';
             }
         }
         
@@ -2762,6 +2845,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
                 closeModals();
                 fetchData(false);
+            });
+        }
+    }
+
+    function toggleCurrentDetailIPHide() {
+        if (!currentDetailIP) return;
+        const isHidden = allHiddenIPs && allHiddenIPs.some(h => h.ip === currentDetailIP);
+        if (isHidden) {
+            fetch('/api/hidden-ips/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: currentDetailIP })
+            }).then(res => res.json()).then(res => {
+                showToast(res.msg || `已恢复显示 IP: ${currentDetailIP} 的日志记录`, '👁️');
+                closeModals();
+                fetchData(false);
+                loadHiddenIPs();
+            });
+        } else {
+            fetch('/api/hidden-ips', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: currentDetailIP, remark: '详情卡片快速隐藏' })
+            }).then(res => res.json()).then(res => {
+                showToast(res.msg || `已全局隐藏 IP: ${currentDetailIP} 的所有日志`, '🙈');
+                closeModals();
+                fetchData(false);
+                loadHiddenIPs();
             });
         }
     }
@@ -4184,6 +4295,192 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    // 设置弹窗选项卡切换与隐藏 IP 列表管理
+    let currentSettingsTab = 'defense';
+
+    function switchSettingsTab(tabKey) {
+        currentSettingsTab = tabKey;
+        const btnDefense = document.getElementById('settings-tab-btn-defense');
+        const btnHidden = document.getElementById('settings-tab-btn-hidden');
+        const paneDefense = document.getElementById('settings-pane-defense');
+        const paneHidden = document.getElementById('settings-pane-hidden');
+
+        if (tabKey === 'defense') {
+            if (btnDefense) {
+                btnDefense.style.background = 'var(--card)';
+                btnDefense.style.color = 'var(--text)';
+                btnDefense.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+            }
+            if (btnHidden) {
+                btnHidden.style.background = 'transparent';
+                btnHidden.style.color = 'var(--text-sec)';
+                btnHidden.style.boxShadow = 'none';
+            }
+            if (paneDefense) paneDefense.style.display = 'flex';
+            if (paneHidden) paneHidden.style.display = 'none';
+        } else {
+            if (btnHidden) {
+                btnHidden.style.background = 'var(--card)';
+                btnHidden.style.color = 'var(--text)';
+                btnHidden.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+            }
+            if (btnDefense) {
+                btnDefense.style.background = 'transparent';
+                btnDefense.style.color = 'var(--text-sec)';
+                btnDefense.style.boxShadow = 'none';
+            }
+            if (paneDefense) paneDefense.style.display = 'none';
+            if (paneHidden) paneHidden.style.display = 'flex';
+            loadHiddenIPs();
+        }
+    }
+
+    function updateHiddenBadge(count) {
+        const badge = document.getElementById('badge-hidden-ips-count');
+        if (badge) {
+            badge.innerText = count || 0;
+            if (count > 0) {
+                badge.style.background = 'rgba(255, 149, 0, 0.2)';
+                badge.style.color = 'var(--warning)';
+            } else {
+                badge.style.background = 'var(--card-sec)';
+                badge.style.color = 'var(--text-sec)';
+            }
+        }
+    }
+
+    async function loadHiddenIPs() {
+        try {
+            const res = await fetch('/api/hidden-ips');
+            const data = await res.json();
+            allHiddenIPs = data || [];
+            updateHiddenBadge(allHiddenIPs.length);
+            renderHiddenIPsTable(allHiddenIPs);
+        } catch (e) {
+            console.error('加载隐藏 IP 失败:', e);
+        }
+    }
+
+    function renderHiddenIPsTable(list) {
+        const tbody = document.getElementById('hidden-ips-table-body');
+        const countSpan = document.getElementById('hidden-ips-table-count');
+        if (countSpan) countSpan.innerText = list.length;
+        if (!tbody) return;
+
+        if (!list || list.length === 0) {
+            tbody.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; padding: 28px 14px; color: var(--text-sec);">
+                    <div style="font-size: 24px; margin-bottom: 6px;">🙈</div>
+                    <div style="font-size: 13px; font-weight: 600;">暂无隐藏 IP</div>
+                    <div style="font-size: 11px; margin-top: 2px;">在日志中点击任意 IP 详情卡片即可一键全局隐藏</div>
+                </td>
+            </tr>
+            `;
+            return;
+        }
+
+        let html = '';
+        list.forEach(item => {
+            const geoText = (item.country && item.country !== '未知地域') ? `${item.country} · ${item.city || item.region || item.isp || ''}` : (item.isp || '公网节点');
+            html += `
+            <tr style="border-bottom: 1px solid var(--border-subtle); transition: background 0.15s ease;" onmouseover="this.style.background='var(--card)'" onmouseout="this.style.background='transparent'">
+                <td style="padding: 10px 12px;">
+                    <div style="font-family: monospace; font-weight: 700; font-size: 13px; color: var(--text);">${escapeHtml(item.ip)}</div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 2px;">🌐 ${escapeHtml(geoText)}</div>
+                </td>
+                <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec); white-space: nowrap;">
+                    ${escapeHtml(item.create_time || '--')}
+                </td>
+                <td style="padding: 10px 12px; font-size: 12px; color: var(--text);">
+                    ${escapeHtml(item.remark || '手动隐藏')}
+                </td>
+                <td style="padding: 10px 12px; text-align: right; white-space: nowrap;">
+                    <button class="pill-btn success" onclick="removeHiddenIP('${escapeHtml(item.ip)}')" style="padding: 3px 8px; font-size: 11px;" title="恢复该 IP 日志在前台全部模块的显示">
+                        👁️ 恢复显示
+                    </button>
+                </td>
+            </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+    }
+
+    async function addCustomHiddenIP() {
+        const ipInput = document.getElementById('input-hidden-ip');
+        const remarkInput = document.getElementById('input-hidden-remark');
+        const ip = (ipInput ? ipInput.value : '').trim();
+        const remark = (remarkInput ? remarkInput.value : '').trim();
+
+        if (!ip) {
+            showToast('请输入有效的 IP 地址', '⚠️');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/hidden-ips', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip, remark: remark || '自定义隐藏' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || `已全局隐藏 IP: ${ip}`, '🙈');
+                if (ipInput) ipInput.value = '';
+                if (remarkInput) remarkInput.value = '';
+                loadHiddenIPs();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '添加隐藏失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
+    async function removeHiddenIP(ip) {
+        try {
+            const res = await fetch('/api/hidden-ips/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || `已恢复显示 IP: ${ip} 的日志`, '👁️');
+                loadHiddenIPs();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '移除失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
+    async function clearAllHiddenIPs() {
+        if (!confirm('确定要清空全部隐藏 IP 规则吗？清空后所有被隐藏 IP 的日志和统计将全部恢复显示。')) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/hidden-ips/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '已清空所有隐藏 IP 规则', '🎉');
+                loadHiddenIPs();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '清空失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
     async function batchBanAllProbes() {
         if (!confirm('确定要分析访问日志，将所有非白名单的历史扫描探测 IP 一键批量拉黑并下发防火墙阻断吗？')) {
             return;
@@ -4312,16 +4609,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn = get_db()
                 c = conn.cursor()
                 
-                c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist")
+                c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
                 total_banned = c.fetchone()[0]
                 
                 today_prefix = time.strftime("%Y-%m-%d", time.localtime())
-                c.execute("SELECT COUNT(*) FROM events WHERE attack_time LIKE ?", (f"{today_prefix}%",))
+                c.execute("SELECT COUNT(*) FROM events WHERE attack_time LIKE ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (f"{today_prefix}%",))
                 today_events = c.fetchone()[0]
                 
                 c.execute("""
                 SELECT port, port_name, COUNT(*) as cnt 
                 FROM events 
+                WHERE ip NOT IN (SELECT ip FROM hidden_ips)
                 GROUP BY port 
                 ORDER BY cnt DESC 
                 LIMIT 5
@@ -4332,7 +4630,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 c.execute("""
                 SELECT country, COUNT(*) as cnt 
                 FROM events 
-                WHERE country IS NOT NULL AND country != ''
+                WHERE country IS NOT NULL AND country != '' AND ip NOT IN (SELECT ip FROM hidden_ips)
                 GROUP BY country 
                 ORDER BY cnt DESC 
                 LIMIT 5
@@ -4347,7 +4645,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     hour_start = now_ts - (i * 3600)
                     hour_end = hour_start + 3600
                     hour_label = time.strftime("%H:00", time.localtime(hour_start))
-                    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ?", (hour_start, hour_end))
+                    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (hour_start, hour_end))
                     labels.append(hour_label)
                     data_points.append(c.fetchone()[0])
                     
@@ -4357,12 +4655,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
                 active_traps = sum(1 for t in raw_traps if (t.get("enabled", True) if isinstance(t, dict) else True))
                 whitelist_count = len(cfg.get("whitelist", []))
+                hidden_ips_cnt = len(get_hidden_ips_set())
                 
                 self._send_json({
                     "total_banned": total_banned,
                     "today_events": today_events,
                     "active_traps": active_traps,
                     "whitelist_count": whitelist_count,
+                    "hidden_count": hidden_ips_cnt,
                     "port_distribution": port_dist,
                     "geo_rank": geo_rank,
                     "hourly_trend": {
@@ -4401,22 +4701,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn = get_db()
                 c = conn.cursor()
 
-                c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ?", (cutoff_ts,))
+                c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 total_probes = c.fetchone()[0]
 
-                c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?", (cutoff_ts,))
+                c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 total_intercepted = c.fetchone()[0]
 
-                c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ?", (cutoff_ts,))
+                c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 unique_attackers = c.fetchone()[0]
 
-                c.execute("SELECT COUNT(DISTINCT country) FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环')", (cutoff_ts,))
+                c.execute("SELECT COUNT(DISTINCT country) FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 unique_countries = c.fetchone()[0]
 
-                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ?", (cutoff_ts,))
+                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 total_web_requests = c.fetchone()[0]
 
-                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%')", (cutoff_ts,))
+                c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts,))
                 abnormal_web_requests = c.fetchone()[0]
 
                 ban_rate = round((total_intercepted / total_probes * 100), 1) if total_probes > 0 else (100.0 if total_intercepted > 0 else 0.0)
@@ -4431,44 +4731,44 @@ class RequestHandler(BaseHTTPRequestHandler):
                     label = time.strftime(date_format, time.localtime(e_ts))
                     labels.append(label)
 
-                    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
                     events_trend.append(c.fetchone()[0])
 
-                    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
                     probes_trend.append(c.fetchone()[0])
 
-                    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ?", (s_ts, e_ts))
+                    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
                     web_trend.append(c.fetchone()[0])
 
-                c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY hr ORDER BY hr ASC", (cutoff_ts,))
+                c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (cutoff_ts,))
                 hourly_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
                 hourly_dist = [{"hour": f"{h:02d}:00", "count": hourly_map.get(f"{h:02d}", 0)} for h in range(24)]
 
-                c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') GROUP BY country ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY country ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
                 geo_countries = [{"country": row[0], "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT isp, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') GROUP BY isp ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                c.execute("SELECT isp, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY isp ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
                 geo_isps = [{"isp": row[0], "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT category, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY category ORDER BY cnt DESC", (cutoff_ts,))
+                c.execute("SELECT category, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY category ORDER BY cnt DESC", (cutoff_ts,))
                 category_dist = [{"category": row[0], "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY port ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
+                c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY port ORDER BY cnt DESC LIMIT 8", (cutoff_ts,))
                 port_dist = [{"port": row[0], "name": row[1] or f"端口 {row[0]}", "count": row[2]} for row in c.fetchall()]
 
-                c.execute("SELECT action, COUNT(*) as cnt FROM port_access_logs WHERE timestamp >= ? GROUP BY action ORDER BY cnt DESC", (cutoff_ts,))
+                c.execute("SELECT action, COUNT(*) as cnt FROM port_access_logs WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY action ORDER BY cnt DESC", (cutoff_ts,))
                 action_dist = [{"action": row[0], "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT level, COUNT(*) as cnt FROM events WHERE timestamp >= ? GROUP BY level ORDER BY cnt DESC", (cutoff_ts,))
+                c.execute("SELECT level, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY level ORDER BY cnt DESC", (cutoff_ts,))
                 level_dist = [{"level": row[0], "count": row[1]} for row in c.fetchall()]
 
-                c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? GROUP BY status_code ORDER BY cnt DESC", (cutoff_ts,))
+                c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY status_code ORDER BY cnt DESC", (cutoff_ts,))
                 http_status_dist = [{"code": str(row[0]), "count": row[1]} for row in c.fetchall()]
 
                 c.execute("""
                     SELECT path, method, COUNT(*) as cnt 
                     FROM access_logs 
-                    WHERE timestamp >= ? 
+                    WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)
                     GROUP BY path 
                     ORDER BY 
                         (CASE WHEN status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%' OR path LIKE '%api%' OR path LIKE '%.sql%' OR path LIKE '%swagger%' OR path LIKE '%shell%' THEN 1 ELSE 0 END) DESC,
@@ -4576,14 +4876,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 c.execute("""
                     SELECT ip, country, isp, level, COUNT(*) as hits, MAX(attack_time) as last_seen, GROUP_CONCAT(DISTINCT port) as ports 
                     FROM events 
-                    WHERE timestamp >= ? 
+                    WHERE timestamp >= ? AND ip NOT IN (SELECT ip FROM hidden_ips)
                     GROUP BY ip 
                     ORDER BY hits DESC 
                     LIMIT 10
                 """, (cutoff_ts,))
                 attacker_rows = c.fetchall()
 
-                c.execute("SELECT DISTINCT ip FROM blacklist")
+                c.execute("SELECT DISTINCT ip FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
                 banned_ips_set = set(r[0] for r in c.fetchall())
 
                 top_attackers = []
@@ -4647,6 +4947,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 })
                 return
 
+            if path in ("/api/hidden-ips", "/api/hidden_ips"):
+                hidden_list = get_hidden_ips()
+                self._send_json(hidden_list)
+                return
+
             if path == "/api/events":
                 conn = get_db()
                 c = conn.cursor()
@@ -4654,6 +4959,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     SELECT e.id, e.ip, e.port, e.proto, e.port_name, e.category, e.level, e.country, e.region, e.city, e.isp, e.attack_time, e.status,
                            (SELECT a.user_agent FROM access_logs a WHERE a.ip = e.ip AND a.user_agent IS NOT NULL AND TRIM(a.user_agent) NOT IN ('', '-', 'null', 'None') ORDER BY a.id DESC LIMIT 1) as user_agent
                     FROM events e 
+                    WHERE e.ip NOT IN (SELECT ip FROM hidden_ips)
                     ORDER BY e.id DESC 
                     LIMIT 200
                 """)
@@ -4675,7 +4981,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/blacklist":
                 conn = get_db()
                 c = conn.cursor()
-                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist ORDER BY timestamp DESC")
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 self._send_json(rows)
@@ -4729,7 +5035,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path in ("/api/blacklist/export",):
                 conn = get_db()
                 c = conn.cursor()
-                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist ORDER BY timestamp DESC")
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 self._send_json(rows)
@@ -4747,9 +5053,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if log_type in ("web", "site"):
                     domain_filter = query.get("domain", [None])[0]
                     if domain_filter:
-                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs WHERE domain = ? ORDER BY id DESC LIMIT ?", (domain_filter, limit_cnt))
+                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs WHERE domain = ? AND ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY id DESC LIMIT ?", (domain_filter, limit_cnt))
                     else:
-                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
+                        c.execute("SELECT id, ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp FROM access_logs WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
                     for r in rows:
                         if (not r.get("country") or r.get("country") == "分析中...") and r.get("ip") in _GEO_CACHE:
@@ -4759,10 +5065,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                             r["city"] = g.get("city", "")
                             r["isp"] = g.get("isp", "")
                 else:
-                    c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp FROM port_access_logs ORDER BY id DESC LIMIT ?", (limit_cnt,))
+                    c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp FROM port_access_logs WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY id DESC LIMIT ?", (limit_cnt,))
                     rows = [dict(r) for r in c.fetchall()]
                     if not rows:
-                        c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, status as action, attack_time as access_time, timestamp FROM events ORDER BY id DESC LIMIT ?", (limit_cnt,))
+                        c.execute("SELECT id, ip, port, proto, port_name, country, region, city, isp, status as action, attack_time as access_time, timestamp FROM events WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY id DESC LIMIT ?", (limit_cnt,))
                         rows = [dict(r) for r in c.fetchall()]
                     for r in rows:
                         if (not r.get("country") or r.get("country") == "分析中...") and r.get("ip") in _GEO_CACHE:
@@ -5377,6 +5683,61 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "count": success_count,
                     "total": len(current_map)
                 })
+                return
+
+            if path in ("/api/hidden-ips", "/api/hidden_ips"):
+                action = req_data.get("action", "add")
+                ip = req_data.get("ip", "").strip()
+                if not ip:
+                    self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
+                    return
+                if action == "remove":
+                    ok, msg = remove_hidden_ip(ip)
+                else:
+                    remark = req_data.get("remark", "").strip()
+                    ok, msg = add_hidden_ip(ip, remark)
+                self._send_json({"success": ok, "msg": msg})
+                return
+
+            if path in ("/api/hidden-ips/remove", "/api/hidden_ips/remove"):
+                ip = req_data.get("ip", "").strip()
+                if not ip:
+                    self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
+                    return
+                ok, msg = remove_hidden_ip(ip)
+                self._send_json({"success": ok, "msg": msg})
+                return
+
+            if path in ("/api/hidden-ips/clear", "/api/hidden_ips/clear"):
+                ok, msg = clear_hidden_ips()
+                self._send_json({"success": ok, "msg": msg})
+                return
+
+            self._send_json({"error": "Not Found"}, status=404)
+        except Exception as e:
+            self._send_json({"error": str(e)}, status=500)
+
+    def do_DELETE(self):
+        try:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+            try:
+                req_data = json.loads(body)
+            except Exception:
+                req_data = {}
+
+            if path in ("/api/hidden-ips", "/api/hidden_ips"):
+                ip = req_data.get("ip", "").strip()
+                if not ip:
+                    query = parse_qs(parsed.query)
+                    ip = query.get("ip", [""])[0].strip()
+                if not ip:
+                    self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
+                    return
+                ok, msg = remove_hidden_ip(ip)
+                self._send_json({"success": ok, "msg": msg})
                 return
 
             self._send_json({"error": "Not Found"}, status=404)

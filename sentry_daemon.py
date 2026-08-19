@@ -488,6 +488,20 @@ def init_db():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS hidden_ips (
+        ip TEXT PRIMARY KEY,
+        country TEXT,
+        region TEXT,
+        city TEXT,
+        isp TEXT,
+        remark TEXT DEFAULT '',
+        create_time TEXT,
+        timestamp INTEGER
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hidden_ip ON hidden_ips(ip)")
+
     # 自动列自适应补充（迁移旧库）
     try:
         cursor.execute("ALTER TABLE access_logs ADD COLUMN domain TEXT DEFAULT ''")
@@ -522,6 +536,78 @@ def init_db():
         
     conn.commit()
     conn.close()
+
+def get_hidden_ips_set():
+    """获取所有隐藏 IP 的集合"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT ip FROM hidden_ips")
+        rows = cursor.fetchall()
+        conn.close()
+        return set(r[0] for r in rows if r[0])
+    except Exception:
+        return set()
+
+def get_hidden_ips():
+    """获取所有隐藏 IP 记录列表"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT ip, country, region, city, isp, remark, create_time, timestamp FROM hidden_ips ORDER BY timestamp DESC")
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+def add_hidden_ip(ip, remark=""):
+    """添加 IP 到隐藏列表"""
+    ip = validate_ip(ip)
+    if not ip:
+        return False, "无效的 IP 地址"
+    try:
+        geo = resolve_ip_geo(ip) or {}
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        now_ts = int(time.time())
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT OR REPLACE INTO hidden_ips (ip, country, region, city, isp, remark, create_time, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ip, geo.get("country", "未知地域"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), remark, now_dt, now_ts))
+        conn.commit()
+        conn.close()
+        return True, f"已成功将 IP {ip} 加入隐藏列表"
+    except Exception as e:
+        return False, str(e)
+
+def remove_hidden_ip(ip):
+    """从隐藏列表中移除 IP (恢复显示)"""
+    ip = validate_ip(ip)
+    if not ip:
+        return False, "无效的 IP 地址"
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM hidden_ips WHERE ip = ?", (ip,))
+        conn.commit()
+        conn.close()
+        return True, f"已从隐藏列表中移除 IP {ip}"
+    except Exception as e:
+        return False, str(e)
+
+def clear_hidden_ips():
+    """清空所有隐藏 IP"""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM hidden_ips")
+        conn.commit()
+        conn.close()
+        return True, "已清空所有隐藏 IP"
+    except Exception as e:
+        return False, str(e)
 
 def get_http_traps():
     """获取所有配置的 HTTP 请求特征与防扫描策略"""
