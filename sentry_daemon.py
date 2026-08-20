@@ -162,6 +162,25 @@ def run_firewall_cmd(*args):
         pass
 
 
+def get_local_ips():
+    """获取本机所有 IP 地址集合（包括回环、公网及局域网 IP）"""
+    ips = {"127.0.0.1", "0.0.0.0", "::1"}
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+    try:
+        res = socket.gethostbyname_ex(socket.gethostname())
+        for ip in res[2]:
+            ips.add(ip)
+    except Exception:
+        pass
+    return ips
+
+
 def parse_packet(raw_data):
     """解析以太网帧 / SLL 帧 / 原始 IP 报文 (IPv4 / IPv6) 中的 TCP/UDP 报文。
 
@@ -1626,7 +1645,7 @@ class GlobalPortSniffer:
         while self.running:
             try:
                 raw_data, _ = self.raw_sock.recvfrom(65535)
-                parsed = parse_ip_packet(raw_data)
+                parsed = parse_packet(raw_data)
                 if not parsed:
                     continue
                 src_ip, dst_port, proto_str = parsed
