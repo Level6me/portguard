@@ -5603,14 +5603,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 save_config(cfg)
 
                 if is_paused:
-                    # 暂停时，自动释放现存的所有黑洞路由与临时拦截规则，释放网络
+                    # 仅释放 Portsentry 自身添加的黑洞路由与黑名单拦截规则，绝不触碰系统全局防火墙与 Docker/宝塔规则！
                     run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
-                    run_firewall_cmd("iptables", "-F")
-                    run_firewall_cmd("iptables", "-X")
-                    run_firewall_cmd("iptables", "-P", "INPUT", "ACCEPT")
-                    msg = "所有防御拦截服务已成功暂停！当前处于纯观察模式，已临时释放所有拦截规则。"
+                    try:
+                        conn = get_db()
+                        c = conn.cursor()
+                        c.execute("SELECT ip FROM blacklist")
+                        for row in c.fetchall():
+                            b_ip = row[0]
+                            if b_ip:
+                                run_firewall_cmd("iptables", "-D", "INPUT", "-s", b_ip, "-j", "DROP")
+                        conn.close()
+                    except Exception:
+                        pass
+                    msg = "Portsentry 防御拦截已成功暂停！系统进入纯观察模式（Web控制台正常运行，系统iptables不受影响）。"
                 else:
-                    msg = "防御拦截服务已成功恢复！内核防火墙与蜜罐实时阻断已重新激活。"
+                    msg = "Portsentry 防御拦截已成功恢复！蜜罐嗅探与实时阻断已重新激活。"
 
                 self._send_json({"success": True, "paused": is_paused, "msg": msg})
                 return
