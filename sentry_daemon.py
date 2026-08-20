@@ -1261,31 +1261,37 @@ def get_active_system_ports():
 def get_all_business_ports_info():
     """
     获取当前系统中所有正常业务端口的综合列表：
-    包含系统正在监听运行的活跃服务 + 用户自定义声明的业务端口。
+    包含系统正在监听运行的活跃服务 + 用户自定义声明的业务端口（已自动过滤用户显式删除的端口）。
     """
     cfg = load_config()
+    excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
     custom_biz = cfg.get("business_ports", [])
     custom_map = {}
     for bp in custom_biz:
         if isinstance(bp, int):
-            custom_map[bp] = {
-                "port": bp,
-                "name": f"自定义业务 ({bp})",
-                "category": "custom",
-                "remark": "用户自定义",
-                "is_system": False,
-                "enabled": True
-            }
+            if bp not in excluded_ports:
+                custom_map[bp] = {
+                    "port": bp,
+                    "name": f"自定义业务 ({bp})",
+                    "category": "custom",
+                    "remark": "用户自定义",
+                    "is_system": False,
+                    "enabled": True
+                }
         elif isinstance(bp, dict) and "port" in bp:
-            p = int(bp["port"])
-            custom_map[p] = {
-                "port": p,
-                "name": bp.get("name", f"业务端口 ({p})"),
-                "category": bp.get("category", "custom"),
-                "remark": bp.get("remark", "用户自定义"),
-                "is_system": False,
-                "enabled": True
-            }
+            try:
+                p = int(bp["port"])
+                if p not in excluded_ports:
+                    custom_map[p] = {
+                        "port": p,
+                        "name": bp.get("name", f"业务端口 ({p})"),
+                        "category": bp.get("category", "custom"),
+                        "remark": bp.get("remark", "用户自定义"),
+                        "is_system": False,
+                        "enabled": True
+                    }
+            except Exception:
+                pass
 
     active_map = get_active_system_ports()
     ssh_ports = get_system_ssh_ports()
@@ -1299,9 +1305,9 @@ def get_all_business_ports_info():
         result.append(info)
         seen.add(p)
         
-    # 2. 加入系统监听的活跃业务服务
+    # 2. 加入系统监听的活跃业务服务 (过滤用户已排除删除的端口)
     for p, name in sorted(active_map.items()):
-        if p not in seen:
+        if p not in seen and p not in excluded_ports:
             if p == web_p:
                 cat = "web"
                 desc = "Portsentry Web 控制台"
@@ -1725,8 +1731,9 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 正常生产业务端口访问（80, 443 以及系统当前监听运行的所有业务服务）默认 100% 放行！
-        if (dst_port in active_ports_map) or (dst_port in KNOWN_SYSTEM_SERVICES):
+        # 3. 正常生产业务端口访问（80, 443 以及系统当前监听运行的所有业务服务）默认 100% 放行（除非用户已将其显式删除排除）！
+        excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
+        if dst_port not in excluded_ports and ((dst_port in active_ports_map) or (dst_port in KNOWN_SYSTEM_SERVICES)):
             proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, "业务服务"))
             if cfg.get("trap_business_ports", False):
                 action = "INTERCEPTED"

@@ -3664,14 +3664,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         fetch('/api/business_ports/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port })
+            body: JSON.stringify({ port: Number(port) })
         }).then(res => res.json()).then(res => {
             if (res.success) {
                 showToast(res.msg || '已删除业务端口', '🗑️');
-                fetchData(false);
+                allBusinessPorts = (allBusinessPorts || []).filter(b => Number(b.port) !== Number(port));
+                renderTrapsTable();
+                fetch('/api/business_ports').then(r => r.json()).then(data => {
+                    allBusinessPorts = data;
+                    renderTrapsTable();
+                });
             } else {
                 showToast(res.msg || '删除失败', '❌');
             }
+        }).catch(err => {
+            showToast('删除请求异常: ' + err, '❌');
         });
     }
 
@@ -6633,6 +6640,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "remark": remark
                 })
                 cfg["business_ports"] = biz_list
+                # 恢复该端口（解除排除）
+                excluded = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
+                if port in excluded:
+                    excluded.remove(port)
+                    cfg["excluded_business_ports"] = sorted(list(excluded))
                 save_config(cfg)
                 self._send_json({"success": True, "msg": f"已成功添加正常业务端口: {port} ({name})"})
                 return
@@ -6670,6 +6682,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not updated:
                     new_list.append({"port": port, "name": name or f"业务端口 ({port})", "category": category, "remark": remark})
                 cfg["business_ports"] = new_list
+                # 恢复该端口（解除排除）
+                excluded = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
+                if port in excluded:
+                    excluded.remove(port)
+                    cfg["excluded_business_ports"] = sorted(list(excluded))
                 save_config(cfg)
                 self._send_json({"success": True, "msg": f"已成功更新业务端口: {port}"})
                 return
@@ -6685,11 +6702,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "msg": "无效端口号"}, status=400)
                     return
                 cfg = load_config()
+                # 1. 从自定义业务列表中移除
                 biz_list = cfg.get("business_ports", [])
                 new_list = [bp for bp in biz_list if (bp != port if isinstance(bp, int) else int(bp.get("port", 0)) != port)]
                 cfg["business_ports"] = new_list
+                # 2. 将端口记入已排除业务端口集合 (确保系统监听端口也不会再回显)
+                excluded = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
+                excluded.add(port)
+                cfg["excluded_business_ports"] = sorted(list(excluded))
                 save_config(cfg)
-                self._send_json({"success": True, "msg": f"已成功删除自定义业务端口: {port}"})
+                self._send_json({"success": True, "msg": f"已成功删除业务端口: {port}"})
                 return
 
             if path == "/api/business_ports/import":
@@ -6754,6 +6776,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "msg": "未能提取到任何合法业务端口（端口必须为 1-65535）"}, status=400)
                     return
                 cfg["business_ports"] = list(current_map.values())
+                # 导入的端口全部从 excluded_business_ports 解除排除
+                excluded = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
+                for p in current_map.keys():
+                    if p in excluded:
+                        excluded.remove(p)
+                cfg["excluded_business_ports"] = sorted(list(excluded))
                 save_config(cfg)
                 self._send_json({
                     "success": True,
