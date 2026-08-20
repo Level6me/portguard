@@ -1491,8 +1491,11 @@ def is_trap_port(port, cfg=None):
         return None
 
     global_biz_trap = bool(cfg.get("trap_business_ports", False))
+    excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
     active_ports_map = get_active_system_ports()
-    is_active_service = (port in active_ports_map) or (port in KNOWN_SYSTEM_SERVICES)
+    
+    # 判定是否属于系统正在保护的正常业务（未被用户从正常业务列表中排除删除）
+    is_protected_biz = (port not in excluded_ports) and ((port in active_ports_map) or (port in KNOWN_SYSTEM_SERVICES))
 
     try:
         raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
@@ -1521,8 +1524,9 @@ def is_trap_port(port, cfg=None):
                 best_norm_copy["trap_business"] = True
                 return best_norm_copy
 
-            # 未启用业务诱捕时：如果是系统核心业务端口，自动避让放行，防止误伤生产业务
-            if is_active_service:
+            # 如果未标记业务诱捕，且该端口属于【受保护的正常业务】：蜜罐规则自动避让放行！
+            # 如果该端口已被用户从业务列表中删除排除（或根本不是业务）：则作为真实蜜罐诱饵触发拉黑！
+            if is_protected_biz:
                 return None
 
             return best_norm
@@ -1530,7 +1534,7 @@ def is_trap_port(port, cfg=None):
     except Exception:
         pass
 
-    if global_biz_trap and is_active_service:
+    if global_biz_trap and is_protected_biz:
         service_name = active_ports_map.get(port, KNOWN_SYSTEM_SERVICES.get(port, f"TCP/{port}"))
         return {
             "port": port,
@@ -1542,6 +1546,7 @@ def is_trap_port(port, cfg=None):
             "is_business": True,
             "trap_business": True
         }
+    return None
 
 _SCAN_RECORDS_LOCK = threading.Lock()
 _SCAN_RECORDS = {}  # ip -> list of (timestamp, dst_port)
@@ -1558,60 +1563,46 @@ def check_port_scan_attack(src_ip, dst_port, cfg):
     window = int(cfg.get("port_scan_window_seconds", 15) or 15)
     threshold = int(cfg.get("port_scan_threshold", 3) or 3)
     now = time.time()
-    
+    cutoff = now - window
+
     with _SCAN_RECORDS_LOCK:
-        records = _SCAN_RECORDS.setdefault(src_ip, [])
+        if src_ip not in _SCAN_RECORDS:
+            _SCAN_RECORDS[src_ip] = []
         # 清理超出时间窗口的记录
-        records = [r for r in records if now - r[0] <= window]
-        records.append((now, dst_port))
-        _SCAN_RECORDS[src_ip] = records
-        
-        # 统计窗口内探测的不同端口集合
-        unique_ports = {r[1] for r in records}
-        if len(unique_ports) >= threshold:
-            # 命中恶意端口扫描行为！清空该 IP 记录避免重复多次触发
+        valid_records = [r for r in _SCAN_RECORDS[src_ip] if r[0] >= cutoff]
+        valid_records.append((now, dst_port))
+        _SCAN_RECORDS[src_ip] = valid_records
+
+        # 统计窗口内探测的不同端口总数
+        probed_ports = set(r[1] for r in valid_records)
+        if len(probed_ports) >= threshold:
+            # 触发多端口扫描识别
             _SCAN_RECORDS.pop(src_ip, None)
             return True
-            
-        # 定期瘦身
-        if len(_SCAN_RECORDS) > 2000:
-            cutoff = now - 60
-            for k in list(_SCAN_RECORDS.keys()):
-                _SCAN_RECORDS[k] = [r for r in _SCAN_RECORDS[k] if r[0] > cutoff]
-                if not _SCAN_RECORDS[k]:
-                    _SCAN_RECORDS.pop(k, None)
-                    
     return False
 
+# 全局单例异步工作线程池 (限制最大 8 线程并发，防止极端流量下线程爆满)
+_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="SentryWorker")
+
 class GlobalPortSniffer:
-    """全端口网络连接实时感知引擎 (基于 Linux 原生 Raw Socket 嗅探 TCP SYN 连接握手)"""
+    """
+    基于 Linux 原生网络层数据包感知的智能网络嗅探与多端口扫描防御引擎。
+    """
     def __init__(self):
         self.running = False
         self.raw_sock = None
-        self._recent_cache = {} # (ip, port) -> timestamp (防抖降噪)
-        self.local_ips = {"127.0.0.1", "0.0.0.0"}
-        self._refresh_local_ips()
-        
-    def _refresh_local_ips(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            self.local_ips.add(s.getsockname()[0])
-            s.close()
-        except Exception:
-            pass
-        try:
-            res = socket.gethostbyname_ex(socket.gethostname())
-            for ip in res[2]:
-                self.local_ips.add(ip)
-        except Exception:
-            pass
-        
+        self._sniffer_thread = None
+        self.local_ips = set(get_local_ips())
+        self._recent_cache = {}  # (src_ip, dst_port, proto) -> timestamp
+
     def start(self):
+        if self.running:
+            return
         self.running = True
-        self._refresh_local_ips()
-        threading.Thread(target=self._sniffer_loop, daemon=True).start()
-        
+        self._sniffer_thread = threading.Thread(target=self._sniff_loop, daemon=True)
+        self._sniffer_thread.start()
+        print("[GlobalSniffer] Linux 原生网络层数据包感知与蜜罐拦截引擎已启动...")
+
     def stop(self):
         self.running = False
         if self.raw_sock:
@@ -1620,21 +1611,22 @@ class GlobalPortSniffer:
             except Exception:
                 pass
 
-    def _sniffer_loop(self):
-        sock = None
+    def _sniff_loop(self):
         try:
-            # 采用轻量级 IPPROTO_TCP 原始套接字（仅在 IP 层处理 TCP 报文，彻底杜绝 AF_PACKET 链路层全网卡帧复制引发的 ksoftirqd 软中断风暴）
-            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-            print("[Sniffer] IPPROTO_TCP 超轻量原生感知引擎已激活 (0% CPU 模式)...")
-        except Exception as e:
-            print(f"[Sniffer] 无法开启底层网络嗅探 (可能非 root 环境): {e}")
+            self.raw_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        except PermissionError:
+            print("[GlobalSniffer] 启动失败：需要 root 权限以监听原生网络数据包。")
+            self.running = False
             return
-                
-        self.raw_sock = sock
+        except Exception as e:
+            print(f"[GlobalSniffer] 创建 Raw Socket 异常: {e}")
+            self.running = False
+            return
+
         while self.running:
             try:
                 raw_data, _ = self.raw_sock.recvfrom(65535)
-                parsed = parse_packet(raw_data)
+                parsed = parse_ip_packet(raw_data)
                 if not parsed:
                     continue
                 src_ip, dst_port, proto_str = parsed
@@ -1717,41 +1709,32 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 2. 核心远程运维与 Web 控制台绝对放行保护（SSH 与 Web 端口绝对免封，彻底杜绝误锁管理员）
+        # 2. Web 控制台端口保护
         web_port = int(cfg.get("web_port", 9099) or 9099)
-        ssh_ports = get_system_ssh_ports()
         if dst_port == web_port:
             action = "BUSINESS"
             desc = "Portsentry Web控制台"
             _EXECUTOR.submit(_async_write, action, desc)
             return
-        if dst_port in ssh_ports:
-            action = "BUSINESS"
-            desc = f"SSH 远程运维连接 (端口 {dst_port})"
-            _EXECUTOR.submit(_async_write, action, desc)
-            return
 
-        # 3. 正常生产业务端口访问（80, 443 以及系统当前监听运行的所有业务服务）默认 100% 放行（除非用户已将其显式删除排除）！
+        # 3. 检查受保护的正常业务端口（必须未被排除删除）
         excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
-        if dst_port not in excluded_ports and ((dst_port in active_ports_map) or (dst_port in KNOWN_SYSTEM_SERVICES)):
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, "业务服务"))
-            if cfg.get("trap_business_ports", False):
-                action = "INTERCEPTED"
-                desc = f"全局业务诱捕阻断: {proc} (端口 {dst_port})"
-                port_info = {
-                    "name": desc,
-                    "category": "web",
-                    "level": "极高危",
-                    "is_business": True
-                }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-            else:
-                action = "BUSINESS"
-                desc = f"正常业务访问: {proc} (端口 {dst_port})"
-                _EXECUTOR.submit(_async_write, action, desc)
-            return
+        custom_biz_ports = set()
+        for bp in cfg.get("business_ports", []):
+            if isinstance(bp, int):
+                custom_biz_ports.add(bp)
+            elif isinstance(bp, dict) and "port" in bp:
+                try:
+                    custom_biz_ports.add(int(bp["port"]))
+                except Exception:
+                    pass
 
-        # 4. 恶意访问行为 ①：命中显式启用的蜜罐诱饵探针 (如 21 FTP, 23 Telnet, 445 SMB, 3389 RDP, 6379 Redis, 1433 MSSQL 等)
+        # 判定是否属于受保护正常业务（在自定义列表中，或在活跃系统监听/SSH中，且未被用户从业务列表删除排除）
+        ssh_ports = get_system_ssh_ports()
+        is_normal_business = (dst_port in custom_biz_ports or dst_port in active_ports_map or dst_port in ssh_ports or dst_port in KNOWN_SYSTEM_SERVICES) and (dst_port not in excluded_ports)
+
+        # 4. 检查是否命中显式配置的蜜罐诱饵规则 (例如用户配置了 1-60000 蜜罐，或单独配置了 22 诱捕探针)
+        # 注意：如果端口已被用户从业务列表中删除，is_trap_port 会成功命中该端口，在此直接触发蜜罐拉黑！
         if trap_meta and trap_meta.get("enabled", True):
             action = "INTERCEPTED"
             is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
@@ -1767,6 +1750,14 @@ class GlobalPortSniffer:
                 "is_business": is_biz
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+            return
+
+        # 5. 正常生产业务端口访问（且未被蜜罐诱捕）：100% 绝对顺畅放行！
+        if is_normal_business:
+            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, "业务服务"))
+            action = "BUSINESS"
+            desc = f"正常业务访问: {proc} (端口 {dst_port})"
+            _EXECUTOR.submit(_async_write, action, desc)
             return
 
         # 5. 恶意访问行为 ②：恶意多端口扫描与探针攻击感知 (Nmap/Masscan 等扫描器识别)
