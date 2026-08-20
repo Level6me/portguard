@@ -1118,69 +1118,137 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="bottom-spacer"></div>
     </div>
 
-    <!-- Page 3: 黑名单管理 (Blacklist) -->
-    <div id="tab-blacklist" style="display: none;">
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">🚫 内核黑名单池</div>
-                    <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
-                </div>
-                <div class="header-action-wrap">
-                    <button class="pill-btn accent" onclick="batchBanAllProbes()" title="自动分析访问日志，将所有非白名单的历史扫描与探测 IP 批量拉黑并下发防火墙">
-                        <span>⚡</span>
-                        <span>一键拉黑历史探测IP</span>
-                    </button>
-                    <!-- 统一弹出式黑名单配置卡片按钮 -->
-                    <div style="position: relative; display: inline-block;">
-                        <button class="pill-btn danger" id="btn-blacklist-action-menu" onclick="toggleBlacklistActionMenu(event)" style="font-weight: 700;">
-                            <span>⚙️ 黑名单管理与操作</span>
-                            <span style="font-size: 10px; margin-left: 2px;">▾</span>
-                        </button>
-                        <div id="blacklist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
-                            <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🚫 黑名单操作配置</div>
-                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openManualBanModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>➕</span><span>手动拉黑 IP</span>
-                            </a>
-                            <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
-                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openImportModal('blacklist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>📥</span><span>导入黑名单 (JSON)</span>
-                            </a>
-                            <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); exportBlacklistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>📤</span><span>导出黑名单 (JSON)</span>
-                            </a>
+    <!-- Page 3: 黑白名单管理 (IP Lists: Blacklist & Whitelist) -->
+    <div id="tab-iplists" style="display: none;">
+        <!-- 顶部子页切换分段控件 (黑名单 / 白名单) -->
+        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
+                <button class="pill-btn accent" id="subtab-btn-blacklist" onclick="switchIpListSubTab('blacklist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🚫 内核黑名单池</button>
+                <button class="pill-btn" id="subtab-btn-whitelist" onclick="switchIpListSubTab('whitelist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🛡️ 信任白名单</button>
+            </div>
+        </div>
+
+        <!-- SubView 1: 内核黑名单池 -->
+        <div id="subview-blacklist">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">🚫 内核黑名单池</div>
+                        <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
+                    </div>
+                    <div class="header-action-wrap">
+                        <!-- 统一弹出式黑名单配置卡片按钮 -->
+                        <div style="position: relative; display: inline-block;">
+                            <button class="pill-btn danger" id="btn-blacklist-action-menu" onclick="toggleBlacklistActionMenu(event)" style="font-weight: 700;">
+                                <span>⚙️ 黑名单管理与操作</span>
+                                <span style="font-size: 10px; margin-left: 2px;">▾</span>
+                            </button>
+                            <div id="blacklist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
+                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🚫 黑名单操作配置</div>
+                                <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openManualBanModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>➕</span><span>手动拉黑 IP</span>
+                                </a>
+                                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                                <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openImportModal('blacklist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📥</span><span>导入黑名单 (JSON)</span>
+                                </a>
+                                <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); exportBlacklistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📤</span><span>导出黑名单 (JSON)</span>
+                                </a>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>已阻断 IP 地址</th>
-                            <th>拉黑原因 / 诱饵端口</th>
-                            <th>归属地</th>
-                            <th>处置动作</th>
-                            <th>封禁时间</th>
-                            <th>管理操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="blacklist-tbody">
-                        <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- 黑名单分页控制栏 (50条/页) -->
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
-                <div style="font-size: 12px; color: var(--text-sec);">
-                    共 <b id="blacklist-total-cnt" style="color: var(--text);">0</b> 条记录 · 每页 50 条 · 当前第 <b id="blacklist-page-info" style="color: var(--accent);">1 / 1</b> 页
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>已阻断 IP 地址</th>
+                                <th>拉黑原因 / 诱饵端口</th>
+                                <th>归属地</th>
+                                <th>处置动作</th>
+                                <th>封禁时间</th>
+                                <th>管理操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="blacklist-tbody">
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="pill-btn" onclick="changeBlacklistPage(-1)" id="btn-blacklist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
-                    <div id="blacklist-page-nums" style="display: flex; gap: 4px;"></div>
-                    <button class="pill-btn" onclick="changeBlacklistPage(1)" id="btn-blacklist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+
+                <!-- 黑名单分页控制栏 (50条/页) -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                    <div style="font-size: 12px; color: var(--text-sec);">
+                        共 <b id="blacklist-total-cnt" style="color: var(--text);">0</b> 条记录 · 每页 50 条 · 当前第 <b id="blacklist-page-info" style="color: var(--accent);">1 / 1</b> 页
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="pill-btn" onclick="changeBlacklistPage(-1)" id="btn-blacklist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                        <div id="blacklist-page-nums" style="display: flex; gap: 4px;"></div>
+                        <button class="pill-btn" onclick="changeBlacklistPage(1)" id="btn-blacklist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SubView 2: 安全信任白名单 -->
+        <div id="subview-whitelist" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">🛡️ 运维与安全信任白名单</div>
+                        <div class="val-sub">白名单内的 IP 永不触发任何封禁拦截机制</div>
+                    </div>
+                    <div class="header-action-wrap">
+                        <!-- 统一弹出式白名单配置卡片按钮 -->
+                        <div style="position: relative; display: inline-block;">
+                            <button class="pill-btn accent" id="btn-whitelist-action-menu" onclick="toggleWhitelistActionMenu(event)" style="font-weight: 700;">
+                                <span>⚙️ 白名单管理与配置</span>
+                                <span style="font-size: 10px; margin-left: 2px;">▾</span>
+                            </button>
+                            <div id="whitelist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
+                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ 白名单操作配置</div>
+                                <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openAddWhiteModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>➕</span><span>添加信任 IP</span>
+                                </a>
+                                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                                <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openImportModal('whitelist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📥</span><span>导入白名单 (JSON)</span>
+                                </a>
+                                <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); exportWhitelistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📤</span><span>导出白名单 (JSON)</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>信任 IP / 网段</th>
+                                <th>备注说明</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="whitelist-tbody">
+                            <tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入白名单...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 白名单分页控制栏 (50条/页) -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                    <div style="font-size: 12px; color: var(--text-sec);">
+                        共 <b id="whitelist-total-cnt" style="color: var(--text);">0</b> 条白名单 · 每页 50 条 · 当前第 <b id="whitelist-page-info" style="color: var(--accent);">1 / 1</b> 页
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="pill-btn" onclick="changeWhitelistPage(-1)" id="btn-whitelist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                        <div id="whitelist-page-nums" style="display: flex; gap: 4px;"></div>
+                        <button class="pill-btn" onclick="changeWhitelistPage(1)" id="btn-whitelist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1438,67 +1506,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="bottom-spacer"></div>
     </div>
 
-    <!-- Page 5: 白名单管理 (Whitelist) -->
-    <div id="tab-whitelist" style="display: none;">
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="card-title">🛡️ 运维与安全信任白名单</div>
-                    <div class="val-sub">白名单内的 IP 永不触发任何封禁拦截机制</div>
-                </div>
-                <div class="header-action-wrap">
-                    <!-- 统一弹出式白名单配置卡片按钮 -->
-                    <div style="position: relative; display: inline-block;">
-                        <button class="pill-btn accent" id="btn-whitelist-action-menu" onclick="toggleWhitelistActionMenu(event)" style="font-weight: 700;">
-                            <span>⚙️ 白名单管理与配置</span>
-                            <span style="font-size: 10px; margin-left: 2px;">▾</span>
-                        </button>
-                        <div id="whitelist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
-                            <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ 白名单操作配置</div>
-                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openAddWhiteModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>➕</span><span>添加信任 IP</span>
-                            </a>
-                            <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
-                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openImportModal('whitelist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>📥</span><span>导入白名单 (JSON)</span>
-                            </a>
-                            <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); exportWhitelistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                <span>📤</span><span>导出白名单 (JSON)</span>
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            </div>
 
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>信任 IP / 网段</th>
-                            <th>备注说明</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="whitelist-tbody">
-                        <tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入白名单...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- 白名单分页控制栏 (50条/页) -->
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
-                <div style="font-size: 12px; color: var(--text-sec);">
-                    共 <b id="whitelist-total-cnt" style="color: var(--text);">0</b> 条白名单 · 每页 50 条 · 当前第 <b id="whitelist-page-info" style="color: var(--accent);">1 / 1</b> 页
-                </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="pill-btn" onclick="changeWhitelistPage(-1)" id="btn-whitelist-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
-                    <div id="whitelist-page-nums" style="display: flex; gap: 4px;"></div>
-                    <button class="pill-btn" onclick="changeWhitelistPage(1)" id="btn-whitelist-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
-                </div>
-            </div>
-        </div>
-        <div class="bottom-spacer"></div>
-    </div>
 
     <!-- Page 6: 访问日志 (Access Logs) -->
     <div id="tab-access-logs" style="display: none;">
@@ -1588,17 +1596,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
         <span>访问日志</span>
     </button>
-    <button class="dock-btn" id="dock-btn-blacklist" onclick="switchTab('blacklist', this)">
+    <button class="dock-btn" id="dock-btn-iplists" onclick="switchTab('iplists', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1c1.06 1.35 1.69 3.05 1.69 4.9 0 4.42-3.58 8-8 8z"/></svg>
-        <span>黑名单池</span>
+        <span>黑白名单</span>
     </button>
     <button class="dock-btn" id="dock-btn-traps" onclick="switchTab('traps', this)">
         <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
         <span>防御策略</span>
-    </button>
-    <button class="dock-btn" id="dock-btn-whitelist" onclick="switchTab('whitelist', this)">
-        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-        <span>信任白名单</span>
     </button>
 </div>
 
@@ -2085,9 +2089,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'overview': '安全态势分析',
         'logs': '蜜罐拦截日志',
         'access-logs': '端口与控制台访问日志',
-        'blacklist': '内核黑名单池',
-        'traps': '全局防御策略中心',
-        'whitelist': '安全信任白名单'
+        'iplists': '黑白名单管理',
+        'blacklist': '黑白名单管理',
+        'whitelist': '黑白名单管理',
+        'traps': '全局防御策略中心'
     };
 
     const CATEGORY_LABELS = {
@@ -2904,17 +2909,57 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         showToast('态势分析完整数据集 (JSON) 导出成功', '📥');
     }
 
+    let currentIpListSubTab = 'blacklist';
+    function switchIpListSubTab(subTab, btn) {
+        currentIpListSubTab = subTab;
+        const subviewBlack = document.getElementById('subview-blacklist');
+        const subviewWhite = document.getElementById('subview-whitelist');
+        const btnBlack = document.getElementById('subtab-btn-blacklist');
+        const btnWhite = document.getElementById('subtab-btn-whitelist');
+
+        if (subTab === 'blacklist') {
+            if (btnBlack) { btnBlack.className = 'pill-btn accent'; btnBlack.style.background = ''; }
+            if (btnWhite) { btnWhite.className = 'pill-btn'; btnWhite.style.background = 'transparent'; }
+            if (subviewBlack) subviewBlack.style.display = 'block';
+            if (subviewWhite) subviewWhite.style.display = 'none';
+            fetchBlacklist();
+        } else {
+            if (btnBlack) { btnBlack.className = 'pill-btn'; btnBlack.style.background = 'transparent'; }
+            if (btnWhite) { btnWhite.className = 'pill-btn accent'; btnWhite.style.background = ''; }
+            if (subviewBlack) subviewBlack.style.display = 'none';
+            if (subviewWhite) subviewWhite.style.display = 'block';
+            fetchWhitelist();
+        }
+    }
+
     let currentTabKey = 'overview';
     function switchTab(tabKey, btn) {
-        currentTabKey = tabKey;
-        ['overview', 'logs', 'access-logs', 'blacklist', 'traps', 'whitelist'].forEach(t => {
+        let actualTab = tabKey;
+        let subTarget = null;
+        if (tabKey === 'blacklist') {
+            actualTab = 'iplists';
+            subTarget = 'blacklist';
+        } else if (tabKey === 'whitelist') {
+            actualTab = 'iplists';
+            subTarget = 'whitelist';
+        }
+
+        currentTabKey = actualTab;
+        ['overview', 'logs', 'access-logs', 'iplists', 'traps'].forEach(t => {
             const el = document.getElementById(`tab-${t}`);
-            if (el) el.style.display = (t === tabKey) ? 'block' : 'none';
+            if (el) el.style.display = (t === actualTab) ? 'block' : 'none';
         });
         document.querySelectorAll('.dock-btn').forEach(b => b.classList.remove('active'));
-        const targetBtn = btn || document.getElementById(`dock-btn-${tabKey}`);
+        const targetBtn = btn || document.getElementById(`dock-btn-${actualTab}`);
         if (targetBtn) targetBtn.classList.add('active');
-        document.getElementById('page-main-title').innerText = PAGE_TITLES[tabKey] || '控制台';
+        document.getElementById('page-main-title').innerText = PAGE_TITLES[actualTab] || '控制台';
+
+        if (subTarget) {
+            switchIpListSubTab(subTarget);
+        } else if (actualTab === 'iplists') {
+            switchIpListSubTab(currentIpListSubTab);
+        }
+
         window.scrollTo({ top: 0, behavior: 'smooth' });
         fetchData(false);
     }
