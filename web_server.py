@@ -1123,17 +1123,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- 顶部子页切换分段控件 (黑名单 / 白名单) -->
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
-                <button class="pill-btn accent" id="subtab-btn-blacklist" onclick="switchIpListSubTab('blacklist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🚫 内核黑名单池</button>
+                <button class="pill-btn accent" id="subtab-btn-blacklist" onclick="switchIpListSubTab('blacklist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🚫 内核黑名单</button>
                 <button class="pill-btn" id="subtab-btn-whitelist" onclick="switchIpListSubTab('whitelist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🛡️ 信任白名单</button>
             </div>
         </div>
 
-        <!-- SubView 1: 内核黑名单池 -->
+        <!-- SubView 1: 内核黑名单 -->
         <div id="subview-blacklist">
             <div class="card">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">🚫 内核黑名单池</div>
+                        <div class="card-title">🚫 内核黑名单</div>
                         <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
                     </div>
                     <div class="header-action-wrap">
@@ -1266,11 +1266,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="header-action-wrap">
                     <!-- 模式切换分段按钮 -->
                     <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
-                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口蜜罐与扫描</button>
-                        <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 正常业务列表</button>
-                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 Web 恶意特征</button>
-                        <button class="pill-btn" id="btn-trap-tab-response" onclick="switchTrapTab('response')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">⚙️ 响应与封禁参数</button>
-                        <button class="pill-btn" id="btn-trap-tab-hidden" onclick="switchTrapTab('hidden')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
+                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
+                        <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 常规业务</button>
+                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 行为特定</button>
                     </div>
                     <!-- 统一弹出式策略配置卡片按钮 -->
                     <div style="position: relative; display: inline-block;">
@@ -1285,7 +1283,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- SubTab 1/2: 表格区域 (端口蜜罐 / Web 请求特征) -->
+            <!-- SubTab 1/2/3: 表格区域 (端口策略 / 常规业务 / 行为特定) -->
             <div id="policy-pane-table-container">
                 <!-- 端口模式顶部的智能多端口扫描感知卡片 -->
                 <div id="banner-port-scan-defense" style="margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
@@ -1343,8 +1341,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- SubTab 3: 响应机制与封禁参数 (集成原设置弹窗内容) -->
-            <div id="policy-pane-response" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
+        </div>
+        <div class="bottom-spacer"></div>
+    </div>
+
+    <!-- Page 5: 系统设置 (Settings: 响应参数与审计隐藏) -->
+    <div id="tab-settings" style="display: none;">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title" id="settings-main-title">⚙️ 系统防御与全局设置</div>
+                    <div class="val-sub" id="settings-main-sub">配置防御响应机制、判定灵敏度阈值、自动解封周期与全局审计过滤</div>
+                </div>
+                <div class="header-action-wrap">
+                    <!-- 模式切换分段按钮 -->
+                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
+                        <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 响应与封禁参数</button>
+                        <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SubTab 1: 响应机制与封禁参数 -->
+            <div id="settings-pane-response" style="padding: 18px; display: flex; flex-direction: column; gap: 14px;">
                 <!-- 0. 一键暂停 / 恢复拦截服务 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 14px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
@@ -1453,12 +1472,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
 
                 <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px;">
-                    <button class="pill-btn accent" onclick="saveIntegratedPolicySettings()" style="padding: 10px 24px; font-weight: 700; font-size: 13px;">💾 保存全局防御设置</button>
+                    <button class="pill-btn accent" onclick="saveIntegratedPolicySettings()" style="padding: 10px 24px; font-weight: 700; font-size: 13px;">💾 保存全局设置</button>
                 </div>
             </div>
 
-            <!-- SubTab 4: IP 隐藏过滤规则 (集成隐藏列表) -->
-            <div id="policy-pane-hidden" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
+            <!-- SubTab 2: IP 隐藏过滤规则 (集成隐藏列表) -->
+            <div id="settings-pane-hidden" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
                         <div style="display: flex; align-items: center; gap: 8px;">
@@ -1603,6 +1622,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <button class="dock-btn" id="dock-btn-traps" onclick="switchTab('traps', this)">
         <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
         <span>防御策略</span>
+    </button>
+    <button class="dock-btn" id="dock-btn-settings" onclick="switchTab('settings', this)">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>系统设置</span>
     </button>
 </div>
 
@@ -2092,7 +2115,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'iplists': '黑白名单管理',
         'blacklist': '黑白名单管理',
         'whitelist': '黑白名单管理',
-        'traps': '全局防御策略中心'
+        'traps': '全局防御策略中心',
+        'settings': '系统防御与全局设置'
     };
 
     const CATEGORY_LABELS = {
@@ -2932,6 +2956,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    let currentSettingsSubTab = 'response';
+    function switchSettingsSubTab(subTab, btn) {
+        currentSettingsSubTab = subTab;
+        const paneResp = document.getElementById('settings-pane-response');
+        const paneHidden = document.getElementById('settings-pane-hidden');
+        const btnResp = document.getElementById('btn-settings-tab-response');
+        const btnHidden = document.getElementById('btn-settings-tab-hidden');
+
+        if (subTab === 'response') {
+            if (btnResp) { btnResp.className = 'pill-btn accent'; btnResp.style.background = ''; }
+            if (btnHidden) { btnHidden.className = 'pill-btn'; btnHidden.style.background = 'transparent'; }
+            if (paneResp) paneResp.style.display = 'flex';
+            if (paneHidden) paneHidden.style.display = 'none';
+            loadSystemSettings();
+        } else {
+            if (btnResp) { btnResp.className = 'pill-btn'; btnResp.style.background = 'transparent'; }
+            if (btnHidden) { btnHidden.className = 'pill-btn accent'; btnHidden.style.background = ''; }
+            if (paneResp) paneResp.style.display = 'none';
+            if (paneHidden) paneHidden.style.display = 'flex';
+            loadHiddenIPsForPolicy();
+        }
+    }
+
     let currentTabKey = 'overview';
     function switchTab(tabKey, btn) {
         let actualTab = tabKey;
@@ -2945,7 +2992,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         currentTabKey = actualTab;
-        ['overview', 'logs', 'access-logs', 'iplists', 'traps'].forEach(t => {
+        ['overview', 'logs', 'access-logs', 'iplists', 'traps', 'settings'].forEach(t => {
             const el = document.getElementById(`tab-${t}`);
             if (el) el.style.display = (t === actualTab) ? 'block' : 'none';
         });
@@ -2958,6 +3005,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             switchIpListSubTab(subTarget);
         } else if (actualTab === 'iplists') {
             switchIpListSubTab(currentIpListSubTab);
+        } else if (actualTab === 'settings') {
+            switchSettingsSubTab(currentSettingsSubTab);
         }
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2965,8 +3014,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function openSystemSettingsModal() {
-        switchTab('traps');
-        switchTrapTab('response');
+        switchTab('settings');
+        switchSettingsSubTab('response');
     }
 
     function jumpToLogsFilter(cat) {
@@ -3752,35 +3801,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const btnPort = document.getElementById('btn-trap-tab-port');
         const btnBiz = document.getElementById('btn-trap-tab-biz');
         const btnReq = document.getElementById('btn-trap-tab-req');
-        const btnResp = document.getElementById('btn-trap-tab-response');
-        const btnHidden = document.getElementById('btn-trap-tab-hidden');
         const titleEl = document.getElementById('traps-main-title');
         const subEl = document.getElementById('traps-main-sub');
         const theadEl = document.getElementById('traps-thead');
         const tablePane = document.getElementById('policy-pane-table-container');
-        const respPane = document.getElementById('policy-pane-response');
-        const hiddenPane = document.getElementById('policy-pane-hidden');
         const actionMenuBtn = document.getElementById('btn-trap-action-menu');
         const bannerScan = document.getElementById('banner-port-scan-defense');
         const bannerBiz = document.getElementById('banner-biz-defense');
         closeTrapActionMenu();
 
-        [btnPort, btnBiz, btnReq, btnResp, btnHidden].forEach(b => {
+        [btnPort, btnBiz, btnReq].forEach(b => {
             if (b) { b.className = 'pill-btn'; b.style.background = 'transparent'; }
         });
-        if (tablePane) tablePane.style.display = 'none';
-        if (respPane) respPane.style.display = 'none';
-        if (hiddenPane) hiddenPane.style.display = 'none';
+        if (tablePane) tablePane.style.display = 'block';
         if (bannerScan) bannerScan.style.display = 'none';
         if (bannerBiz) bannerBiz.style.display = 'none';
         if (actionMenuBtn) actionMenuBtn.style.display = 'inline-block';
 
         if (tab === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
-            if (tablePane) tablePane.style.display = 'block';
             if (bannerScan) bannerScan.style.display = 'flex';
-            if (titleEl) titleEl.innerText = '🎯 端口诱捕蜜罐与多端口扫描防御';
-            if (subEl) subEl.innerText = '自动感知黑客扫描器探测并阻断高危探针，服务器正常业务端口 (80/443/SSH) 默认放行';
+            if (titleEl) titleEl.innerText = '🔌 端口策略与多端口扫描感知';
+            if (subEl) subEl.innerText = '自动感知黑客扫描器探测并阻断高危探针，服务器正常业务端口默认放行';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -3796,9 +3838,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             renderTrapsTable();
         } else if (tab === 'biz') {
             if (btnBiz) { btnBiz.className = 'pill-btn accent'; btnBiz.style.background = ''; }
-            if (tablePane) tablePane.style.display = 'block';
             if (bannerBiz) bannerBiz.style.display = 'flex';
-            if (titleEl) titleEl.innerText = '🏢 正常生产业务服务保护清单';
+            if (titleEl) titleEl.innerText = '🏢 常规生产业务服务保护清单';
             if (subEl) subEl.innerText = '列表中的所有端口受内核级免封放行保护，任何非白名单外部正常访问 100% 顺畅连通，绝不误杀';
             if (theadEl) {
                 theadEl.innerHTML = `
@@ -3822,8 +3863,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         } else if (tab === 'req') {
             if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
-            if (tablePane) tablePane.style.display = 'block';
-            if (titleEl) titleEl.innerText = '🌐 Web 应用与恶意请求特征防御';
+            if (titleEl) titleEl.innerText = '🎯 行为特定与恶意请求特征防御';
             if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、敏感备份文件、后台爆破、扫描工具指纹与高频 404 熔断';
             if (theadEl) {
                 theadEl.innerHTML = `
@@ -3845,20 +3885,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             } else {
                 renderTrapsTable();
             }
-        } else if (tab === 'response') {
-            if (btnResp) { btnResp.className = 'pill-btn accent'; btnResp.style.background = ''; }
-            if (respPane) respPane.style.display = 'flex';
-            if (actionMenuBtn) actionMenuBtn.style.display = 'none';
-            if (titleEl) titleEl.innerText = '⚙️ 全局响应机制与封禁参数';
-            if (subEl) subEl.innerText = '配置判定阈值、封禁时间窗口、黑名单自动解封周期与 Linux 底层内核阻断方式';
-            loadSystemSettings();
-        } else if (tab === 'hidden') {
-            if (btnHidden) { btnHidden.className = 'pill-btn accent'; btnHidden.style.background = ''; }
-            if (hiddenPane) hiddenPane.style.display = 'flex';
-            if (actionMenuBtn) actionMenuBtn.style.display = 'none';
-            if (titleEl) titleEl.innerText = '🚫 全局 IP 隐藏与审计过滤';
-            if (subEl) subEl.innerText = '被加入隐藏列表的 IP 将在全站控制台中隐藏日志，不影响底层正常防御与拦截';
-            loadHiddenIPsForPolicy();
         }
     }
 
