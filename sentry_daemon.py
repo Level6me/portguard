@@ -61,7 +61,8 @@ DEFAULT_CONFIG = {
     "trap_window_seconds": 30,
     "trap_business_ports": False,
     "trap_all_unopened_ports": False,
-    "trap_all_ports": False
+    "trap_all_ports": False,
+    "defense_paused": False
 }
 
 DEFAULT_HTTP_TRAPS = [
@@ -1046,6 +1047,13 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
         return
     ip = valid_ip
     
+    # 0. 暂停防御模式检查 (如果管理员暂停了拦截服务，绝不下发任何黑洞/防火墙封禁，仅记录日志)
+    if cfg.get("defense_paused", False) or cfg.get("paused", False):
+        print(f"[PAUSED] 防御拦截已处于暂停状态，忽略封禁: {ip}")
+        if port:
+            log_port_access_entry(ip, port, (port_info or {}).get("name", f"TCP/{port}"), action="PAUSED")
+        return
+
     # 1. 白名单拦截保护
     if ip_in_whitelist(ip):
         print(f"[WHITELIST] 忽略安全白名单 IP: {ip}")
@@ -1061,10 +1069,10 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     ban_reason = reason or f"探测蜜罐端口 {port_val} ({port_name})"
 
     # 2. 蜜罐阈值判定（若非直接指定原因或业务诱捕，按阈值防抖）
-    defense_mode = str(cfg.get("defense_mode", "strict")).strip().lower()
+    defense_mode = str(cfg.get("defense_mode", "standard")).strip().lower()
     is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_name))
 
-    if reason or defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz or event_category in ("scan", "business") or cfg.get("trap_all_ports", True) or cfg.get("trap_all_unopened_ports", True):
+    if reason or defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz or event_category in ("scan", "business") or cfg.get("trap_all_ports", False) or cfg.get("trap_all_unopened_ports", False):
         threshold = 1
     else:
         threshold = int(cfg.get("trap_threshold", 3) or 3)

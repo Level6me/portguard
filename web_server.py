@@ -229,6 +229,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             animation: pulse 2s infinite;
             flex-shrink: 0;
         }
+        .status-dot.paused {
+            background: var(--warning) !important;
+            box-shadow: 0 0 8px rgba(255, 149, 0, 0.6) !important;
+            animation: none !important;
+        }
         @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
         .title {
             font-size: 28px;
@@ -757,8 +762,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="header">
         <div class="header-left">
             <div class="date-badge">
-                <span class="status-dot"></span>
-                <span>PORTSENTRY · 内核防护中</span>
+                <span class="status-dot" id="header-status-dot"></span>
+                <span id="header-status-text">PORTSENTRY · 内核防护中</span>
             </div>
             <h1 class="title" id="page-main-title">安全态势分析</h1>
         </div>
@@ -1428,6 +1433,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         <!-- Tab 1: 系统防御参数 -->
         <div id="settings-pane-defense" style="display: flex; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px;">
+            <!-- 0. 一键暂停 / 恢复拦截服务 -->
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <div style="display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 200px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-weight: 700; font-size: 13px; color: var(--text);">⏸️ 威胁防御与自动拦截服务</span>
+                            <span class="tag success" id="defense-service-status-tag">🛡️ 拦截运行中</span>
+                        </div>
+                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">一键暂停所有蜜罐诱捕阻断与黑洞封禁，并临时清空内核拦截规则，方便排查运维。</span>
+                    </div>
+                    <button type="button" id="btn-toggle-defense-pause" onclick="toggleDefenseServicePause()" class="pill-btn danger" style="padding: 7px 16px; font-weight: 700; font-size: 12px; white-space: nowrap; cursor: pointer;">
+                        ⏸️ 暂停所有拦截
+                    </button>
+                </div>
+            </div>
+
             <!-- 1. 封禁灵敏度与阈值 -->
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -2955,6 +2976,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function fetchData(showNotice = false) {
         fetch('/api/stats').then(res => res.json()).then(data => {
+            if (data.defense_paused !== undefined) {
+                updateDefensePauseUI(data.defense_paused);
+            }
             document.getElementById('stat-total').innerText = data.total_banned;
             document.getElementById('stat-today').innerText = data.today_events;
             document.getElementById('stat-traps').innerText = data.active_traps;
@@ -4504,10 +4528,75 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         navigator.clipboard.writeText(text).then(() => showToast(`已复制 IP: ${text}`, '📋'));
     }
 
+    let isDefensePaused = false;
+
+    async function toggleDefenseServicePause() {
+        const targetAction = isDefensePaused ? 'resume' : 'pause';
+        const confirmMsg = isDefensePaused 
+            ? '确定要恢复威胁防御拦截服务吗？\n系统将重新启用内核防火墙与蜜罐实时阻断。' 
+            : '确定要暂停所有防御拦截服务吗？\n暂停期间系统将不再执行任何 IP 封禁与黑洞阻断，并会临时释放当前所有内核拦截规则，便于运维排查。';
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            showToast('正在切换防御服务状态...', '⏳');
+            const res = await fetch('/api/defense/toggle_pause', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: targetAction })
+            });
+            const data = await res.json();
+            if (data.success) {
+                isDefensePaused = !!data.paused;
+                updateDefensePauseUI(isDefensePaused);
+                showToast(data.msg, isDefensePaused ? '⏸️' : '🛡️');
+                fetchData(false);
+            } else {
+                showToast(data.msg || '操作失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
+    function updateDefensePauseUI(paused) {
+        isDefensePaused = !!paused;
+        const btn = document.getElementById('btn-toggle-defense-pause');
+        const tag = document.getElementById('defense-service-status-tag');
+        const headerDot = document.getElementById('header-status-dot');
+        const headerText = document.getElementById('header-status-text');
+
+        if (btn && tag) {
+            if (paused) {
+                btn.className = 'pill-btn accent';
+                btn.innerHTML = '▶️ 恢复拦截服务';
+                tag.className = 'tag warning';
+                tag.innerText = '⏸️ 拦截已暂停';
+            } else {
+                btn.className = 'pill-btn danger';
+                btn.innerHTML = '⏸️ 暂停所有拦截';
+                tag.className = 'tag success';
+                tag.innerText = '🛡️ 拦截运行中';
+            }
+        }
+
+        if (headerDot && headerText) {
+            if (paused) {
+                headerDot.className = 'status-dot paused';
+                headerText.innerText = 'PORTSENTRY · 防御已暂停';
+            } else {
+                headerDot.className = 'status-dot';
+                headerText.innerText = 'PORTSENTRY · 内核防护中';
+            }
+        }
+    }
+
     async function loadSystemSettings() {
         try {
             const res = await fetch('/api/settings');
             const data = await res.json();
+            if (data.defense_paused !== undefined) {
+                updateDefensePauseUI(data.defense_paused);
+            }
             if (document.getElementById('setting-trap-threshold')) {
                 document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 1);
             }
@@ -4990,6 +5079,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "active_traps": active_traps,
                     "whitelist_count": whitelist_count,
                     "hidden_count": hidden_ips_cnt,
+                    "defense_paused": bool(cfg.get("defense_paused", False)),
                     "port_distribution": port_dist,
                     "geo_rank": geo_rank,
                     "hourly_trend": {
@@ -5261,15 +5351,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/settings":
                 cfg = load_config()
                 self._send_json({
-                    "trap_threshold": int(cfg.get("trap_threshold", 1) or 1),
+                    "trap_threshold": int(cfg.get("trap_threshold", 2) or 2),
                     "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
                     "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
-                    "defense_mode": cfg.get("defense_mode", "strict"),
-                    "trap_all_ports": bool(cfg.get("trap_all_ports", True)),
-                    "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", True)),
-                    "trap_business_ports": bool(cfg.get("trap_business_ports", True)),
+                    "defense_mode": cfg.get("defense_mode", "standard"),
+                    "trap_all_ports": bool(cfg.get("trap_all_ports", False)),
+                    "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", False)),
+                    "trap_business_ports": bool(cfg.get("trap_business_ports", False)),
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
+                    "defense_paused": bool(cfg.get("defense_paused", False)),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
                 })
                 return
@@ -5498,6 +5589,32 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}"})
                 return
 
+            if path == "/api/defense/toggle_pause":
+                cfg = load_config()
+                action = req_data.get("action", "")
+                if action == "pause":
+                    cfg["defense_paused"] = True
+                elif action == "resume":
+                    cfg["defense_paused"] = False
+                else:
+                    cfg["defense_paused"] = not bool(cfg.get("defense_paused", False))
+                
+                is_paused = cfg["defense_paused"]
+                save_config(cfg)
+
+                if is_paused:
+                    # 暂停时，自动释放现存的所有黑洞路由与临时拦截规则，释放网络
+                    run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
+                    run_firewall_cmd("iptables", "-F")
+                    run_firewall_cmd("iptables", "-X")
+                    run_firewall_cmd("iptables", "-P", "INPUT", "ACCEPT")
+                    msg = "所有防御拦截服务已成功暂停！当前处于纯观察模式，已临时释放所有拦截规则。"
+                else:
+                    msg = "防御拦截服务已成功恢复！内核防火墙与蜜罐实时阻断已重新激活。"
+
+                self._send_json({"success": True, "paused": is_paused, "msg": msg})
+                return
+
             if path == "/api/settings":
                 cfg = load_config()
                 if "trap_threshold" in req_data:
@@ -5516,6 +5633,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cfg["trap_all_unopened_ports"] = bool(req_data["trap_all_unopened_ports"])
                 if "trap_all_ports" in req_data:
                     cfg["trap_all_ports"] = bool(req_data["trap_all_ports"])
+                if "defense_paused" in req_data:
+                    cfg["defense_paused"] = bool(req_data["defense_paused"])
                 save_config(cfg)
                 self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
                 return

@@ -156,6 +156,7 @@ if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
   "trap_all_ports": false,
   "trap_all_unopened_ports": false,
   "trap_business_ports": false,
+  "defense_paused": false,
   "auto_clean_days": 30
 }
 EOF
