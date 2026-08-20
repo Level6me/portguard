@@ -4497,21 +4497,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }).then(res => res.json()).then(res => {
             showToast(res.msg, '🛡️');
             closeModals();
-            fetchData(false);
+            fetch('/api/whitelist').then(r => r.json()).then(data => {
+                allWhitelist = data || [];
+                renderWhitelistTable();
+                fetchData(false);
+            });
         });
     }
 
-    function deleteWhitelist(ip) {
+    function removeWhitelist(ip) {
         if (!confirm(`确定要移除白名单 ${ip} 吗？`)) return;
         fetch('/api/whitelist/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ip })
         }).then(res => res.json()).then(res => {
-            showToast(res.msg, '🗑️');
-            fetchData(false);
+            showToast(res.msg || `已移除白名单: ${ip}`, '🗑️');
+            allWhitelist = (allWhitelist || []).filter(w => (typeof w === 'object' ? w.ip : w) !== ip);
+            renderWhitelistTable();
+            fetch('/api/whitelist').then(r => r.json()).then(data => {
+                allWhitelist = data || [];
+                renderWhitelistTable();
+                fetchData(false);
+            });
+        }).catch(err => {
+            showToast('请求异常: ' + err, '⚠️');
         });
     }
+    const deleteWhitelist = removeWhitelist;
 
     function submitAddTrap() {
         const rawPort = document.getElementById('trap-port-val').value.trim();
@@ -5050,6 +5063,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    async function removeCustomHiddenIP(ip) {
+        if (!confirm(`确定要取消对 IP ${ip} 的审计隐藏吗？取消后该 IP 的访问日志将恢复显示。`)) return;
+        try {
+            const res = await fetch('/api/hidden-ips/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ip })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || `已恢复 IP ${ip} 的审计显示`, '✓');
+                loadHiddenIPsForPolicy();
+                fetch('/api/hidden-ips').then(r => r.json()).then(d => {
+                    allHiddenIPs = d || [];
+                    updateHiddenBadge(allHiddenIPs.length);
+                    loadHiddenIPsForPolicy();
+                    fetchData(false);
+                });
+            } else {
+                showToast(data.msg || '取消隐藏失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
     async function addCustomHiddenIPFromPolicy() {
         const input = document.getElementById('input-policy-hidden-ip');
         if (!input) return;
@@ -5302,6 +5341,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const data = await res.json();
             if (data.success) {
                 showToast(data.msg || '已清空所有隐藏 IP 规则', '🎉');
+                allHiddenIPs = [];
+                updateHiddenBadge(0);
+                loadHiddenIPsForPolicy();
                 loadHiddenIPs();
                 fetchData(false);
             } else {
@@ -6804,7 +6846,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": ok, "msg": msg})
                 return
 
-            if path in ("/api/hidden-ips/remove", "/api/hidden_ips/remove"):
+            if path in ("/api/hidden-ips/remove", "/api/hidden_ips/remove", "/api/hidden-ips/delete", "/api/hidden_ips/delete"):
                 ip = req_data.get("ip", "").strip()
                 if not ip:
                     self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
