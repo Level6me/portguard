@@ -1191,19 +1191,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title" id="traps-main-title">🍯 活跃蜜罐策略与诱饵端口</div>
-                    <div class="val-sub" id="traps-main-sub">模拟高危服务静默监听，一旦连入即自动封禁</div>
+                    <div class="card-title" id="traps-main-title">🛡️ 全局威胁防御策略中心</div>
+                    <div class="val-sub" id="traps-main-sub">精准识别并拦截端口扫描、蜜罐诱捕与 Web 漏洞嗅探，确保正常业务完全放行</div>
                 </div>
                 <div class="header-action-wrap">
                     <!-- 模式切换分段按钮 -->
-                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
-                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
-                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 请求特征</button>
+                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
+                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口蜜罐与扫描</button>
+                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 Web 恶意特征</button>
+                        <button class="pill-btn" id="btn-trap-tab-response" onclick="switchTrapTab('response')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">⚙️ 响应与封禁参数</button>
+                        <button class="pill-btn" id="btn-trap-tab-hidden" onclick="switchTrapTab('hidden')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
                     </div>
                     <!-- 统一弹出式策略配置卡片按钮 -->
                     <div style="position: relative; display: inline-block;">
                         <button class="pill-btn accent" id="btn-trap-action-menu" onclick="toggleTrapActionMenu(event)" style="font-weight: 700;">
-                            <span>⚙️ 策略管理与配置</span>
+                            <span>⚙️ 策略管理操作</span>
                             <span style="font-size: 10px; margin-left: 2px;">▾</span>
                         </button>
                         <div id="trap-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
@@ -1213,35 +1215,206 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <div class="table-wrap">
-                <table>
-                    <thead id="traps-thead">
-                        <tr>
-                            <th>诱饵端口</th>
-                            <th>模拟服务描述</th>
-                            <th>分类</th>
-                            <th>威胁等级</th>
-                            <th>当前状态</th>
-                            <th>开关操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="traps-tbody">
-                        <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入策略...</td></tr>
-                    </tbody>
-                </table>
+            <!-- SubTab 1/2: 表格区域 (端口蜜罐 / Web 请求特征) -->
+            <div id="policy-pane-table-container">
+                <!-- 端口模式顶部的智能多端口扫描感知卡片 -->
+                <div id="banner-port-scan-defense" style="margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-weight: 700; font-size: 12px; color: var(--text);">🔍 智能多端口扫描探测行为感知 (Nmap/Masscan 识别)</span>
+                            <span class="tag success" id="tag-port-scan-status">🛡️ 实时感知运行中</span>
+                        </div>
+                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.3;">自动识别攻击者批量探测、全端口嗅探与多端口扫描行为并下发封禁；系统生产业务端口 (80/443/SSH) 默认绝对放行。</span>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span style="font-size: 11px; font-weight: 600; color: var(--text-sec);">敏感度: 15秒内探测 ≥3 个未开放端口拉黑</span>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead id="traps-thead">
+                            <tr>
+                                <th>诱饵端口</th>
+                                <th>模拟服务描述</th>
+                                <th>分类</th>
+                                <th>威胁等级</th>
+                                <th>当前状态</th>
+                                <th>开关操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="traps-tbody">
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入策略...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 蜜罐策略分页控制栏 (50条/页) -->
+                <div id="traps-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                    <div style="font-size: 12px; color: var(--text-sec);">
+                        共 <b id="traps-total-cnt" style="color: var(--text);">0</b> 条策略 · 每页 50 条 · 当前第 <b id="traps-page-info" style="color: var(--accent);">1 / 1</b> 页
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="pill-btn" onclick="changeTrapsPage(-1)" id="btn-traps-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
+                        <div id="traps-page-nums" style="display: flex; gap: 4px;"></div>
+                        <button class="pill-btn" onclick="changeTrapsPage(1)" id="btn-traps-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+                    </div>
+                </div>
             </div>
 
-            <!-- 蜜罐策略分页控制栏 (50条/页) -->
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
-                <div style="font-size: 12px; color: var(--text-sec);">
-                    共 <b id="traps-total-cnt" style="color: var(--text);">0</b> 条策略 · 每页 50 条 · 当前第 <b id="traps-page-info" style="color: var(--accent);">1 / 1</b> 页
+            <!-- SubTab 3: 响应机制与封禁参数 (集成原设置弹窗内容) -->
+            <div id="policy-pane-response" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
+                <!-- 0. 一键暂停 / 恢复拦截服务 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <div style="display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 200px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-weight: 700; font-size: 13px; color: var(--text);">⏸️ 威胁防御与自动拦截服务总开关</span>
+                                <span class="tag success" id="defense-policy-status-tag">🛡️ 拦截运行中</span>
+                            </div>
+                            <span style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">一键暂停所有蜜罐诱捕阻断与黑洞封禁，并临时释放当前所有拦截规则，方便排查运维。</span>
+                        </div>
+                        <button type="button" id="btn-toggle-defense-policy-pause" onclick="toggleDefenseServicePause()" class="pill-btn danger" style="padding: 7px 16px; font-weight: 700; font-size: 12px; white-space: nowrap; cursor: pointer;">
+                            ⏸️ 暂停所有拦截
+                        </button>
+                    </div>
                 </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button class="pill-btn" onclick="changeTrapsPage(-1)" id="btn-traps-prev" style="padding: 5px 12px; font-size: 12px;">‹ 上一页</button>
-                    <div id="traps-page-nums" style="display: flex; gap: 4px;"></div>
-                    <button class="pill-btn" onclick="changeTrapsPage(1)" id="btn-traps-next" style="padding: 5px 12px; font-size: 12px;">下一页 ›</button>
+
+                <!-- 1. 扫描与探测防御开关 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🔍 恶意端口扫描与探测行为识别设置</div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                        当单个外部非白名单 IP 在指定时间窗口内连续探测多个未开放端口时，自动判定为恶意扫描工具（如 Nmap/Masscan）并拉黑。
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">多端口扫描判定阈值</label>
+                            <select id="setting-policy-scan-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                                <option value="2">探测 ≥2 个未开放端口 (极速敏感)</option>
+                                <option value="3" selected>探测 ≥3 个未开放端口 (标准推荐)</option>
+                                <option value="5">探测 ≥5 个未开放端口 (宽松模式)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">扫描统计时间窗口</label>
+                            <select id="setting-policy-scan-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                                <option value="10">10 秒</option>
+                                <option value="15" selected>15 秒 (标准感知)</option>
+                                <option value="30">30 秒</option>
+                                <option value="60">60 秒 (慢速扫描感知)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. 封禁灵敏度与阈值 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-weight: 700; font-size: 13px; color: var(--text);">🎯 诱捕探测判定与自动拉黑灵敏度</span>
+                        <span class="badge badge-high" id="badge-policy-threshold-status">主动严防</span>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                        外部 IP 触碰高危蜜罐端口或触发 Web 规则时的频控判定阈值。
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数</label>
+                            <select id="setting-policy-trap-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                                <option value="1">1 次 (零容忍立即封禁)</option>
+                                <option value="2" selected>2 次 (严苛防御)</option>
+                                <option value="3">3 次 (标准防误触)</option>
+                                <option value="5">5 次 (宽松模式)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
+                            <select id="setting-policy-trap-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                                <option value="15">15 秒</option>
+                                <option value="30" selected>30 秒 (标准默认)</option>
+                                <option value="60">60 秒 (长窗口感知)</option>
+                                <option value="300">300 秒 (5分钟慢速感知)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 封禁时长与自动解封周期 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⏳ 黑名单封禁周期与自动解封</div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                        被拉黑攻击 IP 的持续阻断天数。设为永久封禁时永不自动解封。
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
+                        <select id="setting-policy-auto-clean" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                            <option value="7">7 天 (临时阻断)</option>
+                            <option value="30" selected>30 天 (标准推荐)</option>
+                            <option value="90">90 天 (长期封锁)</option>
+                            <option value="180">180 天 (半年封锁)</option>
+                            <option value="0">永久封禁 (永不自动解封)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 4. 内核阻断机制 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ Linux 内核底层阻断联动方式</div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-policy-ban-iptables" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                            <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链顶层直接丢弃恶意数据包）</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-policy-ban-blackhole" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                            <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接丢弃）</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px;">
+                    <button class="pill-btn accent" onclick="saveIntegratedPolicySettings()" style="padding: 10px 24px; font-weight: 700; font-size: 13px;">💾 保存全局防御设置</button>
                 </div>
             </div>
+
+            <!-- SubTab 4: IP 隐藏过滤规则 (集成隐藏列表) -->
+            <div id="policy-pane-hidden" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
+                        <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
+                        被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="input-policy-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP 地址 (如 1.2.3.4)" style="flex: 1; padding: 8px 12px; font-size: 12px; font-family: monospace;">
+                        <button class="pill-btn accent" onclick="addCustomHiddenIPFromPolicy()" style="padding: 8px 16px; font-size: 12px; font-weight: 700; white-space: nowrap;">+ 添加隐藏</button>
+                    </div>
+                </div>
+
+                <!-- 隐藏 IP 表格 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--card);">
+                        <span style="font-size: 12px; font-weight: 700; color: var(--text);">已隐藏 IP 名单 (<span id="hidden-ips-policy-count">0</span>)</span>
+                        <button class="pill-btn danger" onclick="clearAllHiddenIPs()" style="padding: 3px 8px; font-size: 11px;">🗑️ 清空全部隐藏</button>
+                    </div>
+                    <div style="max-height: 280px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec);">
+                                    <th style="padding: 8px 12px;">IP 地址 / 归属</th>
+                                    <th style="padding: 8px 12px;">隐藏时间</th>
+                                    <th style="padding: 8px 12px; text-align: right;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="hidden-ips-policy-tbody">
+                                <!-- JS 动态渲染 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
         </div>
         <div class="bottom-spacer"></div>
     </div>
@@ -1402,7 +1575,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
     <button class="dock-btn" id="dock-btn-traps" onclick="switchTab('traps', this)">
         <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
-        <span>蜜罐策略</span>
+        <span>防御策略</span>
     </button>
     <button class="dock-btn" id="dock-btn-whitelist" onclick="switchTab('whitelist', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
@@ -2030,7 +2203,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'logs': '蜜罐拦截日志',
         'access-logs': '端口与控制台访问日志',
         'blacklist': '内核黑名单池',
-        'traps': '蜜罐策略配置',
+        'traps': '全局防御策略中心',
         'whitelist': '安全信任白名单'
     };
 
@@ -3525,16 +3698,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         currentTrapTab = tab;
         const btnPort = document.getElementById('btn-trap-tab-port');
         const btnReq = document.getElementById('btn-trap-tab-req');
+        const btnResp = document.getElementById('btn-trap-tab-response');
+        const btnHidden = document.getElementById('btn-trap-tab-hidden');
         const titleEl = document.getElementById('traps-main-title');
         const subEl = document.getElementById('traps-main-sub');
         const theadEl = document.getElementById('traps-thead');
+        const tablePane = document.getElementById('policy-pane-table-container');
+        const respPane = document.getElementById('policy-pane-response');
+        const hiddenPane = document.getElementById('policy-pane-hidden');
+        const actionMenuBtn = document.getElementById('btn-trap-action-menu');
+        const bannerScan = document.getElementById('banner-port-scan-defense');
         closeTrapActionMenu();
+
+        [btnPort, btnReq, btnResp, btnHidden].forEach(b => {
+            if (b) { b.className = 'pill-btn'; b.style.background = 'transparent'; }
+        });
+        if (tablePane) tablePane.style.display = 'none';
+        if (respPane) respPane.style.display = 'none';
+        if (hiddenPane) hiddenPane.style.display = 'none';
+        if (actionMenuBtn) actionMenuBtn.style.display = 'inline-block';
 
         if (tab === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
-            if (btnReq) { btnReq.className = 'pill-btn'; btnReq.style.background = 'transparent'; }
-            if (titleEl) titleEl.innerText = '🍯 活跃蜜罐策略与诱饵端口';
-            if (subEl) subEl.innerText = '模拟高危服务静默监听，一旦连入即自动封禁';
+            if (tablePane) tablePane.style.display = 'block';
+            if (bannerScan) bannerScan.style.display = 'flex';
+            if (titleEl) titleEl.innerText = '🎯 端口诱捕蜜罐与多端口扫描防御';
+            if (subEl) subEl.innerText = '自动感知黑客扫描器探测并阻断高危探针，服务器正常业务端口 (80/443/SSH) 默认放行';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -3547,11 +3736,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </tr>
                 `;
             }
-        } else {
+            renderTrapsTable();
+        } else if (tab === 'req') {
             if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
-            if (btnPort) { btnPort.className = 'pill-btn'; btnPort.style.background = 'transparent'; }
-            if (titleEl) titleEl.innerText = '🎯 Web 请求特征与防扫描策略';
-            if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、后台爆破、扫描工具指纹与高频 404 熔断';
+            if (tablePane) tablePane.style.display = 'block';
+            if (bannerScan) bannerScan.style.display = 'none';
+            if (titleEl) titleEl.innerText = '🌐 Web 应用与恶意请求特征防御';
+            if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、敏感备份文件、后台爆破、扫描工具指纹与高频 404 熔断';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -3569,9 +3760,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     allHttpTraps = data;
                     renderTrapsTable();
                 });
+            } else {
+                renderTrapsTable();
             }
+        } else if (tab === 'response') {
+            if (btnResp) { btnResp.className = 'pill-btn accent'; btnResp.style.background = ''; }
+            if (respPane) respPane.style.display = 'flex';
+            if (actionMenuBtn) actionMenuBtn.style.display = 'none';
+            if (titleEl) titleEl.innerText = '⚙️ 全局响应机制与封禁参数';
+            if (subEl) subEl.innerText = '配置判定阈值、封禁时间窗口、黑名单自动解封周期与 Linux 底层内核阻断方式';
+            loadSystemSettings();
+        } else if (tab === 'hidden') {
+            if (btnHidden) { btnHidden.className = 'pill-btn accent'; btnHidden.style.background = ''; }
+            if (hiddenPane) hiddenPane.style.display = 'flex';
+            if (actionMenuBtn) actionMenuBtn.style.display = 'none';
+            if (titleEl) titleEl.innerText = '🚫 全局 IP 隐藏与审计过滤';
+            if (subEl) subEl.innerText = '被加入隐藏列表的 IP 将在全站控制台中隐藏日志，不影响底层正常防御与拦截';
+            loadHiddenIPsForPolicy();
         }
-        renderTrapsTable();
     }
 
     function changeTrapsPage(delta) {
@@ -4597,20 +4803,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.defense_paused !== undefined) {
                 updateDefensePauseUI(data.defense_paused);
             }
+            // 策略中心页面控件同步
+            if (document.getElementById('setting-policy-scan-threshold')) {
+                document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold || 3);
+            }
+            if (document.getElementById('setting-policy-scan-window')) {
+                document.getElementById('setting-policy-scan-window').value = String(data.port_scan_window_seconds || 15);
+            }
+            if (document.getElementById('setting-policy-trap-threshold')) {
+                document.getElementById('setting-policy-trap-threshold').value = String(data.trap_threshold || 2);
+            }
+            if (document.getElementById('setting-policy-trap-window')) {
+                document.getElementById('setting-policy-trap-window').value = String(data.trap_window_seconds || 30);
+            }
+            if (document.getElementById('setting-policy-auto-clean')) {
+                document.getElementById('setting-policy-auto-clean').value = String(data.auto_clean_days !== undefined ? data.auto_clean_days : 30);
+            }
+            if (document.getElementById('setting-policy-ban-iptables')) {
+                document.getElementById('setting-policy-ban-iptables').checked = data.ban_action_iptables !== false;
+            }
+            if (document.getElementById('setting-policy-ban-blackhole')) {
+                document.getElementById('setting-policy-ban-blackhole').checked = data.ban_action_blackhole !== false;
+            }
+
+            // 弹窗控件同步
             if (document.getElementById('setting-trap-threshold')) {
-                document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 1);
+                document.getElementById('setting-trap-threshold').value = String(data.trap_threshold || 2);
             }
             if (document.getElementById('setting-trap-window')) {
                 document.getElementById('setting-trap-window').value = String(data.trap_window_seconds || 30);
             }
             if (document.getElementById('setting-auto-clean')) {
                 document.getElementById('setting-auto-clean').value = String(data.auto_clean_days !== undefined ? data.auto_clean_days : 30);
-            }
-            if (document.getElementById('setting-trap-all-ports')) {
-                document.getElementById('setting-trap-all-ports').checked = data.trap_all_ports !== false;
-            }
-            if (document.getElementById('setting-trap-all-unopened')) {
-                document.getElementById('setting-trap-all-unopened').checked = data.trap_all_unopened_ports !== false;
             }
             if (document.getElementById('setting-ban-iptables')) {
                 document.getElementById('setting-ban-iptables').checked = data.ban_action_iptables !== false;
@@ -4621,6 +4845,103 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             updateThresholdBadge();
         } catch (e) {
             console.error(e);
+        }
+    }
+
+    async function saveIntegratedPolicySettings() {
+        const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '3');
+        const scanWindow = parseInt(document.getElementById('setting-policy-scan-window')?.value || '15');
+        const trapThreshold = parseInt(document.getElementById('setting-policy-trap-threshold')?.value || '2');
+        const trapWindow = parseInt(document.getElementById('setting-policy-trap-window')?.value || '30');
+        const autoClean = parseInt(document.getElementById('setting-policy-auto-clean')?.value || '30');
+        const banIptables = document.getElementById('setting-policy-ban-iptables')?.checked !== false;
+        const banBlackhole = document.getElementById('setting-policy-ban-blackhole')?.checked !== false;
+
+        try {
+            showToast('正在保存全局策略配置...', '⏳');
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enable_port_scan_defense: true,
+                    port_scan_threshold: scanThreshold,
+                    port_scan_window_seconds: scanWindow,
+                    trap_threshold: trapThreshold,
+                    trap_window_seconds: trapWindow,
+                    auto_clean_days: autoClean,
+                    ban_action_iptables: banIptables,
+                    ban_action_blackhole: banBlackhole
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '全局防御策略已保存并立即生效！', '🎉');
+                loadSystemSettings();
+            } else {
+                showToast(data.msg || '保存失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('保存策略异常: ' + e, '⚠️');
+        }
+    }
+
+    async function loadHiddenIPsForPolicy() {
+        try {
+            const res = await fetch('/api/hidden-ips');
+            const list = await res.json();
+            const countEl = document.getElementById('hidden-ips-policy-count');
+            const tbody = document.getElementById('hidden-ips-policy-tbody');
+            if (countEl) countEl.innerText = list.length;
+            if (!tbody) return;
+            if (list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 24px;">暂无隐藏过滤 IP</td></tr>';
+                return;
+            }
+            let html = '';
+            list.forEach(item => {
+                const ipStr = typeof item === 'string' ? item : item.ip;
+                const timeStr = typeof item === 'object' && item.created_at ? item.created_at : '--';
+                html += `
+                    <tr style="border-bottom: 1px solid var(--border-subtle);">
+                        <td style="padding: 8px 12px; font-family: monospace; font-weight: 700; color: var(--text);">${escapeHtml(ipStr)}</td>
+                        <td style="padding: 8px 12px; color: var(--text-sec); font-size: 11px;">${escapeHtml(timeStr)}</td>
+                        <td style="padding: 8px 12px; text-align: right;">
+                            <button class="action-btn danger" onclick="removeCustomHiddenIP('${jsEscape(ipStr)}')">取消隐藏</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function addCustomHiddenIPFromPolicy() {
+        const input = document.getElementById('input-policy-hidden-ip');
+        if (!input) return;
+        const ip = input.value.trim();
+        if (!ip) {
+            showToast('请输入要隐藏的 IP 地址', '⚠️');
+            return;
+        }
+        try {
+            const res = await fetch('/api/hidden-ips/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ip })
+            });
+            const data = await res.json();
+            if (data.success) {
+                input.value = '';
+                showToast(`已成功隐藏 IP: ${ip}`, '🚫');
+                loadHiddenIPsForPolicy();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '添加隐藏失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
         }
     }
 
@@ -5355,6 +5676,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
                     "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
                     "defense_mode": cfg.get("defense_mode", "standard"),
+                    "enable_port_scan_defense": bool(cfg.get("enable_port_scan_defense", True)),
+                    "port_scan_threshold": int(cfg.get("port_scan_threshold", 3) or 3),
+                    "port_scan_window_seconds": int(cfg.get("port_scan_window_seconds", 15) or 15),
                     "trap_all_ports": bool(cfg.get("trap_all_ports", False)),
                     "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", False)),
                     "trap_business_ports": bool(cfg.get("trap_business_ports", False)),
@@ -5631,6 +5955,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cfg["trap_window_seconds"] = int(req_data["trap_window_seconds"])
                 if "auto_clean_days" in req_data:
                     cfg["auto_clean_days"] = int(req_data["auto_clean_days"])
+                if "enable_port_scan_defense" in req_data:
+                    cfg["enable_port_scan_defense"] = bool(req_data["enable_port_scan_defense"])
+                if "port_scan_threshold" in req_data:
+                    cfg["port_scan_threshold"] = int(req_data["port_scan_threshold"])
+                if "port_scan_window_seconds" in req_data:
+                    cfg["port_scan_window_seconds"] = int(req_data["port_scan_window_seconds"])
                 if "ban_action_iptables" in req_data:
                     cfg["ban_action_iptables"] = bool(req_data["ban_action_iptables"])
                 if "ban_action_blackhole" in req_data:

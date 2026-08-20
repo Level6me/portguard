@@ -149,6 +149,9 @@ if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
     {"port": 27017, "name": "MongoDB 未授权探针", "category": "db", "enabled": true, "level": "高危"}
   ],
   "defense_mode": "standard",
+  "enable_port_scan_defense": true,
+  "port_scan_threshold": 3,
+  "port_scan_window_seconds": 15,
   "ban_action_iptables": true,
   "ban_action_blackhole": true,
   "trap_threshold": 2,

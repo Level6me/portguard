@@ -59,6 +59,9 @@ DEFAULT_CONFIG = {
     "auto_clean_days": 30,
     "trap_threshold": 2,
     "trap_window_seconds": 30,
+    "enable_port_scan_defense": True,
+    "port_scan_threshold": 3,
+    "port_scan_window_seconds": 15,
     "trap_business_ports": False,
     "trap_all_unopened_ports": False,
     "trap_all_ports": False,
@@ -1465,9 +1468,45 @@ def is_trap_port(port, cfg=None):
             "trap_business": True
         }
 
-    if port in trap_instance.trap_map:
-        return trap_instance.trap_map[port]
-    return None
+_SCAN_RECORDS_LOCK = threading.Lock()
+_SCAN_RECORDS = {}  # ip -> list of (timestamp, dst_port)
+
+def check_port_scan_attack(src_ip, dst_port, cfg):
+    """
+    智能恶意端口扫描与探测识别引擎：
+    滑动时间窗口感知：当单个外部源 IP 在短时间（如 15 秒）内探测了 >= 3 个不同的未开放/探针端口时，
+    判定为恶意扫描探测攻击（如 Nmap, Masscan, ZGrab 等），返回 True 触发拉黑。
+    """
+    if not cfg.get("enable_port_scan_defense", True):
+        return False
+    
+    window = int(cfg.get("port_scan_window_seconds", 15) or 15)
+    threshold = int(cfg.get("port_scan_threshold", 3) or 3)
+    now = time.time()
+    
+    with _SCAN_RECORDS_LOCK:
+        records = _SCAN_RECORDS.setdefault(src_ip, [])
+        # 清理超出时间窗口的记录
+        records = [r for r in records if now - r[0] <= window]
+        records.append((now, dst_port))
+        _SCAN_RECORDS[src_ip] = records
+        
+        # 统计窗口内探测的不同端口集合
+        unique_ports = {r[1] for r in records}
+        if len(unique_ports) >= threshold:
+            # 命中恶意端口扫描行为！清空该 IP 记录避免重复多次触发
+            _SCAN_RECORDS.pop(src_ip, None)
+            return True
+            
+        # 定期瘦身
+        if len(_SCAN_RECORDS) > 2000:
+            cutoff = now - 60
+            for k in list(_SCAN_RECORDS.keys()):
+                _SCAN_RECORDS[k] = [r for r in _SCAN_RECORDS[k] if r[0] > cutoff]
+                if not _SCAN_RECORDS[k]:
+                    _SCAN_RECORDS.pop(k, None)
+                    
+    return False
 
 class GlobalPortSniffer:
     """全端口网络连接实时感知引擎 (基于 Linux 原生 Raw Socket 嗅探 TCP SYN 连接握手)"""
@@ -1617,48 +1656,7 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 全局全端口全量诱捕（仅在用户显式开启时生效，默认关闭）
-        trap_all_ports = bool(cfg.get("trap_all_ports", False))
-        if trap_all_ports:
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
-            if proc:
-                desc = f"全端口诱捕阻断: {proc} (端口 {dst_port})"
-                cat = "business"
-            elif trap_meta:
-                desc = trap_meta.get("name") or f"蜜罐探针 (端口 {dst_port})"
-                cat = trap_meta.get("category", "custom")
-            else:
-                desc = f"全端口嗅探诱捕 (未开放端口 {dst_port})"
-                cat = "scan"
-            
-            port_info = {
-                "name": desc,
-                "category": cat,
-                "level": "极高危",
-                "is_business": bool(proc)
-            }
-            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-            return
-
-        # 4. 命中活跃诱饵蜜罐 (包括勾选了「正常业务」同步诱捕的业务端口)
-        if trap_meta:
-            action = "INTERCEPTED"
-            is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
-            if is_biz:
-                desc = f"业务诱捕阻断: {proc} (端口 {dst_port})" if proc else (trap_meta.get("name") or f"业务诱捕 (端口 {dst_port})")
-            else:
-                desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐探针 (端口 {dst_port})"
-            port_info = {
-                "name": desc,
-                "category": trap_meta.get("category", "custom"),
-                "level": trap_meta.get("level", "极高危" if is_biz else "高危"),
-                "is_business": is_biz
-            }
-            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-            return
-
-        # 5. 系统生产业务端口访问（未勾选业务诱捕时放行并记录）
+        # 3. 正常生产业务端口访问（80, 443 以及系统当前监听运行的所有业务服务）默认 100% 放行！
         if (dst_port in active_ports_map) or (dst_port in KNOWN_SYSTEM_SERVICES):
             proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, "业务服务"))
             if cfg.get("trap_business_ports", False):
@@ -1673,13 +1671,43 @@ class GlobalPortSniffer:
                 _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             else:
                 action = "BUSINESS"
-                desc = f"业务端口访问: {proc} (端口 {dst_port})"
+                desc = f"正常业务访问: {proc} (端口 {dst_port})"
                 _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 6. 其他未开放端口常规探测 / 全端口隐蔽诱捕
-        trap_all_unopened = bool(cfg.get("trap_all_unopened_ports", False))
-        if trap_all_unopened:
+        # 4. 恶意访问行为 ①：命中显式启用的蜜罐诱饵探针 (如 21 FTP, 23 Telnet, 445 SMB, 3389 RDP, 6379 Redis, 1433 MSSQL 等)
+        if trap_meta and trap_meta.get("enabled", True):
+            action = "INTERCEPTED"
+            is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
+            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
+            if is_biz:
+                desc = f"业务诱捕阻断: {proc} (端口 {dst_port})" if proc else (trap_meta.get("name") or f"业务诱捕 (端口 {dst_port})")
+            else:
+                desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐诱饵探针 (端口 {dst_port})"
+            port_info = {
+                "name": desc,
+                "category": trap_meta.get("category", "honeypot"),
+                "level": trap_meta.get("level", "极高危" if is_biz else "高危"),
+                "is_business": is_biz
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+            return
+
+        # 5. 恶意访问行为 ②：恶意多端口扫描与探针攻击感知 (Nmap/Masscan 等扫描器识别)
+        if check_port_scan_attack(src_ip, dst_port, cfg):
+            action = "INTERCEPTED"
+            desc = f"恶意多端口扫描探测 (触碰端口 {dst_port})"
+            port_info = {
+                "name": desc,
+                "category": "scan",
+                "level": "高危",
+                "is_business": False
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+            return
+
+        # 6. 其他全端口全量诱捕（仅在显式勾选全端口诱捕时生效，默认关闭）
+        if bool(cfg.get("trap_all_ports", False)) or bool(cfg.get("trap_all_unopened_ports", False)):
             action = "INTERCEPTED"
             desc = f"全端口嗅探诱捕 (未开放端口 {dst_port})"
             port_info = {
@@ -1689,10 +1717,12 @@ class GlobalPortSniffer:
                 "is_business": False
             }
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-        else:
-            action = "PROBE"
-            desc = f"未开放端口探测 (端口 {dst_port})"
-            _EXECUTOR.submit(_async_write, action, desc)
+            return
+
+        # 7. 常规单次未开放端口偶发探测（未达到扫描器判定标准，仅记录访问审计日志，不拉黑）
+        action = "PROBE"
+        desc = f"未开放端口探测 (端口 {dst_port})"
+        _EXECUTOR.submit(_async_write, action, desc)
 
 class SiteLogCollector:
     """自动扫描并实时采集 OpenResty / Nginx 业务站点的 access.log 访问日志"""
