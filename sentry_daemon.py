@@ -1467,7 +1467,7 @@ class TrapServer:
                 time.sleep(0.5)
 
 def is_trap_port(port, cfg=None):
-    """判定指定端口是否属于已配置的诱捕蜜罐端口（支持精细优先级匹配与业务诱捕联动）。"""
+    """判定指定端口是否属于已配置的诱捕蜜罐端口。正常业务列表中的端口拥有最高优先级，100% 绝对避让。"""
     try:
         port = int(port)
     except Exception:
@@ -1477,10 +1477,8 @@ def is_trap_port(port, cfg=None):
     web_port = int(cfg.get("web_port", 9099) or 9099)
     if port == web_port:
         return None
-
-    global_biz_trap = bool(cfg.get("trap_business_ports", False))
     
-    # 判定是否属于用户在列表中配置的正常业务端口
+    # 1. 判定是否属于用户在列表中配置的正常业务端口 (P2 优先级高于蜜罐策略)
     biz_ports = set()
     for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
         if isinstance(bp, int):
@@ -1491,8 +1489,11 @@ def is_trap_port(port, cfg=None):
             except Exception:
                 pass
                 
-    is_protected_biz = port in biz_ports
+    # 正常业务端口（如 80, 443, 4212 trojan 等）100% 绝对不作为蜜罐！
+    if port in biz_ports:
+        return None
 
+    # 2. 检查是否命中蜜罐诱饵规则
     try:
         raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
         matching_rules = []
@@ -1504,43 +1505,16 @@ def is_trap_port(port, cfg=None):
             ep = int(norm.get("port_end", norm.get("port")))
             if sp <= port <= ep:
                 span = ep - sp
-                is_biz = bool(norm.get("is_business", False) or norm.get("trap_business", False))
-                matching_rules.append((is_biz, span, norm))
+                matching_rules.append((span, norm))
 
         if matching_rules:
-            # 优先级排序：
-            # 1. 优先匹配明确标记了「正常业务诱捕 / is_business: True」的规则
-            # 2. 跨度最小的精细规则优先 (例如单个端口 22 优先于范围 1-60000)
-            matching_rules.sort(key=lambda x: (not x[0], x[1]))
-            best_biz, best_span, best_norm = matching_rules[0]
-
-            if best_biz or global_biz_trap:
-                best_norm_copy = dict(best_norm)
-                best_norm_copy["is_business"] = True
-                best_norm_copy["trap_business"] = True
-                return best_norm_copy
-
-            # 如果未标记业务诱捕，且该端口属于【用户配置的正常业务】：蜜罐规则自动避让放行！
-            # 如果该端口不在用户业务列表中（即使系统有监听）：作为蜜罐诱饵触发拉黑！
-            if is_protected_biz:
-                return None
-
-            return best_norm
+            # 跨度最小的精细规则优先
+            matching_rules.sort(key=lambda x: x[0])
+            return matching_rules[0][1]
 
     except Exception:
         pass
 
-    if global_biz_trap and is_protected_biz:
-        return {
-            "port": port,
-            "port_start": port,
-            "port_end": port,
-            "name": f"全局业务诱捕: 端口 {port}",
-            "category": "web",
-            "level": "极高危",
-            "is_business": True,
-            "trap_business": True
-        }
     return None
 
 _SCAN_RECORDS_LOCK = threading.Lock()
@@ -1712,7 +1686,8 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 获取用户配置的正常业务端口集合（100% 严格以 business_ports 为准）
+        # 3. 正常生产业务端口判定与放行 (P2 优先级绝对高于蜜罐策略！)
+        # 只要用户在【正常业务列表】中配置了该端口 (如 80, 443, 4212 trojan 等)，100% 绝对放行，绝不触发任何蜜罐封禁！
         biz_ports_map = {}
         for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
             if isinstance(bp, int):
@@ -1724,34 +1699,25 @@ class GlobalPortSniffer:
                 except Exception:
                     pass
 
-        is_normal_business = dst_port in biz_ports_map
-
-        # 4. 检查是否命中显式配置的蜜罐诱饵规则 (例如用户配置了 1-60000 蜜罐，或单独配置了 22 诱捕探针)
-        # 注意：如果端口不在 business_ports 中，is_trap_port 会成功命中该端口，在此直接触发蜜罐拉黑！
-        if trap_meta and trap_meta.get("enabled", True):
-            action = "INTERCEPTED"
-            is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
-            if is_biz:
-                biz_info = biz_ports_map.get(dst_port, {})
-                desc = f"业务诱捕阻断: {biz_info.get('name', f'业务端口 {dst_port}')}"
-            else:
-                desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐诱饵探针 (端口 {dst_port})"
-            port_info = {
-                "name": desc,
-                "category": trap_meta.get("category", "honeypot"),
-                "level": trap_meta.get("level", "极高危" if is_biz else "高危"),
-                "is_business": is_biz
-            }
-            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
-            return
-
-        # 5. 正常生产业务端口访问（且未被蜜罐诱捕）：100% 绝对顺畅放行！
-        if is_normal_business:
+        if dst_port in biz_ports_map:
             biz_info = biz_ports_map[dst_port]
             biz_name = biz_info.get("name", f"业务端口 ({dst_port})") if isinstance(biz_info, dict) else f"业务端口 ({dst_port})"
             action = "BUSINESS"
             desc = f"正常业务访问: {biz_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
+            return
+
+        # 4. 检查是否命中显式配置的蜜罐诱饵规则 (P3 优先级，仅针对非业务端口，如 1-60000 范围或单独未开放端口)
+        if trap_meta and trap_meta.get("enabled", True):
+            action = "INTERCEPTED"
+            desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐诱饵探针 (端口 {dst_port})"
+            port_info = {
+                "name": desc,
+                "category": trap_meta.get("category", "honeypot"),
+                "level": trap_meta.get("level", "高危"),
+                "is_business": False
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
         # 5. 恶意访问行为 ②：恶意多端口扫描与探针攻击感知 (Nmap/Masscan 等扫描器识别)
