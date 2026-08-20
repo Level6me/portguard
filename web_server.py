@@ -769,10 +769,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <h1 class="title" id="page-main-title">安全态势分析</h1>
         </div>
         <div class="header-actions">
-            <button class="pill-btn" onclick="openSystemSettingsModal()" id="btn-settings-modal" title="系统防御与全局策略设置">
-                <span>⚙️</span>
-                <span class="btn-text-full">系统设置</span>
-            </button>
             <button class="pill-btn" onclick="cycleTheme()" id="btn-theme-toggle" title="切换主题: 自动 (跟随系统) / 暗黑 / 明亮">
                 <span id="theme-icon">🌓</span>
                 <span id="theme-label" class="btn-text-full">自动</span>
@@ -1270,7 +1266,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="card-header">
                 <div>
                     <div class="card-title" id="traps-main-title">🛡️ 全局威胁防御策略中心</div>
-                    <div class="val-sub" id="traps-main-sub">精准识别并拦截端口扫描、蜜罐诱捕与 Web 漏洞嗅探，确保正常业务完全放行</div>
+                    <div class="val-sub" id="traps-main-sub">精准识别威胁探针，保障正常业务放行</div>
                 </div>
                 <div class="header-action-wrap">
                     <!-- 统一弹出式策略配置卡片按钮 -->
@@ -1288,20 +1284,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             <!-- SubTab 1/2/3: 表格区域 (端口策略 / 常规业务 / 行为特征) -->
             <div id="policy-pane-table-container">
-                <!-- 端口模式顶部的智能多端口扫描感知卡片 -->
-                <div id="banner-port-scan-defense" style="margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-                    <div style="display: flex; flex-direction: column; gap: 2px;">
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <span style="font-weight: 700; font-size: 12px; color: var(--text);">🔍 智能多端口扫描探测行为感知 (Nmap/Masscan 识别)</span>
-                            <span class="tag success" id="tag-port-scan-status">🛡️ 实时感知运行中</span>
-                        </div>
-                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.3;">自动识别攻击者批量探测、全端口嗅探与多端口扫描行为并下发封禁；系统生产业务端口 (80/443/SSH) 默认绝对放行。</span>
-                    </div>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <span style="font-size: 11px; font-weight: 600; color: var(--text-sec);">敏感度: 15秒内探测 ≥3 个未开放端口拉黑</span>
-                    </div>
-                </div>
-
                 <!-- 业务列表顶部的正常业务保护横幅 -->
                 <div id="banner-biz-defense" style="display: none; margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
                     <div style="display: flex; flex-direction: column; gap: 2px;">
@@ -3813,7 +3795,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const theadEl = document.getElementById('traps-thead');
         const tablePane = document.getElementById('policy-pane-table-container');
         const actionMenuBtn = document.getElementById('btn-trap-action-menu');
-        const bannerScan = document.getElementById('banner-port-scan-defense');
         const bannerBiz = document.getElementById('banner-biz-defense');
         closeTrapActionMenu();
 
@@ -3821,15 +3802,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (b) { b.className = 'pill-btn'; b.style.background = 'transparent'; }
         });
         if (tablePane) tablePane.style.display = 'block';
-        if (bannerScan) bannerScan.style.display = 'none';
         if (bannerBiz) bannerBiz.style.display = 'none';
         if (actionMenuBtn) actionMenuBtn.style.display = 'inline-block';
 
         if (tab === 'port') {
             if (btnPort) { btnPort.className = 'pill-btn accent'; btnPort.style.background = ''; }
-            if (bannerScan) bannerScan.style.display = 'flex';
-            if (titleEl) titleEl.innerText = '🔌 端口策略与多端口扫描感知';
-            if (subEl) subEl.innerText = '自动感知黑客扫描器探测并阻断高危探针，服务器正常业务端口默认放行';
+            if (titleEl) titleEl.innerText = '🔌 端口策略管理';
+            if (subEl) subEl.innerText = '自动阻断探针扫描，系统业务端口默认放行';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -3846,8 +3825,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         } else if (tab === 'biz') {
             if (btnBiz) { btnBiz.className = 'pill-btn accent'; btnBiz.style.background = ''; }
             if (bannerBiz) bannerBiz.style.display = 'flex';
-            if (titleEl) titleEl.innerText = '🏢 常规生产业务服务保护清单';
-            if (subEl) subEl.innerText = '列表中的所有端口受内核级免封放行保护，任何非白名单外部正常访问 100% 顺畅连通，绝不误杀';
+            if (titleEl) titleEl.innerText = '🏢 常规生产业务清单';
+            if (subEl) subEl.innerText = '受内核级放行保护，正常访问 100% 连通';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
@@ -3870,8 +3849,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         } else if (tab === 'req') {
             if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
-            if (titleEl) titleEl.innerText = '🎯 行为特征与恶意请求特征防御';
-            if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、敏感备份文件、后台爆破、扫描工具指纹与高频 404 熔断';
+            if (titleEl) titleEl.innerText = '🎯 行为特征防御';
+            if (subEl) subEl.innerText = '检测路径嗅探、后台爆破与恶意指纹';
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
