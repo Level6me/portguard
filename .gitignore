@@ -12,3 +12,4 @@ data.db-wal
 config.json
 .DS_Store
 logs/
+*.log
