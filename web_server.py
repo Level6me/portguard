@@ -1790,6 +1790,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <label class="form-label">备注说明</label>
             <input type="text" class="form-control" id="biz-remark-val" placeholder="例如：生产核心业务，绝对免封">
         </div>
+        <div class="form-group" style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 6px;">
+            <label class="form-label" style="font-weight: 700; margin-bottom: 8px; color: var(--accent);">🛡️ 业务端口安全防护选项</label>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" id="biz-block-scanner-val" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                    <span><strong>🌐 拦截全网测绘引擎</strong> <span style="color: var(--text-sec); font-size: 11px;">(Censys/Shodan/Onyphe等探针直接拉黑，推荐)</span></span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" id="biz-block-idc-val" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                    <span><strong>🛡️ 阻断云厂商/IDC机房探针</strong> <span style="color: var(--text-sec); font-size: 11px;">(仅允许民用宽带与移动网络，秒封机房肉鸡)</span></span>
+                </label>
+            </div>
+        </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
             <button class="pill-btn accent" onclick="submitBizPortForm()">保存业务端口</button>
@@ -1810,6 +1823,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <select class="form-control" id="http-trap-type-val" onchange="onHttpTrapTypeChange('add')">
                 <option value="path_keyword" selected>URL 路径特征 (关键词 / 正则)</option>
                 <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
+                <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
                 <option value="status_rate">404 / 403 异常高频熔断</option>
             </select>
         </div>
@@ -1862,6 +1877,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <select class="form-control" id="edit-http-trap-type-val" onchange="onHttpTrapTypeChange('edit')">
                 <option value="path_keyword">URL 路径特征 (关键词 / 正则)</option>
                 <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
+                <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
                 <option value="status_rate">404 / 403 异常高频熔断</option>
             </select>
         </div>
@@ -3708,6 +3725,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         document.getElementById('biz-name-val').value = '';
         document.getElementById('biz-cat-val').value = 'web';
         document.getElementById('biz-remark-val').value = '';
+        document.getElementById('biz-block-scanner-val').checked = true;
+        document.getElementById('biz-block-idc-val').checked = false;
         document.getElementById('modal-biz-port').style.display = 'flex';
     }
 
@@ -3721,6 +3740,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         document.getElementById('biz-name-val').value = item.name || '';
         document.getElementById('biz-cat-val').value = item.category || 'custom';
         document.getElementById('biz-remark-val').value = item.remark || '';
+        document.getElementById('biz-block-scanner-val').checked = (item.block_scanner !== false);
+        document.getElementById('biz-block-idc-val').checked = !!item.block_idc;
         document.getElementById('modal-biz-port').style.display = 'flex';
     }
 
@@ -3730,6 +3751,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const name = document.getElementById('biz-name-val').value.trim();
         const category = document.getElementById('biz-cat-val').value;
         const remark = document.getElementById('biz-remark-val').value.trim();
+        const block_scanner = document.getElementById('biz-block-scanner-val').checked;
+        const block_idc = document.getElementById('biz-block-idc-val').checked;
 
         if (!port || port < 1 || port > 65535) return showToast('请输入 1-65535 的有效端口号', '⚠️');
         if (!name) return showToast('请输入业务服务名称或描述', '⚠️');
@@ -3740,7 +3763,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         fetch(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ port, name, category, remark })
+            body: JSON.stringify({ port, name, category, remark, block_scanner, block_idc })
         }).then(res => res.json()).then(res => {
             if (res.success) {
                 showToast(res.msg || '保存成功！', '🎉');
@@ -4004,7 +4027,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const cat = b.category || 'custom';
                 const catName = BIZ_CAT_LABELS[cat] || cat;
                 const originTag = `<span class="tag accent" style="font-size:11px;">🛡️ ${catName}</span>`;
-                const statusTag = '<span class="tag success" style="font-weight:700;">🟢 100% 绝对放行</span>';
+                
+                let statusBadges = '<span class="tag success" style="font-weight:700;">🟢 正常业务放行</span>';
+                if (b.block_scanner) {
+                    statusBadges += '<span class="tag" style="background: rgba(99,102,241,0.15); color: #818cf8; border: 1px solid rgba(99,102,241,0.3); margin-left: 4px; font-size: 11px; font-weight: 600;">🌐 测绘拦截</span>';
+                }
+                if (b.block_idc) {
+                    statusBadges += '<span class="tag" style="background: rgba(245,158,11,0.15); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); margin-left: 4px; font-size: 11px; font-weight: 600;">🛡️ 阻断IDC机房</span>';
+                }
                 
                 let opHtml = `
                     <div style="display: flex; gap: 6px; align-items: center;">
@@ -4022,7 +4052,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </td>
                     <td><span class="tag accent">${catName}</span></td>
                     <td>${originTag}</td>
-                    <td>${statusTag}</td>
+                    <td>${statusBadges}</td>
                     <td>${opHtml}</td>
                 </tr>
                 `;
@@ -4050,6 +4080,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const MATCH_LABELS = {
                 'path_keyword': 'URL 敏感路径',
                 'ua_keyword': '扫描工具指纹',
+                'survey_engine': '测绘引擎识别',
+                'direct_ip': '纯IP直连探测',
                 'status_rate': '高频404熔断'
             };
 
@@ -4101,12 +4133,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const patGroup = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-pattern-group`);
         const rateGroup = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-rate-group`);
         const labelEl = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-pattern-label`);
+        const patInput = document.getElementById(`${prefix === 'edit' ? 'edit-' : ''}http-trap-pattern-val`);
         
         if (!typeEl) return;
         const val = typeEl.value;
         if (val === 'status_rate') {
             if (patGroup) patGroup.style.display = 'none';
             if (rateGroup) rateGroup.style.display = 'block';
+        } else if (val === 'direct_ip') {
+            if (patGroup) patGroup.style.display = 'block';
+            if (rateGroup) rateGroup.style.display = 'none';
+            if (labelEl) labelEl.innerText = '纯 IP 直连访问防护标记 (自动生效)';
+            if (patInput && !patInput.value) patInput.value = 'direct_ip';
+        } else if (val === 'survey_engine') {
+            if (patGroup) patGroup.style.display = 'block';
+            if (rateGroup) rateGroup.style.display = 'none';
+            if (labelEl) labelEl.innerText = '测绘引擎特征关键词 (正则 / 管道符 | 分隔)';
+            if (patInput && !patInput.value) patInput.value = 'censys|onyphe|shodan|leakix|shadowserver|zoomeye';
         } else {
             if (patGroup) patGroup.style.display = 'block';
             if (rateGroup) rateGroup.style.display = 'none';
@@ -6730,6 +6773,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 name = str(req_data.get("name", f"业务端口 ({port})")).strip()
                 category = str(req_data.get("category", "custom")).strip()
                 remark = str(req_data.get("remark", "自定义业务")).strip()
+                block_scanner = bool(req_data.get("block_scanner", True))
+                block_idc = bool(req_data.get("block_idc", False))
                 
                 cfg = load_config()
                 biz_list = cfg.get("business_ports", [])
@@ -6744,7 +6789,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "port": port,
                     "name": name,
                     "category": category,
-                    "remark": remark
+                    "remark": remark,
+                    "block_scanner": block_scanner,
+                    "block_idc": block_idc
                 })
                 cfg["business_ports"] = biz_list
                 # 恢复该端口（解除排除）
@@ -6769,6 +6816,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 name = str(req_data.get("name", "")).strip()
                 category = str(req_data.get("category", "custom")).strip()
                 remark = str(req_data.get("remark", "")).strip()
+                block_scanner = bool(req_data.get("block_scanner", True))
+                block_idc = bool(req_data.get("block_idc", False))
                 
                 cfg = load_config()
                 biz_list = cfg.get("business_ports", [])
@@ -6781,13 +6830,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "port": port,
                             "name": name or (bp.get("name") if isinstance(bp, dict) else f"业务端口 ({port})"),
                             "category": category or (bp.get("category") if isinstance(bp, dict) else "custom"),
-                            "remark": remark or (bp.get("remark") if isinstance(bp, dict) else "")
+                            "remark": remark or (bp.get("remark") if isinstance(bp, dict) else ""),
+                            "block_scanner": block_scanner,
+                            "block_idc": block_idc
                         })
                         updated = True
                     else:
                         new_list.append(bp)
                 if not updated:
-                    new_list.append({"port": port, "name": name or f"业务端口 ({port})", "category": category, "remark": remark})
+                    new_list.append({"port": port, "name": name or f"业务端口 ({port})", "category": category, "remark": remark, "block_scanner": block_scanner, "block_idc": block_idc})
                 cfg["business_ports"] = new_list
                 # 恢复该端口（解除排除）
                 excluded = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
@@ -6871,12 +6922,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                             name = str(item.get("name", item.get("description", ""))).strip()
                             remark = str(item.get("remark", "")).strip()
                             cat = str(item.get("category", "custom")).strip()
+                            block_scanner = bool(item.get("block_scanner", True))
+                            block_idc = bool(item.get("block_idc", False))
                     if p and 1 <= p <= 65535:
                         current_map[p] = {
                             "port": p,
                             "name": name or f"业务端口 ({p})",
                             "category": cat,
-                            "remark": remark or "导入业务"
+                            "remark": remark or "导入业务",
+                            "block_scanner": block_scanner,
+                            "block_idc": block_idc
                         }
                         count += 1
                 if count == 0:

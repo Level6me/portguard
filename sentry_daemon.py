@@ -126,6 +126,30 @@ DEFAULT_HTTP_TRAPS = [
         "description": "拦截携带明确特征扫描工具指纹的自动化探测源"
     },
     {
+        "rule_id": "ht_survey_scanners",
+        "name": "网络空间测绘引擎",
+        "match_type": "survey_engine",
+        "pattern": r"censys|onyphe|shodan|leakix|shadowserver|zoomeye|recyber|internet-measurement|binaryedge|netcraft",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "极高危",
+        "enabled": 1,
+        "description": "精准拦截 Censys, Shodan, Onyphe 等全球资产测绘引擎的漏洞与端口嗅探"
+    },
+    {
+        "rule_id": "ht_direct_ip_probe",
+        "name": "禁止纯 IP 直连 Web 探测",
+        "match_type": "direct_ip",
+        "pattern": "direct_ip",
+        "threshold": 1,
+        "window": 30,
+        "action": "ban",
+        "level": "中危",
+        "enabled": 1,
+        "description": "拦截未携带合法域名 Host、直接通过服务器 IP 地址进行全网地毯式盲扫的 Web 探测"
+    },
+    {
         "rule_id": "ht_rate_404",
         "name": "高频 404/403 爆破熔断",
         "match_type": "status_rate",
@@ -138,6 +162,71 @@ DEFAULT_HTTP_TRAPS = [
         "description": "30秒内对不存在路径连续产生 6 次以上 404/403 异常直接熔断拉黑"
     }
 ]
+
+# 常见测绘引擎的 ASN / 运营商 / 特征关键词（不区分大小写，纯内存秒级匹配）
+SURVEY_ENGINE_KEYWORDS = (
+    "censys", "onyphe", "shodan", "leakix", "shadowserver", "zoomeye",
+    "recyber", "internet-measurement", "binaryedge", "netcraft", "stretchoid",
+    "tamatiya", "modat", "palo alto networks", "ip volume inc", "onyphe sas", "censys, inc."
+)
+
+# 常见境外云厂商 / 数据中心机房（IDC/Hosting/Cloud）运营商关键词
+IDC_HOSTING_KEYWORDS = (
+    "amazon", "aws", "digitalocean", "microsoft", "azure", "google cloud",
+    "google llc", "ovh", "hetzner", "linode", "vultr", "alibaba (us)", "alibaba cloud",
+    "tencent computer", "tencent cloud", "ucloud", "m247", "datacamp", "colocation",
+    "packethub", "egihosting", "hydra communications", "rack sphere", "ip volume",
+    "oracle cloud", "cloudflare", "fastly", "akamai", "contabo", "choopa",
+    "leaseweb", "hostkey", "selectel", "scaleway", "kamatera", "vpsvaulthost",
+    "quickpacket", "internap", "31173 services", "fusion communications"
+)
+
+# 预置常用测绘引擎固定 IP 段（前缀树/CIDR 掩码极速匹配，0 外部网络延迟）
+_SURVEY_CIDR_NETWORKS = [
+    ipaddress.ip_network("66.132.0.0/16", strict=False),       # Censys
+    ipaddress.ip_network("167.94.136.0/22", strict=False),     # Censys
+    ipaddress.ip_network("167.94.145.0/24", strict=False),     # Censys
+    ipaddress.ip_network("195.184.76.0/24", strict=False),     # Onyphe
+    ipaddress.ip_network("91.230.168.0/24", strict=False),     # Onyphe
+    ipaddress.ip_network("198.20.69.0/24", strict=False),      # Shodan
+    ipaddress.ip_network("198.20.70.0/24", strict=False),      # Shodan
+    ipaddress.ip_network("198.20.99.0/24", strict=False),      # Shodan
+    ipaddress.ip_network("71.6.232.0/24", strict=False),       # Shodan
+    ipaddress.ip_network("71.6.216.0/24", strict=False),       # Shodan
+    ipaddress.ip_network("104.236.198.48/32", strict=False),   # Shodan
+    ipaddress.ip_network("185.180.143.0/24", strict=False),    # LeakIX
+    ipaddress.ip_network("185.220.101.0/24", strict=False),    # Tor Exit
+]
+
+def is_survey_scanner_ip(ip_str, geo_dict=None):
+    """0 网络延迟快速判断目标 IP 是否属于已知网络空间测绘引擎"""
+    if not ip_str or ip_str in ("127.0.0.1", "::1", "localhost") or ip_str.startswith("127."):
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+        for net in _SURVEY_CIDR_NETWORKS:
+            if ip_obj in net:
+                return True
+    except Exception:
+        pass
+        
+    geo = geo_dict or _GEO_CACHE.get(ip_str) or {}
+    isp_text = (str(geo.get("isp", "")) + " " + str(geo.get("region", "")) + " " + str(geo.get("country", ""))).lower()
+    for kw in SURVEY_ENGINE_KEYWORDS:
+        if kw in isp_text:
+            return True
+    return False
+
+def is_idc_hosting_ip(ip_str, geo_dict=None):
+    """0 网络延迟快速判断目标 IP 是否属于 IDC/云服务器机房 IP"""
+    if not ip_str or ip_str in ("127.0.0.1", "::1", "localhost") or ip_str.startswith("127."):
+        return False
+    geo = geo_dict or _GEO_CACHE.get(ip_str) or {}
+    isp_text = (str(geo.get("isp", "")) + " " + str(geo.get("region", "")) + " " + str(geo.get("country", ""))).lower()
+    for kw in IDC_HOSTING_KEYWORDS:
+        if kw in isp_text:
+            return True
+    return False
 
 DEFAULT_CONFIG["http_traps"] = DEFAULT_HTTP_TRAPS
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
@@ -511,14 +600,13 @@ def init_db():
         created_at TEXT NOT NULL
     )
     """)
-    cursor.execute("SELECT count(*) FROM http_traps")
-    if cursor.fetchone()[0] == 0:
-        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        for ht in DEFAULT_HTTP_TRAPS:
-            cursor.execute("""
-            INSERT OR IGNORE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
+    # 自动补全默认的请求特征与测绘防护规则（已存在则忽略）
+    now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    for ht in DEFAULT_HTTP_TRAPS:
+        cursor.execute("""
+        INSERT OR IGNORE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS hidden_ips (
@@ -720,6 +808,21 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
                         reason = f"Web防扫: {window}s内触发 {len(history)}次 404/403 ({path[:20]})"
                         ban_ip(ip, reason=reason, category="web", level=rlevel)
                         return True
+
+        # 4. 全网测绘引擎检测 (Censys, Shodan, Onyphe 等)
+        elif mtype == "survey_engine":
+            pat = rule.get("pattern", "")
+            if is_survey_scanner_ip(ip) or (pat and ua and re.search(pat, ua, re.IGNORECASE)):
+                reason = f"测绘拦截: 网络空间测绘引擎嗅探 ({ua[:20] if ua else 'Censys/Onyphe/Shodan'})"
+                ban_ip(ip, reason=reason, category="survey", level=rlevel)
+                return True
+
+        # 5. 禁止纯 IP 直连 Web 探测
+        elif mtype == "direct_ip":
+            if req_domain and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$", req_domain.strip()):
+                reason = f"Web防护: 禁止纯IP直连探测 ({req_domain})"
+                ban_ip(ip, reason=reason, category="web", level=rlevel)
+                return True
     return False
 
 _WEB_PORT_LOG_CACHE = {}
@@ -1302,6 +1405,8 @@ def get_all_business_ports_info():
                     "name": f"业务端口 ({bp})",
                     "category": "custom",
                     "remark": "自定义业务",
+                    "block_idc": False,
+                    "block_scanner": True,
                     "is_system": False,
                     "enabled": True
                 })
@@ -1315,6 +1420,8 @@ def get_all_business_ports_info():
                         "name": bp.get("name", f"业务端口 ({p})"),
                         "category": bp.get("category", "custom"),
                         "remark": bp.get("remark", ""),
+                        "block_idc": bool(bp.get("block_idc", False)),
+                        "block_scanner": bool(bp.get("block_scanner", True)),
                         "is_system": False,
                         "enabled": True
                     })
@@ -1690,12 +1797,10 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 正常生产业务端口判定与放行 (P2 优先级绝对高于蜜罐策略！)
-        # 只要用户在【正常业务列表】中配置了该端口 (如 80, 443, 4212 trojan 等)，100% 绝对放行，绝不触发任何蜜罐封禁！
         biz_ports_map = {}
         for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
             if isinstance(bp, int):
-                biz_ports_map[bp] = {"port": bp, "name": f"业务端口 ({bp})"}
+                biz_ports_map[bp] = {"port": bp, "name": f"业务端口 ({bp})", "block_idc": False, "block_scanner": True}
             elif isinstance(bp, dict) and "port" in bp:
                 try:
                     p = int(bp["port"])
@@ -1706,6 +1811,35 @@ class GlobalPortSniffer:
         if dst_port in biz_ports_map:
             biz_info = biz_ports_map[dst_port]
             biz_name = biz_info.get("name", f"业务端口 ({dst_port})") if isinstance(biz_info, dict) else f"业务端口 ({dst_port})"
+            block_idc = bool(biz_info.get("block_idc", False)) if isinstance(biz_info, dict) else False
+            block_scanner = bool(biz_info.get("block_scanner", True)) if isinstance(biz_info, dict) else True
+
+            # 1. 优先检测是否为网络空间测绘引擎 (Censys, Shodan, Onyphe 等)
+            if block_scanner and is_survey_scanner_ip(src_ip):
+                action = "INTERCEPTED"
+                desc = f"测绘扫描拦截: 嗅探业务端口 {dst_port} ({biz_name})"
+                port_info = {
+                    "name": desc,
+                    "category": "survey",
+                    "level": "高危",
+                    "is_business": False
+                }
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                return
+
+            # 2. 检查是否为云厂商/IDC机房探针 (仅在该业务端口开启了 block_idc 时生效)
+            if block_idc and is_idc_hosting_ip(src_ip):
+                action = "INTERCEPTED"
+                desc = f"机房探针拦截: 云厂商IDC探测业务端口 {dst_port} ({biz_name})"
+                port_info = {
+                    "name": desc,
+                    "category": "idc_probe",
+                    "level": "中危",
+                    "is_business": False
+                }
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                return
+
             action = "BUSINESS"
             desc = f"正常业务访问: {biz_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
