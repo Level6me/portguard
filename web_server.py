@@ -1257,6 +1257,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 4: 蜜罐诱饵策略 (Traps) -->
     <div id="tab-traps" style="display: none;">
+        <!-- 顶部子页切换分段控件 (端口策略 / 常规业务 / 行为特征) -->
+        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
+                <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
+                <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 常规业务</button>
+                <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 行为特征</button>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <div>
@@ -1264,12 +1273,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub" id="traps-main-sub">精准识别并拦截端口扫描、蜜罐诱捕与 Web 漏洞嗅探，确保正常业务完全放行</div>
                 </div>
                 <div class="header-action-wrap">
-                    <!-- 模式切换分段按钮 -->
-                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
-                        <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
-                        <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 常规业务</button>
-                        <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 行为特定</button>
-                    </div>
                     <!-- 统一弹出式策略配置卡片按钮 -->
                     <div style="position: relative; display: inline-block;">
                         <button class="pill-btn accent" id="btn-trap-action-menu" onclick="toggleTrapActionMenu(event)" style="font-weight: 700;">
@@ -1283,7 +1286,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- SubTab 1/2/3: 表格区域 (端口策略 / 常规业务 / 行为特定) -->
+            <!-- SubTab 1/2/3: 表格区域 (端口策略 / 常规业务 / 行为特征) -->
             <div id="policy-pane-table-container">
                 <!-- 端口模式顶部的智能多端口扫描感知卡片 -->
                 <div id="banner-port-scan-defense" style="margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
@@ -1347,18 +1350,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 5: 系统设置 (Settings: 响应参数与审计隐藏) -->
     <div id="tab-settings" style="display: none;">
+        <!-- 顶部子页切换分段控件 (响应与封禁 / 审计隐藏) -->
+        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
+                <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 响应与封禁参数</button>
+                <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <div>
                     <div class="card-title" id="settings-main-title">⚙️ 系统防御与全局设置</div>
                     <div class="val-sub" id="settings-main-sub">配置防御响应机制、判定灵敏度阈值、自动解封周期与全局审计过滤</div>
-                </div>
-                <div class="header-action-wrap">
-                    <!-- 模式切换分段按钮 -->
-                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
-                        <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 响应与封禁参数</button>
-                        <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
-                    </div>
                 </div>
             </div>
 
@@ -1529,6 +1533,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 6: 访问日志 (Access Logs) -->
     <div id="tab-access-logs" style="display: none;">
+        <!-- 顶部子页切换分段控件 (端口访问 / Web 访问) -->
+        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
+                <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问日志</button>
+                <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 443/Web 访问日志</button>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <div>
@@ -1536,11 +1548,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="val-sub" id="access-logs-sub">实时记录所有外部客户端对本机各诱捕端口与网络端口的连接嗅探</div>
                 </div>
                 <div class="header-action-wrap">
-                    <!-- 模式切换分段按钮 -->
-                    <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px;">
-                        <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问</button>
-                        <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 443访问</button>
-                    </div>
                     <button class="pill-btn" onclick="exportAccessLogsCSV()">
                         <span>📥</span>
                         <span>导出 CSV</span>
@@ -3863,7 +3870,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         } else if (tab === 'req') {
             if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
-            if (titleEl) titleEl.innerText = '🎯 行为特定与恶意请求特征防御';
+            if (titleEl) titleEl.innerText = '🎯 行为特征与恶意请求特征防御';
             if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、敏感备份文件、后台爆破、扫描工具指纹与高频 404 熔断';
             if (theadEl) {
                 theadEl.innerHTML = `
