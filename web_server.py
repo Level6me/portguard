@@ -25,7 +25,8 @@ from sentry_daemon import (
     DEFAULT_HTTP_TRAPS, get_http_traps, check_http_request_traps,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
-    get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips
+    get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
+    get_all_business_ports_info, get_active_system_ports
 )
 
 def parse_loose_json_or_lines(text):
@@ -1198,6 +1199,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <!-- 模式切换分段按钮 -->
                     <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; flex-wrap: wrap;">
                         <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口蜜罐与扫描</button>
+                        <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 正常业务列表</button>
                         <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 Web 恶意特征</button>
                         <button class="pill-btn" id="btn-trap-tab-response" onclick="switchTrapTab('response')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">⚙️ 响应与封禁参数</button>
                         <button class="pill-btn" id="btn-trap-tab-hidden" onclick="switchTrapTab('hidden')" style="padding: 4px 10px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
@@ -1228,6 +1230,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <span style="font-size: 11px; font-weight: 600; color: var(--text-sec);">敏感度: 15秒内探测 ≥3 个未开放端口拉黑</span>
+                    </div>
+                </div>
+
+                <!-- 业务列表顶部的正常业务保护横幅 -->
+                <div id="banner-biz-defense" style="display: none; margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span style="font-weight: 700; font-size: 12px; color: var(--text);">🏢 正常生产业务端口与服务保护清单</span>
+                            <span class="tag success">🟢 100% 内核级免封放行</span>
+                        </div>
+                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.3;">列表中的所有端口享受内核级绝对放行豁免保护，无论是系统动态侦测到的监听服务还是用户自定义添加的业务端口，外部正常访问 100% 顺畅连通，绝不误杀。</span>
                     </div>
                 </div>
 
@@ -1890,6 +1903,39 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 </div>
 
+<!-- Modal: 添加/编辑正常业务端口 -->
+<div class="modal-overlay" id="modal-biz-port">
+    <div class="modal-sheet" style="max-width: 500px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;" id="modal-biz-title">🏢 添加正常业务端口</h3>
+        <input type="hidden" id="biz-port-orig-val">
+        <div class="form-group">
+            <label class="form-label">业务端口号 (1-65535)</label>
+            <input type="number" class="form-control" id="biz-port-val" placeholder="例如：8080 或 3000" min="1" max="65535">
+        </div>
+        <div class="form-group">
+            <label class="form-label">业务服务名称 / 描述</label>
+            <input type="text" class="form-control" id="biz-name-val" placeholder="例如：Keycloak 认证服务 / 商城后端 API">
+        </div>
+        <div class="form-group">
+            <label class="form-label">业务分类类型</label>
+            <select class="form-control" id="biz-cat-val">
+                <option value="web" selected>Web 网站 / API 接口</option>
+                <option value="db">数据库 / 存储服务</option>
+                <option value="ssh">远程运维 / SSH</option>
+                <option value="custom">自定义业务系统</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">备注说明</label>
+            <input type="text" class="form-control" id="biz-remark-val" placeholder="例如：生产核心业务，绝对免封">
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
+            <button class="pill-btn" onclick="closeModals()">取消</button>
+            <button class="pill-btn accent" onclick="submitBizPortForm()">保存业务端口</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal: 添加请求特征策略 -->
 <div class="modal-overlay" id="modal-http-trap">
     <div class="modal-sheet" style="max-width: 540px;">
@@ -2178,6 +2224,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let allHiddenIPs = [];
     let allTraps = [];
     let currentTrapTab = 'port';
+    let allBusinessPorts = [];
+    let bizPortsPage = 1;
     let allHttpTraps = [];
     let httpTrapsPage = 1;
     let currentCategory = 'all';
@@ -3192,6 +3240,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (currentTrapTab === 'port') renderTrapsTable();
         });
 
+        fetch('/api/business_ports').then(res => res.json()).then(data => {
+            allBusinessPorts = data;
+            if (currentTrapTab === 'biz') renderTrapsTable();
+        }).catch(() => {});
+
         fetch('/api/http_traps').then(res => res.json()).then(data => {
             allHttpTraps = data;
             if (currentTrapTab === 'req') renderTrapsTable();
@@ -3657,6 +3710,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <span>📤</span><span>导出策略 (JSON)</span>
                 </a>
             `;
+        } else if (currentTrapTab === 'biz') {
+            container.innerHTML = `
+                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🏢 业务端口管理</div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openAddBizPortModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>➕</span><span>添加业务端口</span>
+                </a>
+                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); openImportModal('business_ports');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📥</span><span>导入业务列表 (JSON)</span>
+                </a>
+                <a href="javascript:void(0)" onclick="closeTrapActionMenu(); exportBusinessPortsJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                    <span>📤</span><span>导出业务列表 (JSON)</span>
+                </a>
+            `;
         } else {
             container.innerHTML = `
                 <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🎯 请求特征配置</div>
@@ -3672,6 +3739,90 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </a>
             `;
         }
+    }
+
+    function exportBusinessPortsJSON() {
+        if (!allBusinessPorts || allBusinessPorts.length === 0) return showToast('暂无业务端口可导出', '⚠️');
+        const exportList = allBusinessPorts.map(b => ({
+            port: b.port,
+            name: b.name || `业务端口 (${b.port})`,
+            category: b.category || 'custom',
+            remark: b.remark || ''
+        }));
+        const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `portsentry_business_ports_${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        showToast('已开始导出业务端口列表 (JSON)', '📤');
+    }
+
+    function openAddBizPortModal() {
+        document.getElementById('modal-biz-title').innerText = '🏢 添加正常业务端口';
+        document.getElementById('biz-port-orig-val').value = '';
+        document.getElementById('biz-port-val').value = '';
+        document.getElementById('biz-port-val').disabled = false;
+        document.getElementById('biz-name-val').value = '';
+        document.getElementById('biz-cat-val').value = 'web';
+        document.getElementById('biz-remark-val').value = '';
+        document.getElementById('modal-biz-port').style.display = 'flex';
+    }
+
+    function openEditBizPortModal(port) {
+        const item = (allBusinessPorts || []).find(b => Number(b.port) === Number(port));
+        if (!item) return showToast('未找到该业务端口', '⚠️');
+        document.getElementById('modal-biz-title').innerText = '✏️ 编辑正常业务端口';
+        document.getElementById('biz-port-orig-val').value = item.port;
+        document.getElementById('biz-port-val').value = item.port;
+        document.getElementById('biz-port-val').disabled = true;
+        document.getElementById('biz-name-val').value = item.name || '';
+        document.getElementById('biz-cat-val').value = item.category || 'custom';
+        document.getElementById('biz-remark-val').value = item.remark || '';
+        document.getElementById('modal-biz-port').style.display = 'flex';
+    }
+
+    function submitBizPortForm() {
+        const origPort = document.getElementById('biz-port-orig-val').value;
+        const port = parseInt(document.getElementById('biz-port-val').value);
+        const name = document.getElementById('biz-name-val').value.trim();
+        const category = document.getElementById('biz-cat-val').value;
+        const remark = document.getElementById('biz-remark-val').value.trim();
+
+        if (!port || port < 1 || port > 65535) return showToast('请输入 1-65535 的有效端口号', '⚠️');
+        if (!name) return showToast('请输入业务服务名称或描述', '⚠️');
+
+        const isEdit = !!origPort;
+        const apiUrl = isEdit ? '/api/business_ports/edit' : '/api/business_ports/add';
+
+        fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port, name, category, remark })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '保存成功！', '🎉');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '保存失败', '❌');
+            }
+        });
+    }
+
+    function deleteBizPort(port) {
+        if (!confirm(`确定要从业务列表中移除自定义端口 ${port} 吗？`)) return;
+        fetch('/api/business_ports/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ port })
+        }).then(res => res.json()).then(res => {
+            if (res.success) {
+                showToast(res.msg || '已删除业务端口', '🗑️');
+                fetchData(false);
+            } else {
+                showToast(res.msg || '删除失败', '❌');
+            }
+        });
     }
 
     function exportHttpTrapsJSON() {
@@ -3697,6 +3848,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function switchTrapTab(tab) {
         currentTrapTab = tab;
         const btnPort = document.getElementById('btn-trap-tab-port');
+        const btnBiz = document.getElementById('btn-trap-tab-biz');
         const btnReq = document.getElementById('btn-trap-tab-req');
         const btnResp = document.getElementById('btn-trap-tab-response');
         const btnHidden = document.getElementById('btn-trap-tab-hidden');
@@ -3708,14 +3860,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const hiddenPane = document.getElementById('policy-pane-hidden');
         const actionMenuBtn = document.getElementById('btn-trap-action-menu');
         const bannerScan = document.getElementById('banner-port-scan-defense');
+        const bannerBiz = document.getElementById('banner-biz-defense');
         closeTrapActionMenu();
 
-        [btnPort, btnReq, btnResp, btnHidden].forEach(b => {
+        [btnPort, btnBiz, btnReq, btnResp, btnHidden].forEach(b => {
             if (b) { b.className = 'pill-btn'; b.style.background = 'transparent'; }
         });
         if (tablePane) tablePane.style.display = 'none';
         if (respPane) respPane.style.display = 'none';
         if (hiddenPane) hiddenPane.style.display = 'none';
+        if (bannerScan) bannerScan.style.display = 'none';
+        if (bannerBiz) bannerBiz.style.display = 'none';
         if (actionMenuBtn) actionMenuBtn.style.display = 'inline-block';
 
         if (tab === 'port') {
@@ -3737,10 +3892,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 `;
             }
             renderTrapsTable();
+        } else if (tab === 'biz') {
+            if (btnBiz) { btnBiz.className = 'pill-btn accent'; btnBiz.style.background = ''; }
+            if (tablePane) tablePane.style.display = 'block';
+            if (bannerBiz) bannerBiz.style.display = 'flex';
+            if (titleEl) titleEl.innerText = '🏢 正常生产业务服务保护清单';
+            if (subEl) subEl.innerText = '列表中的所有端口受内核级免封放行保护，任何非白名单外部正常访问 100% 顺畅连通，绝不误杀';
+            if (theadEl) {
+                theadEl.innerHTML = `
+                    <tr>
+                        <th style="width: 140px;">业务端口</th>
+                        <th>服务名称 / 业务描述</th>
+                        <th style="width: 130px;">业务类型</th>
+                        <th style="width: 140px;">来源属性</th>
+                        <th style="width: 140px;">放行保护状态</th>
+                        <th style="width: 150px;">管理操作</th>
+                    </tr>
+                `;
+            }
+            if (!allBusinessPorts || allBusinessPorts.length === 0) {
+                fetch('/api/business_ports').then(res => res.json()).then(data => {
+                    allBusinessPorts = data;
+                    renderTrapsTable();
+                });
+            } else {
+                renderTrapsTable();
+            }
         } else if (tab === 'req') {
             if (btnReq) { btnReq.className = 'pill-btn accent'; btnReq.style.background = ''; }
             if (tablePane) tablePane.style.display = 'block';
-            if (bannerScan) bannerScan.style.display = 'none';
             if (titleEl) titleEl.innerText = '🌐 Web 应用与恶意请求特征防御';
             if (subEl) subEl.innerText = '实时检测恶意 URL 路径嗅探、敏感备份文件、后台爆破、扫描工具指纹与高频 404 熔断';
             if (theadEl) {
@@ -3789,6 +3969,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 trapsPage = target;
                 renderTrapsTable();
             }
+        } else if (currentTrapTab === 'biz') {
+            const total = allBusinessPorts ? allBusinessPorts.length : 0;
+            const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+            const target = bizPortsPage + delta;
+            if (target >= 1 && target <= totalPages) {
+                bizPortsPage = target;
+                renderTrapsTable();
+            }
         } else {
             const total = allHttpTraps ? allHttpTraps.length : 0;
             const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -3801,6 +3989,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
     function setTrapsPage(p) {
         if (currentTrapTab === 'port') trapsPage = p;
+        else if (currentTrapTab === 'biz') bizPortsPage = p;
         else httpTrapsPage = p;
         renderTrapsTable();
     }
@@ -3854,6 +4043,69 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <button class="action-btn danger" onclick="deleteTrap('${safePortParam}')" title="删除此策略">🗑️</button>
                         </div>
                     </td>
+                </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        } else if (currentTrapTab === 'biz') {
+            const list = allBusinessPorts || [];
+            const totalCount = list.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+            if (bizPortsPage > totalPages) bizPortsPage = totalPages;
+            if (bizPortsPage < 1) bizPortsPage = 1;
+
+            renderPaginationUI(totalCount, bizPortsPage, PAGE_SIZE, 'traps-total-cnt', 'traps-page-info', 'btn-traps-prev', 'btn-traps-next', 'traps-page-nums', 'setTrapsPage');
+
+            if (totalCount === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:24px;">暂无业务端口记录</td></tr>';
+                return;
+            }
+
+            const startIdx = (bizPortsPage - 1) * PAGE_SIZE;
+            const endIdx = startIdx + PAGE_SIZE;
+            const pageList = list.slice(startIdx, endIdx);
+
+            const BIZ_CAT_LABELS = {
+                'web': 'Web / API',
+                'ssh': '远程运维',
+                'db': '数据库',
+                'system': '系统服务',
+                'custom': '自定义业务'
+            };
+
+            let html = '';
+            pageList.forEach(b => {
+                const port = b.port;
+                const name = b.name || `业务端口 (${port})`;
+                const cat = b.category || 'custom';
+                const catName = BIZ_CAT_LABELS[cat] || cat;
+                const isSys = !!b.is_system;
+                const originTag = isSys ? '<span class="tag neutral" style="font-size:11px;">🔍 系统活跃监听</span>' : '<span class="tag accent" style="font-size:11px;">👤 用户自定义</span>';
+                const statusTag = '<span class="tag success" style="font-weight:700;">🟢 100% 绝对放行</span>';
+                
+                let opHtml = '';
+                if (isSys) {
+                    opHtml = '<span style="font-size:12px; color:var(--text-sec); font-weight:600;">🔒 内核免封保护</span>';
+                } else {
+                    opHtml = `
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button class="action-btn" onclick="openEditBizPortModal(${port})" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                            <button class="action-btn danger" onclick="deleteBizPort(${port})" title="删除业务端口">🗑️</button>
+                        </div>
+                    `;
+                }
+
+                html += `
+                <tr>
+                    <td><span class="tag neutral" style="font-size:13px; font-weight:800; font-family:monospace;">TCP / ${port}</span></td>
+                    <td>
+                        <span style="color:var(--text); font-size:13px; font-weight:700; line-height:1.4; display:inline-block;">${escapeHtml(name)}</span>
+                        ${b.remark ? `<div style="font-size:11px; color:var(--text-sec); margin-top:2px;">${escapeHtml(b.remark)}</div>` : ''}
+                    </td>
+                    <td><span class="tag accent">${catName}</span></td>
+                    <td>${originTag}</td>
+                    <td>${statusTag}</td>
+                    <td>${opHtml}</td>
                 </tr>
                 `;
             });
@@ -4552,6 +4804,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 导入后系统将自动下发内核 iptables DROP 规则与路由黑洞！
             `;
             textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 恶意暴力破解\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "reason": "嗅探扫描"}]`;
+        } else if (type === 'business_ports') {
+            titleEl.innerText = '🏢 批量导入正常业务端口';
+            tipEl.innerHTML = `
+                支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行端口列表</b>：<br>
+                • JSON 格式: <code>[{"port": 8080, "name": "Keycloak", "category": "web", "remark": "认证服务"}]</code><br>
+                • 文本格式: 每行一个端口（例如 <code>8080 Keycloak认证中心</code> 或纯 <code>8080</code>）<br>
+                业务列表中的端口受内核级豁免保护，100% 免封绝对放行！
+            `;
+            textVal.placeholder = `粘贴业务端口列表或 JSON 数组，例如：\n8080 Keycloak认证\n3000 Node前端API\n\n或 JSON 格式：\n[{"port": 8080, "name": "Keycloak", "category": "web"}]`;
         } else if (type === 'whitelist') {
             titleEl.innerText = '🛡️ 批量导入安全信任白名单';
             tipEl.innerHTML = `
@@ -4632,6 +4893,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             textVal.value = JSON.stringify([
                 { "ip": "198.51.100.1", "reason": "SSH 暴力破解源", "level": "极高危" },
                 { "ip": "203.0.113.5", "reason": "全端口自动化扫描器", "level": "高危" }
+            ], null, 2);
+        } else if (currentImportType === 'business_ports') {
+            textVal.value = JSON.stringify([
+                { "port": 80, "name": "HTTP 网站服务", "category": "web", "remark": "主站 Web 服务" },
+                { "port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "加密主站" },
+                { "port": 8080, "name": "Keycloak 认证中心", "category": "web", "remark": "用户鉴权" },
+                { "port": 3306, "name": "MySQL 业务数据库", "category": "db", "remark": "主库服务" }
             ], null, 2);
         } else if (currentImportType === 'whitelist') {
             textVal.value = JSON.stringify([
@@ -5740,6 +6008,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(normalized)
                 return
 
+            if path in ("/api/business_ports", "/api/business_ports/export"):
+                biz_list = get_all_business_ports_info()
+                self._send_json(biz_list)
+                return
+
             if path in ("/api/http_traps", "/api/http_traps/export"):
                 rules = get_http_traps()
                 self._send_json(rules)
@@ -6465,6 +6738,168 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "success": True,
                     "msg": f"蜜罐策略导入成功！共载入 {success_count} 条策略 (当前总计 {len(current_map)} 条)",
                     "count": success_count,
+                    "total": len(current_map)
+                })
+                return
+
+            if path == "/api/business_ports/add":
+                port_raw = req_data.get("port")
+                if not port_raw:
+                    self._send_json({"success": False, "msg": "端口号不能为空"}, status=400)
+                    return
+                try:
+                    port = int(port_raw)
+                    if port < 1 or port > 65535:
+                        raise ValueError()
+                except Exception:
+                    self._send_json({"success": False, "msg": "端口号必须为 1-65535 的整数"}, status=400)
+                    return
+                name = str(req_data.get("name", f"业务端口 ({port})")).strip()
+                category = str(req_data.get("category", "custom")).strip()
+                remark = str(req_data.get("remark", "自定义业务")).strip()
+                
+                cfg = load_config()
+                biz_list = cfg.get("business_ports", [])
+                
+                for bp in biz_list:
+                    p = bp if isinstance(bp, int) else int(bp.get("port", 0))
+                    if p == port:
+                        self._send_json({"success": False, "msg": f"业务端口 {port} 已存在，无需重复添加"}, status=400)
+                        return
+                        
+                biz_list.append({
+                    "port": port,
+                    "name": name,
+                    "category": category,
+                    "remark": remark
+                })
+                cfg["business_ports"] = biz_list
+                save_config(cfg)
+                self._send_json({"success": True, "msg": f"已成功添加正常业务端口: {port} ({name})"})
+                return
+
+            if path == "/api/business_ports/edit":
+                port_raw = req_data.get("port")
+                if not port_raw:
+                    self._send_json({"success": False, "msg": "端口号不能为空"}, status=400)
+                    return
+                try:
+                    port = int(port_raw)
+                except Exception:
+                    self._send_json({"success": False, "msg": "无效端口号"}, status=400)
+                    return
+                name = str(req_data.get("name", "")).strip()
+                category = str(req_data.get("category", "custom")).strip()
+                remark = str(req_data.get("remark", "")).strip()
+                
+                cfg = load_config()
+                biz_list = cfg.get("business_ports", [])
+                updated = False
+                new_list = []
+                for bp in biz_list:
+                    p = bp if isinstance(bp, int) else int(bp.get("port", 0))
+                    if p == port:
+                        new_list.append({
+                            "port": port,
+                            "name": name or (bp.get("name") if isinstance(bp, dict) else f"业务端口 ({port})"),
+                            "category": category or (bp.get("category") if isinstance(bp, dict) else "custom"),
+                            "remark": remark or (bp.get("remark") if isinstance(bp, dict) else "")
+                        })
+                        updated = True
+                    else:
+                        new_list.append(bp)
+                if not updated:
+                    new_list.append({"port": port, "name": name or f"业务端口 ({port})", "category": category, "remark": remark})
+                cfg["business_ports"] = new_list
+                save_config(cfg)
+                self._send_json({"success": True, "msg": f"已成功更新业务端口: {port}"})
+                return
+
+            if path == "/api/business_ports/delete":
+                port_raw = req_data.get("port")
+                if not port_raw:
+                    self._send_json({"success": False, "msg": "端口号不能为空"}, status=400)
+                    return
+                try:
+                    port = int(port_raw)
+                except Exception:
+                    self._send_json({"success": False, "msg": "无效端口号"}, status=400)
+                    return
+                cfg = load_config()
+                biz_list = cfg.get("business_ports", [])
+                new_list = [bp for bp in biz_list if (bp != port if isinstance(bp, int) else int(bp.get("port", 0)) != port)]
+                cfg["business_ports"] = new_list
+                save_config(cfg)
+                self._send_json({"success": True, "msg": f"已成功删除自定义业务端口: {port}"})
+                return
+
+            if path == "/api/business_ports/import":
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+                    
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的业务端口数据，请检查格式"}, status=400)
+                    return
+                    
+                cfg = load_config()
+                current_map = {}
+                if mode == "append":
+                    for bp in cfg.get("business_ports", []):
+                        if isinstance(bp, int):
+                            current_map[bp] = {"port": bp, "name": f"业务端口 ({bp})", "category": "custom", "remark": "自定义业务"}
+                        elif isinstance(bp, dict) and "port" in bp:
+                            current_map[int(bp["port"])] = bp
+                            
+                count = 0
+                for item in parsed_items:
+                    p = None
+                    name = ""
+                    remark = ""
+                    cat = "custom"
+                    if isinstance(item, int):
+                        p = item
+                    elif isinstance(item, str):
+                        item_s = item.strip()
+                        if item_s.isdigit():
+                            p = int(item_s)
+                        else:
+                            parts = item_s.split()
+                            if parts and parts[0].isdigit():
+                                p = int(parts[0])
+                                name = parts[1] if len(parts) > 1 else ""
+                                remark = parts[2] if len(parts) > 2 else ""
+                    elif isinstance(item, dict):
+                        p_raw = item.get("port", item.get("prot", item.get("dst_port")))
+                        if p_raw is not None and str(p_raw).isdigit():
+                            p = int(p_raw)
+                            name = str(item.get("name", item.get("description", ""))).strip()
+                            remark = str(item.get("remark", "")).strip()
+                            cat = str(item.get("category", "custom")).strip()
+                    if p and 1 <= p <= 65535:
+                        current_map[p] = {
+                            "port": p,
+                            "name": name or f"业务端口 ({p})",
+                            "category": cat,
+                            "remark": remark or "导入业务"
+                        }
+                        count += 1
+                if count == 0:
+                    self._send_json({"success": False, "msg": "未能提取到任何合法业务端口（端口必须为 1-65535）"}, status=400)
+                    return
+                cfg["business_ports"] = list(current_map.values())
+                save_config(cfg)
+                self._send_json({
+                    "success": True,
+                    "msg": f"业务端口列表导入成功！共载入 {count} 条 (当前自定义总计 {len(current_map)} 条)",
+                    "count": count,
                     "total": len(current_map)
                 })
                 return
