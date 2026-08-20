@@ -32,7 +32,7 @@ fi
 
 if [ ! -d "$INSTALL_DIR" ]; then
     echo -e "${YELLOW}[!] 检测到系统尚未安装 PortGuard，正在自动执行全新安装...${NC}"
-    curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash
+    curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/install.sh | bash
     exit 0
 fi
 
@@ -40,7 +40,7 @@ echo -e "\n${BLUE}[1/4] 正在获取最新代码版本与校验...${NC}"
 TMP_UPDATE_DIR=$(mktemp -d /tmp/portguard_update_XXXXXX)
 cd "$TMP_UPDATE_DIR"
 
-LATEST_SHA=$(curl -sSL -H "User-Agent: PortGuardUpdater" https://api.github.com/repos/Level6me/portsentry-ui/commits/main 2>/dev/null | grep '"sha"' | head -n 1 | cut -d '"' -f 4 || true)
+LATEST_SHA=$(curl -sSL -H "User-Agent: PortGuardUpdater" https://api.github.com/repos/Level6me/portguard/commits/main 2>/dev/null | grep '"sha"' | head -n 1 | cut -d '"' -f 4 || true)
 
 if [ -n "$LATEST_SHA" ] && [ ${#LATEST_SHA} -ge 7 ]; then
     echo -e "最新版本提交哈希: ${CYAN}${LATEST_SHA:0:7}${NC}"
@@ -49,10 +49,10 @@ else
     REF_TARGET="main"
 fi
 
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/web_server.py" -o web_server.py
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/sentry_daemon.py" -o sentry_daemon.py
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/uninstall.sh" -o uninstall.sh
-curl -fsSL "https://raw.githubusercontent.com/Level6me/portsentry-ui/${REF_TARGET}/chart.min.js" -o chart.min.js
+curl -fsSL "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/web_server.py" -o web_server.py
+curl -fsSL "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" -o sentry_daemon.py
+curl -fsSL "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" -o uninstall.sh
+curl -fsSL "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" -o chart.min.js
 
 if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！${NC}"

@@ -245,8 +245,8 @@ echo -e "💡 常用维护命令:"
 echo -e "  查看服务状态: ${CYAN}systemctl status portguard.service${NC}"
 echo -e "  重启防御服务: ${CYAN}systemctl restart portguard.service${NC}"
 echo -e "  查看拦截日志: ${CYAN}journalctl -u portguard.service -f${NC}"
-echo -e "  一键平滑更新: ${GREEN}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.sh | bash${NC}"
-echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash${NC}"
+echo -e "  一键平滑更新: ${GREEN}curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/update.sh | bash${NC}"
+echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/uninstall.sh | bash${NC}"
 echo -e "${CYAN}================================================================${NC}\n"
 '''
 

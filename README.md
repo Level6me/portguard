@@ -10,12 +10,12 @@
 在任意 Linux 服务器（Ubuntu / Debian / CentOS / RHEL / Alibaba Cloud Linux / Rocky Linux）终端中，直接复制并执行下方**一行命令**即可完成全自动部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/install.sh | bash
 ```
 
 > **或者使用 wget 一行命令：**
 > ```bash
-> wget -qO- https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash
+> wget -qO- https://raw.githubusercontent.com/Level6me/portguard/main/install.sh | bash
 > ```
 
 部署完成后，即可在浏览器中打开：  
@@ -60,19 +60,19 @@ systemctl stop portguard.service
 在终端执行以下命令，会自动拉取最新版本程序并平滑热重载，**100% 完整保留您现有的策略配置 (`config.json`) 和黑名单/事件数据库 (`data.db`)**：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/update.sh | bash
 ```
 
 > **或者使用部署脚本的更新参数：**
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash -s -- update
+> curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/install.sh | bash -s -- update
 > ```
 
 ### 🗑️ 一键完全卸载命令
 在终端执行以下命令即可将 PortGuard 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Level6me/portguard/main/uninstall.sh | bash
 ```
 
 > **或者使用已安装目录自带的卸载脚本：**
