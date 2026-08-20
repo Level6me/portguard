@@ -26,7 +26,7 @@ from sentry_daemon import (
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
-    get_all_business_ports_info, get_active_system_ports
+    get_all_business_ports_info, get_active_system_ports, unban_ip_core
 )
 
 def parse_loose_json_or_lines(text):
@@ -6152,18 +6152,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 ip = valid_ip
 
-                run_firewall_cmd("iptables", "-D", "INPUT", "-s", ip, "-j", "DROP")
-                run_firewall_cmd("ip", "route", "del", "blackhole", f"{ip}/32")
-                run_firewall_cmd("iptables-save")
-                
-                conn = get_db()
-                c = conn.cursor()
-                c.execute("DELETE FROM blacklist WHERE ip = ?", (ip,))
-                c.execute("UPDATE events SET status = 'UNBANNED' WHERE ip = ?", (ip,))
-                conn.commit()
-                conn.close()
-                
-                self._send_json({"success": True, "msg": f"已成功解封 IP: {ip}"})
+                unban_ip_core(ip, status_event="UNBANNED")
+                self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}"})
                 return
 
             if path == "/api/ban":
@@ -6397,13 +6387,34 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not ip:
                     self._send_json({"success": False, "msg": "IP 不能为空"}, status=400)
                     return
+                
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
+                    return
+                ip = valid_ip
+
+                # 检查该 IP 是否存在于黑名单库中
+                was_banned = False
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT ip FROM blacklist WHERE ip = ?", (ip,))
+                if c.fetchone():
+                    was_banned = True
+                conn.close()
+
+                # 自动联动从内核防火墙、黑洞路由与黑名单库中解封
+                unban_ip_core(ip, status_event="WHITELIST")
+
                 cfg = load_config()
                 whitelist = cfg.get("whitelist", [])
                 if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
                     whitelist.append({"ip": ip, "remark": remark})
                     cfg["whitelist"] = whitelist
                     save_config(cfg)
-                self._send_json({"success": True, "msg": f"已添加信任白名单: {ip}"})
+                
+                extra_tip = "（已自动解除原黑名单封禁并撤销防火墙阻断）" if was_banned else ""
+                self._send_json({"success": True, "msg": f"已成功将 {ip} 加入信任白名单{extra_tip}！"})
                 return
 
             if path == "/api/whitelist/delete":
@@ -6441,6 +6452,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             current_map[item["ip"]] = item
                             
                 success_count = 0
+                unbanned_count = 0
                 for item in parsed_items:
                     if isinstance(item, dict):
                         ip = str(item.get("ip", "")).strip()
@@ -6454,9 +6466,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                         
                     if not ip:
                         continue
+                    
+                    v_ip = validate_ip(ip)
+                    if not v_ip:
+                        continue
+                    ip = v_ip
                         
                     current_map[ip] = {"ip": ip, "remark": remark}
                     success_count += 1
+                    
+                    # 批量自动联动解封已有黑名单
+                    if unban_ip_core(ip, status_event="WHITELIST"):
+                        unbanned_count += 1
                     
                 if success_count == 0:
                     self._send_json({"success": False, "msg": "未能提取到有效的 IP 白名单项"}, status=400)
@@ -6464,10 +6485,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                     
                 cfg["whitelist"] = list(current_map.values())
                 save_config(cfg)
+                unban_tip = f"，并同步解除 {unbanned_count} 个原黑名单目标" if unbanned_count > 0 else ""
                 self._send_json({
                     "success": True,
-                    "msg": f"信任白名单导入成功！共载入 {success_count} 条规则 (当前总计 {len(current_map)} 条)",
+                    "msg": f"信任白名单导入成功！共载入 {success_count} 条规则{unban_tip} (当前总计 {len(current_map)} 条)",
                     "count": success_count,
+                    "unbanned_count": unbanned_count,
                     "total": len(current_map)
                 })
                 return

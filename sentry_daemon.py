@@ -935,6 +935,52 @@ def load_config():
         return DEFAULT_CONFIG
 
 
+def unban_ip_core(ip, status_event="UNBANNED"):
+    """彻底解除对指定 IP 的内核防火墙封禁、黑洞路由及数据库黑名单记录。"""
+    valid_ip = validate_ip(ip)
+    if not valid_ip:
+        return False
+    ip = valid_ip
+    try:
+        addr_obj = ipaddress.ip_address(ip)
+        is_ipv6 = addr_obj.version == 6
+        fw_tool = "ip6tables" if is_ipv6 else "iptables"
+        save_tool = "ip6tables-save" if is_ipv6 else "iptables-save"
+        mask = "/128" if is_ipv6 else "/32"
+
+        # 1. 循环清理 INPUT 链中所有重复的 DROP 规则，直到彻底删净
+        cleaned_any = False
+        while True:
+            res = subprocess.run([fw_tool, "-D", "INPUT", "-s", ip, "-j", "DROP"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode == 0:
+                cleaned_any = True
+            else:
+                break
+        
+        if cleaned_any:
+            run_firewall_cmd(save_tool)
+
+        # 2. 清理黑洞路由
+        if is_ipv6:
+            subprocess.run(["ip", "-6", "route", "del", "blackhole", f"{ip}{mask}"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["ip", "route", "del", "blackhole", f"{ip}{mask}"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 3. 同步清理数据库 blacklist 表并标记 events
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM blacklist WHERE ip = ?", (ip,))
+        c.execute("UPDATE events SET status = ? WHERE ip = ?", (status_event, ip))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
 def cleanup_expired_bans():
     """定期清理过期封禁：解除 iptables / 黑洞路由并删除黑名单记录。"""
     try:
@@ -947,18 +993,11 @@ def cleanup_expired_bans():
         c = conn.cursor()
         c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
         expired = [r["ip"] for r in c.fetchall()]
-        for ip in expired:
-            valid = validate_ip(ip)
-            if not valid:
-                continue
-            run_firewall_cmd("iptables", "-D", "INPUT", "-s", valid, "-j", "DROP")
-            run_firewall_cmd("ip", "route", "del", "blackhole", f"{valid}/32")
-            c.execute("DELETE FROM blacklist WHERE ip = ?", (valid,))
-        if expired:
-            c.execute("UPDATE events SET status='EXPIRED' WHERE ip IN (%s)" % ",".join("?" * len(expired)), expired)
-            conn.commit()
-            print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
         conn.close()
+        for ip in expired:
+            unban_ip_core(ip, status_event="EXPIRED")
+        if expired:
+            print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
     except Exception as e:
         print(f"[CLEANUP] 清理失败: {e}")
 

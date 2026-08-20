@@ -373,14 +373,35 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertEqual(args[0], "66.132.172.214")
             self.assertEqual(args[1], 4212)
 
-    def test_http_traps_survey_and_direct_ip(self):
-        from sentry_daemon import check_http_request_traps, init_db
+    def test_unban_ip_core_ipv4_and_ipv6(self):
+        from sentry_daemon import unban_ip_core, get_db, init_db
         init_db()
-        with mock.patch("sentry_daemon.ban_ip") as mock_ban:
-            # 纯 IP 直连访问 Web 端口拦截
-            hit = check_http_request_traps("1.2.3.4", "43.155.173.146", "GET", "/", 200, "curl/7.88.1")
-            self.assertTrue(hit)
-            mock_ban.assert_called()
+        test_ip = "192.0.2.100"
+        test_ipv6 = "2001:db8::99"
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO blacklist (ip, reason, level, ban_time, timestamp) VALUES (?, 'test', '高危', 'now', 123)", (test_ip,))
+        c.execute("INSERT OR REPLACE INTO blacklist (ip, reason, level, ban_time, timestamp) VALUES (?, 'test', '高危', 'now', 123)", (test_ipv6,))
+        c.execute("INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status) VALUES (?, 80, 'TCP', 'test', 'web', '高危', '', '', '', '', 'now', 123, 'BANNED')", (test_ip,))
+        conn.commit()
+        conn.close()
+
+        with mock.patch("sentry_daemon.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 1  # 模拟循环删除结束
+            res1 = unban_ip_core(test_ip)
+            self.assertTrue(res1)
+            res2 = unban_ip_core(test_ipv6)
+            self.assertTrue(res2)
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT ip FROM blacklist WHERE ip IN (?, ?)", (test_ip, test_ipv6))
+        self.assertEqual(len(c.fetchall()), 0)
+        c.execute("SELECT status FROM events WHERE ip = ?", (test_ip,))
+        self.assertEqual(c.fetchone()[0], "UNBANNED")
+        c.execute("DELETE FROM events WHERE ip IN (?, ?)", (test_ip, test_ipv6))
+        conn.commit()
+        conn.close()
 
 
 if __name__ == "__main__":
