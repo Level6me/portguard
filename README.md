@@ -1,6 +1,6 @@
-# 🍯 Portsentry Defense & Apple-Style WebUI
+# 🛡️ PortGuard Defense & Apple-Style WebUI
 
-> **轻量、极速、无侵入的 Linux 蜜罐诱捕与 Linux 内核级主动防御系统**  
+> **轻量、极速、无侵入的 Linux 智能端口诱捕与内核级主动防御系统**  
 > 专为 Linux 云服务器打造，内置 **Abit 官方苹果原生设计语言 (Apple UI)** 交互控制台，具备毫秒级端口扫描感知、iptables 硬件级丢包阻断、内核黑洞路由、全球威胁情报画像与安全白名单防误封机制。
 
 ---
@@ -44,16 +44,16 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install
 ### 常用运维命令
 ```bash
 # 查看防御服务状态
-systemctl status portsentry-ui.service
+systemctl status portguard.service
 
 # 查看实时拦截日志流
-journalctl -u portsentry-ui.service -f
+journalctl -u portguard.service -f
 
 # 重启防御系统
-systemctl restart portsentry-ui.service
+systemctl restart portguard.service
 
 # 停止防御系统
-systemctl stop portsentry-ui.service
+systemctl stop portguard.service
 ```
 
 ### 🔄 一键平滑热更新命令
@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.
 > ```
 
 ### 🗑️ 一键完全卸载命令
-在终端执行以下命令即可将 Portsentry 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
+在终端执行以下命令即可将 PortGuard 防御服务、后台进程、systemd 服务单元及安装目录完全彻底删除：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash
@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninsta
 
 > **或者使用已安装目录自带的卸载脚本：**
 > ```bash
-> sudo bash /opt/portsentry-ui/uninstall.sh
+> sudo bash /opt/portguard/uninstall.sh
 > ```
 
 ---
@@ -85,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninsta
 ## 📁 目录结构
 
 ```text
-/opt/portsentry-ui/
+/opt/portguard/
 ├── sentry_daemon.py      # 蜜罐监听引擎、内核阻断核心、SQLite 事件存储与 ASN 识别
 ├── web_server.py         # Apple-Style 响应式控制台服务端 (纯 Python 原生无重型依赖)
 ├── config.json           # 诱饵策略、白名单与防火墙动作配置文件

@@ -1,20 +1,20 @@
 #!/bin/bash
 set -e
 
-echo "[+] 正在安装部署 Portsentry-UI 安全系统..."
-mkdir -p /opt/portsentry-ui
+echo "[+] 正在安装部署 PortGuard 安全系统..."
+mkdir -p /opt/portguard
 
 # 创建 systemd 单元
-cat << 'EOF' > /etc/systemd/system/portsentry-ui.service
+cat << 'EOF' > /etc/systemd/system/portguard.service
 [Unit]
-Description=Portsentry Honeypot & WebUI Defense System
+Description=PortGuard Honeypot & WebUI Defense System
 After=network.target network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/portsentry-ui
-ExecStart=/usr/bin/python3 /opt/portsentry-ui/web_server.py
+WorkingDirectory=/opt/portguard
+ExecStart=/usr/bin/python3 /opt/portguard/web_server.py
 Restart=always
 RestartSec=5
 
@@ -23,8 +23,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable portsentry-ui.service
-systemctl restart portsentry-ui.service
+systemctl enable portguard.service
+systemctl restart portguard.service
 
-echo "[+] Portsentry-UI 服务已成功启动！"
-systemctl status portsentry-ui.service --no-pager
+echo "[+] PortGuard 服务已成功启动！"
+systemctl status portguard.service --no-pager

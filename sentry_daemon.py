@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Portsentry Core Daemon v2.0 - 高级蜜罐诱捕与智能威胁防御引擎
+PortGuard Core Daemon v2.0 - 智能端口诱捕与主动威胁防御引擎
 """
 import glob
 import ipaddress
@@ -20,12 +20,16 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = "/opt/portsentry-ui/data.db"
-CONFIG_PATH = "/opt/portsentry-ui/config.json"
+DB_PATH = "/opt/portguard/data.db"
+CONFIG_PATH = "/opt/portguard/config.json"
 
-if not os.access("/opt", os.W_OK) or (os.path.exists("/opt/portsentry-ui") and not os.access("/opt/portsentry-ui", os.W_OK)):
+if not os.access("/opt", os.W_OK) or (os.path.exists("/opt/portguard") and not os.access("/opt/portguard", os.W_OK)):
     DB_PATH = os.path.join(BASE_DIR, "data.db")
     CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+elif not os.path.exists("/opt/portguard") and os.path.exists("/opt/portsentry-ui/data.db"):
+    # 兼容历史路径平滑过渡
+    DB_PATH = "/opt/portsentry-ui/data.db"
+    CONFIG_PATH = "/opt/portsentry-ui/config.json"
 
 DEFAULT_CONFIG = {
     "trap_ports": [
@@ -744,7 +748,7 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
             web_port = int(cfg.get("web_port", 9099))
             is_white = ip_in_whitelist(ip, cfg.get("whitelist", []))
             act = "WHITELIST" if is_white else "BUSINESS"
-            desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: Portsentry Web控制台 (端口 {web_port})"
+            desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: PortGuard Web控制台 (端口 {web_port})"
             cursor.execute("""
             INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
             VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', ?, ?, ?)
@@ -1021,7 +1025,7 @@ def resolve_ip_geo(ip):
     # 2. 备选源：ip-api.com HTTP 接口
     try:
         url2 = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
-        req2 = urllib.request.Request(url2, headers={"User-Agent": "PortsentryUI/2.0"})
+        req2 = urllib.request.Request(url2, headers={"User-Agent": "PortGuardUI/2.0"})
         with urllib.request.urlopen(req2, timeout=3) as resp2:
             data2 = json.loads(resp2.read().decode('utf-8'))
             if data2.get("status") == "success":
@@ -1042,7 +1046,7 @@ def resolve_ip_geo(ip):
     # 3. 备选源：api.ip.sb
     try:
         url3 = f"https://api.ip.sb/geoip/{ip}"
-        req3 = urllib.request.Request(url3, headers={"User-Agent": "PortsentryUI/2.0"})
+        req3 = urllib.request.Request(url3, headers={"User-Agent": "PortGuardUI/2.0"})
         with urllib.request.urlopen(req3, timeout=3) as resp3:
             data3 = json.loads(resp3.read().decode('utf-8'))
             country = data3.get("country", "").strip()
@@ -1218,7 +1222,7 @@ _SYSTEM_PORTS_CACHE_TIME = 0
 _SYSTEM_PORTS_LOCK = threading.Lock()
 
 KNOWN_SYSTEM_SERVICES = {
-    9099: "Portsentry Web控制台",
+    9099: "PortGuard Web控制台",
     22: "SSH 远程管理",
     80: "HTTP 网站服务 (OpenResty/Nginx)",
     443: "HTTPS 加密网站服务",
@@ -1250,7 +1254,7 @@ def get_active_system_ports():
         try:
             cfg = load_config()
             web_p = int(cfg.get("web_port", 9099))
-            ports_map[web_p] = "Portsentry Web控制台"
+            ports_map[web_p] = "PortGuard Web控制台"
             custom_biz = cfg.get("business_ports", [])
             for bp in custom_biz:
                 if isinstance(bp, int):
@@ -1682,7 +1686,7 @@ class GlobalPortSniffer:
         web_port = int(cfg.get("web_port", 9099) or 9099)
         if dst_port == web_port:
             action = "BUSINESS"
-            desc = "Portsentry Web控制台"
+            desc = "PortGuard Web控制台"
             _EXECUTOR.submit(_async_write, action, desc)
             return
 

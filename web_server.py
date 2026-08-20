@@ -81,7 +81,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no, viewport-fit=cover">
-    <title>Portsentry · Apple Defense Dashboard</title>
+    <title>PortGuard · Apple Defense Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -764,7 +764,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="header-left">
             <div class="date-badge">
                 <span class="status-dot" id="header-status-dot"></span>
-                <span id="header-status-text">PORTSENTRY · 内核防护中</span>
+                <span id="header-status-text">PORTGUARD · 内核防护中</span>
             </div>
             <h1 class="title" id="page-main-title">安全态势分析</h1>
         </div>
@@ -2898,7 +2898,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `portsentry-analytics-${currentAnalyticsRange}-${Date.now()}.json`;
+        a.download = `portguard-analytics-${currentAnalyticsRange}-${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
         showToast('态势分析完整数据集 (JSON) 导出成功', '📥');
@@ -2929,13 +2929,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         filterLogs(cat, document.getElementById(`seg-${cat}`) || document.getElementById('seg-all'));
     }
 
-    let currentThemeMode = localStorage.getItem('portsentry_theme') || 'auto';
+    let currentThemeMode = localStorage.getItem('portguard_theme') || localStorage.getItem('portsentry_theme') || 'auto';
     let autoRefreshTimer = null;
     let isAutoRefreshEnabled = true;
 
     function applyTheme(mode, notify = false) {
         currentThemeMode = mode;
-        localStorage.setItem('portsentry_theme', mode);
+        localStorage.setItem('portguard_theme', mode);
         const root = document.documentElement;
         let effectiveTheme = mode;
         if (mode === 'auto') {
@@ -3583,7 +3583,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `portsentry_business_ports_${new Date().toISOString().slice(0, 10)}.json`;
+        link.download = `portguard_business_ports_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
         showToast('已开始导出业务端口列表 (JSON)', '📤');
     }
@@ -3602,7 +3602,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `portsentry_hidden_ips_${new Date().toISOString().slice(0, 10)}.json`;
+        link.download = `portguard_hidden_ips_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
         showToast('已开始导出隐藏 IP 列表 (JSON)', '📤');
     }
@@ -3697,7 +3697,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `portsentry_http_traps_${new Date().toISOString().slice(0, 10)}.json`;
+        link.download = `portguard_http_traps_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
         showToast('已开始导出请求特征策略 (JSON)', '📤');
     }
@@ -4424,7 +4424,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `portsentry_${currentAccessLogMode}_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
+        link.download = `portguard_${currentAccessLogMode}_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
         showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}审计报表 CSV`, '📥');
     }
@@ -4834,21 +4834,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function exportTrapsJSON() {
         fetch('/api/traps/export').then(res => res.json()).then(data => {
-            downloadJSONFile(data, `portsentry_traps_strategy_${new Date().toISOString().slice(0,10)}.json`);
+            downloadJSONFile(data, `portguard_traps_strategy_${new Date().toISOString().slice(0,10)}.json`);
             showToast('蜜罐策略 JSON 已开始导出', '📤');
         }).catch(() => showToast('导出策略失败', '❌'));
     }
 
     function exportBlacklistJSON() {
         fetch('/api/blacklist/export').then(res => res.json()).then(data => {
-            downloadJSONFile(data, `portsentry_blacklist_${new Date().toISOString().slice(0,10)}.json`);
+            downloadJSONFile(data, `portguard_blacklist_${new Date().toISOString().slice(0,10)}.json`);
             showToast('黑名单 JSON 已开始导出', '📤');
         }).catch(() => showToast('导出黑名单失败', '❌'));
     }
 
     function exportWhitelistJSON() {
         fetch('/api/whitelist/export').then(res => res.json()).then(data => {
-            downloadJSONFile(data, `portsentry_whitelist_${new Date().toISOString().slice(0,10)}.json`);
+            downloadJSONFile(data, `portguard_whitelist_${new Date().toISOString().slice(0,10)}.json`);
             showToast('白名单 JSON 已开始导出', '📤');
         }).catch(() => showToast('导出白名单失败', '❌'));
     }
@@ -4871,7 +4871,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `portsentry_audit_logs_${new Date().toISOString().slice(0,10)}.csv`;
+        link.download = `portguard_audit_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
         showToast('已开始下载 CSV 审计报表', '📥');
     }
@@ -4934,10 +4934,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (headerDot && headerText) {
             if (paused) {
                 headerDot.className = 'status-dot paused';
-                headerText.innerText = 'PORTSENTRY · 防御已暂停';
+                headerText.innerText = 'PORTGUARD · 防御已暂停';
             } else {
                 headerDot.className = 'status-dot';
-                headerText.innerText = 'PORTSENTRY · 内核防护中';
+                headerText.innerText = 'PORTGUARD · 内核防护中';
             }
         }
     }
@@ -6107,7 +6107,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 save_config(cfg)
 
                 if is_paused:
-                    # 仅释放 Portsentry 自身添加的黑洞路由与黑名单拦截规则，绝不触碰系统全局防火墙与 Docker/宝塔规则！
+                    # 仅释放 PortGuard 自身添加的黑洞路由与黑名单拦截规则，绝不触碰系统全局防火墙与 Docker/宝塔规则！
                     run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
                     try:
                         conn = get_db()
@@ -6120,9 +6120,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                         conn.close()
                     except Exception:
                         pass
-                    msg = "Portsentry 防御拦截已成功暂停！系统进入纯观察模式（Web控制台正常运行，系统iptables不受影响）。"
+                    msg = "PortGuard 防御拦截已成功暂停！系统进入纯观察模式（Web控制台正常运行，系统iptables不受影响）。"
                 else:
-                    msg = "Portsentry 防御拦截已成功恢复！蜜罐嗅探与实时阻断已重新激活。"
+                    msg = "PortGuard 防御拦截已成功恢复！蜜罐嗅探与实时阻断已重新激活。"
 
                 self._send_json({"success": True, "paused": is_paused, "msg": msg})
                 return
@@ -6940,7 +6940,7 @@ def run_server():
 
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((bind_ip, bind_port), RequestHandler)
-    print(f"[Portsentry-UI Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
+    print(f"[PortGuard Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
     
     trap_instance.start()
     sniffer_instance.start()
@@ -6979,9 +6979,9 @@ def run_server():
                     run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
                     count += 1
                     time.sleep(0.01)  # 10ms 间隔平滑 CPU 占用
-            print(f"[Portsentry] 异步完成 {count} 条增量黑名单防火墙规则重放 (已存在 {len(existing_rules)} 条)")
+            print(f"[PortGuard] 异步完成 {count} 条增量黑名单防火墙规则重放 (已存在 {len(existing_rules)} 条)")
         except Exception as e:
-            print(f"[Portsentry] 黑名单重放失败: {e}")
+            print(f"[PortGuard] 黑名单重放失败: {e}")
     threading.Thread(target=_async_replay_blacklist, daemon=True).start()
     
     try:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Portsentry 核心逻辑单元测试（零外部依赖，不触碰真实数据库/防火墙）。"""
+"""PortGuard 核心逻辑单元测试（零外部依赖，不触碰真实数据库/防火墙）。"""
 import os
 import sys
 import time
@@ -170,16 +170,16 @@ class IsTrapPortTest(unittest.TestCase):
         self.assertTrue(res.get("is_business"))
         self.assertEqual(res.get("port"), 22)
 
-    def test_global_business_trap(self):
+    def test_business_port_exemption(self):
         from sentry_daemon import is_trap_port
         cfg = {
             "web_port": 9099,
-            "trap_business_ports": True,
-            "trap_ports": []
+            "business_ports": [{"port": 4212, "name": "Trojan 业务端口"}],
+            "trap_ports": [{"port_start": 1, "port_end": 60000, "enabled": True}]
         }
-        res = is_trap_port(8085, cfg)
-        self.assertIsNotNone(res)
-        self.assertTrue(res.get("is_business"))
+        # 即使配置了 1-60000 范围诱捕，业务端口 4212 必须 100% 绝对避让，返回 None
+        res = is_trap_port(4212, cfg)
+        self.assertIsNone(res)
 
     def test_site_log_collector_and_schema(self):
         from sentry_daemon import SiteLogCollector, site_collector_instance, get_db, init_db

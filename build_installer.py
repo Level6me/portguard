@@ -20,7 +20,7 @@ with open(os.path.join(BASE_DIR, 'chart.min.js'), 'rb') as f:
 
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
-# Portsentry Defense & Apple-Style WebUI - 独立自包含一行一键生产部署与更新脚本
+# PortGuard Defense & Apple-Style WebUI - 独立自包含一行一键生产部署与更新脚本
 # 适用系统: Ubuntu 18+, Debian 10+, CentOS 7/8/9, RHEL, Alibaba Cloud Linux, Rocky
 # ==============================================================================
 
@@ -42,11 +42,11 @@ done
 
 if [ "$IS_UPDATE" = true ]; then
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${GREEN}   🔄 Portsentry Apple-Style Honeypot & WebUI 一键平滑更新    ${NC}"
+    echo -e "${GREEN}      🔄 PortGuard 智能主动诱捕防御系统 一键平滑更新          ${NC}"
     echo -e "${CYAN}================================================================${NC}"
 else
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${GREEN}   🍯 Portsentry Apple-Style Honeypot & WebUI 一键极速部署    ${NC}"
+    echo -e "${GREEN}      🛡️ PortGuard 智能主动诱捕防御系统 一键极速部署          ${NC}"
     echo -e "${CYAN}================================================================${NC}"
 fi
 
@@ -55,7 +55,8 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-INSTALL_DIR="/opt/portsentry-ui"
+INSTALL_DIR="/opt/portguard"
+OLD_INSTALL_DIR="/opt/portsentry-ui"
 
 echo -e "\n${BLUE}[1/5] 正在检测并安装底层依赖环境 (Python3, iptables, sqlite3)...${NC}"
 if command -v apt-get >/dev/null 2>&1; then
@@ -72,6 +73,22 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 echo -e "${GREEN}[✓] 系统依赖与 Python3 环境就绪 ($(python3 --version))${NC}"
+
+# 如果存在旧版本，平滑迁移配置和数据库
+if [ -d "${OLD_INSTALL_DIR}" ] && [ ! -d "${INSTALL_DIR}" ]; then
+    echo -e "${YELLOW}[!] 检测到历史版本数据，正在平滑迁移至 ${INSTALL_DIR} ...${NC}"
+    mkdir -p "${INSTALL_DIR}"
+    if [ -f "${OLD_INSTALL_DIR}/config.json" ]; then
+        cp -a "${OLD_INSTALL_DIR}/config.json" "${INSTALL_DIR}/config.json"
+    fi
+    if [ -f "${OLD_INSTALL_DIR}/data.db" ]; then
+        cp -a "${OLD_INSTALL_DIR}/data.db" "${INSTALL_DIR}/data.db"
+    fi
+    systemctl stop portsentry-ui.service 2>/dev/null || true
+    systemctl disable portsentry-ui.service 2>/dev/null || true
+    rm -f /etc/systemd/system/portsentry-ui.service 2>/dev/null || true
+    echo -e "${GREEN}[✓] 历史配置与审计数据库已无缝平滑迁移！${NC}"
+fi
 
 echo -e "\n${BLUE}[2/5] 正在释放核心防御模块至 ${INSTALL_DIR} ...${NC}"
 mkdir -p "${INSTALL_DIR}"
@@ -174,9 +191,9 @@ fi
 
 echo -e "\n${BLUE}[4/5] 正在注册并启动 Systemd 守护进程...${NC}"
 PYTHON_BIN=$(command -v python3)
-cat << EOF > /etc/systemd/system/portsentry-ui.service
+cat << EOF > /etc/systemd/system/portguard.service
 [Unit]
-Description=Portsentry Honeypot & Apple WebUI Defense System
+Description=PortGuard Honeypot & Apple WebUI Defense System
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -194,19 +211,19 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable portsentry-ui.service
-systemctl restart portsentry-ui.service
+systemctl enable portguard.service
+systemctl restart portguard.service
 sleep 2
 
 echo -e "\n${BLUE}[5/5] 正在核验服务运行状态...${NC}"
-if systemctl is-active --quiet portsentry-ui.service; then
+if systemctl is-active --quiet portguard.service; then
     if [ "$IS_UPDATE" = true ]; then
-        echo -e "${GREEN}[✓] Portsentry-UI 服务已成功平滑更新且运行正常！${NC}"
+        echo -e "${GREEN}[✓] PortGuard 服务已成功平滑更新且运行正常！${NC}"
     else
-        echo -e "${GREEN}[✓] Portsentry-UI 服务已成功启动且运行正常！${NC}"
+        echo -e "${GREEN}[✓] PortGuard 服务已成功启动且运行正常！${NC}"
     fi
 else
-    echo -e "${RED}[ERROR] 服务启动异常，请使用 journalctl -u portsentry-ui.service -n 20 查看错误日志。${NC}"
+    echo -e "${RED}[ERROR] 服务启动异常，请使用 journalctl -u portguard.service -n 20 查看错误日志。${NC}"
     exit 1
 fi
 
@@ -214,9 +231,9 @@ PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout
 
 echo -e "\n${CYAN}================================================================${NC}"
 if [ "$IS_UPDATE" = true ]; then
-    echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台更新完成！${NC}"
+    echo -e "${GREEN}🎉 PortGuard 苹果原生风格安全控制台更新完成！${NC}"
 else
-    echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台部署成功！${NC}"
+    echo -e "${GREEN}🎉 PortGuard 苹果原生风格安全控制台部署成功！${NC}"
 fi
 echo -e "${CYAN}================================================================${NC}"
 echo -e "🌐 Web 控制台访问入口: ${YELLOW}http://${PUBLIC_IP}:9099${NC}"
@@ -225,9 +242,9 @@ echo -e "⚙️ 配置文件路径:       ${BLUE}${INSTALL_DIR}/config.json${NC}
 echo -e "📊 数据库文件:         ${BLUE}${INSTALL_DIR}/data.db${NC}"
 echo -e "----------------------------------------------------------------"
 echo -e "💡 常用维护命令:"
-echo -e "  查看服务状态: ${CYAN}systemctl status portsentry-ui.service${NC}"
-echo -e "  重启防御服务: ${CYAN}systemctl restart portsentry-ui.service${NC}"
-echo -e "  查看拦截日志: ${CYAN}journalctl -u portsentry-ui.service -f${NC}"
+echo -e "  查看服务状态: ${CYAN}systemctl status portguard.service${NC}"
+echo -e "  重启防御服务: ${CYAN}systemctl restart portguard.service${NC}"
+echo -e "  查看拦截日志: ${CYAN}journalctl -u portguard.service -f${NC}"
 echo -e "  一键平滑更新: ${GREEN}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/update.sh | bash${NC}"
 echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/uninstall.sh | bash${NC}"
 echo -e "${CYAN}================================================================${NC}\n"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Portsentry Defense & Apple-Style WebUI - 一键极速平滑热更新脚本
+# PortGuard Defense & Apple-Style WebUI - 一键极速平滑热更新脚本
 # ==============================================================================
 
 set -e
@@ -13,7 +13,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo -e "${CYAN}================================================================${NC}"
-echo -e "${GREEN}   🔄 Portsentry Defense & Apple-Style WebUI 一键平滑更新      ${NC}"
+echo -e "${GREEN}      🔄 PortGuard Defense & Apple-Style WebUI 一键平滑更新    ${NC}"
 echo -e "${CYAN}================================================================${NC}"
 
 if [[ $EUID -ne 0 ]]; then
@@ -21,20 +21,26 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-INSTALL_DIR="/opt/portsentry-ui"
-SERVICE_NAME="portsentry-ui.service"
+INSTALL_DIR="/opt/portguard"
+SERVICE_NAME="portguard.service"
+
+# 兼容历史路径平滑迁移
+if [ ! -d "$INSTALL_DIR" ] && [ -d "/opt/portsentry-ui" ]; then
+    INSTALL_DIR="/opt/portsentry-ui"
+    SERVICE_NAME="portsentry-ui.service"
+fi
 
 if [ ! -d "$INSTALL_DIR" ]; then
-    echo -e "${YELLOW}[!] 检测到系统尚未安装 Portsentry-UI，正在自动执行全新安装...${NC}"
+    echo -e "${YELLOW}[!] 检测到系统尚未安装 PortGuard，正在自动执行全新安装...${NC}"
     curl -fsSL https://raw.githubusercontent.com/Level6me/portsentry-ui/main/install.sh | bash
     exit 0
 fi
 
 echo -e "\n${BLUE}[1/4] 正在获取最新代码版本与校验...${NC}"
-TMP_UPDATE_DIR=$(mktemp -d /tmp/portsentry_update_XXXXXX)
+TMP_UPDATE_DIR=$(mktemp -d /tmp/portguard_update_XXXXXX)
 cd "$TMP_UPDATE_DIR"
 
-LATEST_SHA=$(curl -sSL -H "User-Agent: PortsentryUpdater" https://api.github.com/repos/Level6me/portsentry-ui/commits/main 2>/dev/null | grep '"sha"' | head -n 1 | cut -d '"' -f 4 || true)
+LATEST_SHA=$(curl -sSL -H "User-Agent: PortGuardUpdater" https://api.github.com/repos/Level6me/portsentry-ui/commits/main 2>/dev/null | grep '"sha"' | head -n 1 | cut -d '"' -f 4 || true)
 
 if [ -n "$LATEST_SHA" ] && [ ${#LATEST_SHA} -ge 7 ]; then
     echo -e "最新版本提交哈希: ${CYAN}${LATEST_SHA:0:7}${NC}"
@@ -72,23 +78,23 @@ fi
 rm -rf "$TMP_UPDATE_DIR"
 echo -e "${GREEN}[✓] 核心程序已平滑覆盖更新 (原有 config.json 与 data.db 保持完好)${NC}"
 
-echo -e "\n${BLUE}[3/4] 正在重启 Portsentry 防御服务...${NC}"
+echo -e "\n${BLUE}[3/4] 正在重启 PortGuard 防御服务...${NC}"
 systemctl daemon-reload 2>/dev/null || true
 systemctl restart "$SERVICE_NAME"
 sleep 2
 
 echo -e "\n${BLUE}[4/4] 正在验证服务运行状态...${NC}"
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-    echo -e "${GREEN}[✓] Portsentry-UI 服务已成功重启且运行正常！${NC}"
+    echo -e "${GREEN}[✓] PortGuard 服务已成功重启且运行正常！${NC}"
 else
-    echo -e "${RED}[ERROR] 服务重启异常，请使用 journalctl -u portsentry-ui.service -n 20 查看错误日志。${NC}"
+    echo -e "${RED}[ERROR] 服务重启异常，请使用 journalctl -u ${SERVICE_NAME} -n 20 查看错误日志。${NC}"
     exit 1
 fi
 
 PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout 3 icanhazip.com || echo "YOUR_SERVER_IP")
 
 echo -e "\n${CYAN}================================================================${NC}"
-echo -e "${GREEN}🎉 Portsentry 苹果原生风格安全控制台更新成功！${NC}"
+echo -e "${GREEN}🎉 PortGuard 苹果原生风格安全控制台更新成功！${NC}"
 echo -e "${CYAN}================================================================${NC}"
 echo -e "🌐 Web 控制台访问入口: ${YELLOW}http://${PUBLIC_IP}:9099${NC}"
 echo -e "📁 安装运行目录:       ${BLUE}${INSTALL_DIR}${NC}"
