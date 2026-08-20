@@ -3936,8 +3936,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const name = b.name || `业务端口 (${port})`;
                 const cat = b.category || 'custom';
                 const catName = BIZ_CAT_LABELS[cat] || cat;
-                const isSys = !!b.is_system;
-                const originTag = isSys ? '<span class="tag neutral" style="font-size:11px;">🔍 系统活跃监听</span>' : '<span class="tag accent" style="font-size:11px;">👤 用户自定义</span>';
+                const originTag = `<span class="tag accent" style="font-size:11px;">🛡️ ${catName}</span>`;
                 const statusTag = '<span class="tag success" style="font-weight:700;">🟢 100% 绝对放行</span>';
                 
                 let opHtml = `

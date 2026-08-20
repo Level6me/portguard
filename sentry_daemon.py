@@ -65,7 +65,11 @@ DEFAULT_CONFIG = {
     "trap_business_ports": False,
     "trap_all_unopened_ports": False,
     "trap_all_ports": False,
-    "defense_paused": False
+    "defense_paused": False,
+    "business_ports": [
+        {"port": 80, "name": "HTTP 网站服务", "category": "web", "remark": "默认Web服务"},
+        {"port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "默认加密Web服务"}
+    ]
 }
 
 DEFAULT_HTTP_TRAPS = [
@@ -1279,77 +1283,42 @@ def get_active_system_ports():
 
 def get_all_business_ports_info():
     """
-    获取当前系统中所有正常业务端口的综合列表：
-    包含系统正在监听运行的活跃服务 + 用户自定义声明的业务端口（已自动过滤用户显式删除的端口）。
+    获取当前系统中所有正常业务端口的列表：
+    100% 严格以用户在 business_ports 中配置的列表为准，绝不自动从系统监听抓取添加未配置的端口。
     """
     cfg = load_config()
-    excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
-    custom_biz = cfg.get("business_ports", [])
-    custom_map = {}
+    custom_biz = cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", []))
+    result = []
+    seen = set()
     for bp in custom_biz:
         if isinstance(bp, int):
-            if bp not in excluded_ports:
-                custom_map[bp] = {
+            if bp not in seen and 1 <= bp <= 65535:
+                result.append({
                     "port": bp,
-                    "name": f"自定义业务 ({bp})",
+                    "name": f"业务端口 ({bp})",
                     "category": "custom",
-                    "remark": "用户自定义",
+                    "remark": "自定义业务",
                     "is_system": False,
                     "enabled": True
-                }
+                })
+                seen.add(bp)
         elif isinstance(bp, dict) and "port" in bp:
             try:
                 p = int(bp["port"])
-                if p not in excluded_ports:
-                    custom_map[p] = {
+                if p not in seen and 1 <= p <= 65535:
+                    result.append({
                         "port": p,
                         "name": bp.get("name", f"业务端口 ({p})"),
                         "category": bp.get("category", "custom"),
-                        "remark": bp.get("remark", "用户自定义"),
+                        "remark": bp.get("remark", ""),
                         "is_system": False,
                         "enabled": True
-                    }
+                    })
+                    seen.add(p)
             except Exception:
                 pass
 
-    active_map = get_active_system_ports()
-    ssh_ports = get_system_ssh_ports()
-    web_p = int(cfg.get("web_port", 9099) or 9099)
-    
-    result = []
-    seen = set()
-    
-    # 1. 优先加入用户自定义业务端口
-    for p, info in sorted(custom_map.items()):
-        result.append(info)
-        seen.add(p)
-        
-    # 2. 加入系统监听的活跃业务服务 (过滤用户已排除删除的端口)
-    for p, name in sorted(active_map.items()):
-        if p not in seen and p not in excluded_ports:
-            if p == web_p:
-                cat = "web"
-                desc = "Portsentry Web 控制台"
-            elif p in ssh_ports:
-                cat = "ssh"
-                desc = f"SSH 远程运维服务 (端口 {p})"
-            elif p in (80, 443, 8080):
-                cat = "web"
-                desc = name
-            else:
-                cat = "system"
-                desc = name
-            result.append({
-                "port": p,
-                "name": desc,
-                "category": cat,
-                "remark": "系统活跃监听服务",
-                "is_system": True,
-                "enabled": True
-            })
-            seen.add(p)
-            
-    result.sort(key=lambda x: (not x["is_system"], x["port"]))
+    result.sort(key=lambda x: x["port"])
     return result
 
 class TrapServer:
@@ -1510,11 +1479,19 @@ def is_trap_port(port, cfg=None):
         return None
 
     global_biz_trap = bool(cfg.get("trap_business_ports", False))
-    excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
-    active_ports_map = get_active_system_ports()
     
-    # 判定是否属于系统正在保护的正常业务（未被用户从正常业务列表中排除删除）
-    is_protected_biz = (port not in excluded_ports) and ((port in active_ports_map) or (port in KNOWN_SYSTEM_SERVICES))
+    # 判定是否属于用户在列表中配置的正常业务端口
+    biz_ports = set()
+    for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
+        if isinstance(bp, int):
+            biz_ports.add(bp)
+        elif isinstance(bp, dict) and "port" in bp:
+            try:
+                biz_ports.add(int(bp["port"]))
+            except Exception:
+                pass
+                
+    is_protected_biz = port in biz_ports
 
     try:
         raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
@@ -1543,8 +1520,8 @@ def is_trap_port(port, cfg=None):
                 best_norm_copy["trap_business"] = True
                 return best_norm_copy
 
-            # 如果未标记业务诱捕，且该端口属于【受保护的正常业务】：蜜罐规则自动避让放行！
-            # 如果该端口已被用户从业务列表中删除排除（或根本不是业务）：则作为真实蜜罐诱饵触发拉黑！
+            # 如果未标记业务诱捕，且该端口属于【用户配置的正常业务】：蜜罐规则自动避让放行！
+            # 如果该端口不在用户业务列表中（即使系统有监听）：作为蜜罐诱饵触发拉黑！
             if is_protected_biz:
                 return None
 
@@ -1554,12 +1531,11 @@ def is_trap_port(port, cfg=None):
         pass
 
     if global_biz_trap and is_protected_biz:
-        service_name = active_ports_map.get(port, KNOWN_SYSTEM_SERVICES.get(port, f"TCP/{port}"))
         return {
             "port": port,
             "port_start": port,
             "port_end": port,
-            "name": f"全局业务诱捕: {service_name}",
+            "name": f"全局业务诱捕: 端口 {port}",
             "category": "web",
             "level": "极高危",
             "is_business": True,
@@ -1736,30 +1712,28 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 检查受保护的正常业务端口（必须未被排除删除）
-        excluded_ports = set(int(p) for p in cfg.get("excluded_business_ports", []) if str(p).isdigit())
-        custom_biz_ports = set()
-        for bp in cfg.get("business_ports", []):
+        # 3. 获取用户配置的正常业务端口集合（100% 严格以 business_ports 为准）
+        biz_ports_map = {}
+        for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
             if isinstance(bp, int):
-                custom_biz_ports.add(bp)
+                biz_ports_map[bp] = {"port": bp, "name": f"业务端口 ({bp})"}
             elif isinstance(bp, dict) and "port" in bp:
                 try:
-                    custom_biz_ports.add(int(bp["port"]))
+                    p = int(bp["port"])
+                    biz_ports_map[p] = bp
                 except Exception:
                     pass
 
-        # 判定是否属于受保护正常业务（在自定义列表中，或在活跃系统监听/SSH中，且未被用户从业务列表删除排除）
-        ssh_ports = get_system_ssh_ports()
-        is_normal_business = (dst_port in custom_biz_ports or dst_port in active_ports_map or dst_port in ssh_ports or dst_port in KNOWN_SYSTEM_SERVICES) and (dst_port not in excluded_ports)
+        is_normal_business = dst_port in biz_ports_map
 
         # 4. 检查是否命中显式配置的蜜罐诱饵规则 (例如用户配置了 1-60000 蜜罐，或单独配置了 22 诱捕探针)
-        # 注意：如果端口已被用户从业务列表中删除，is_trap_port 会成功命中该端口，在此直接触发蜜罐拉黑！
+        # 注意：如果端口不在 business_ports 中，is_trap_port 会成功命中该端口，在此直接触发蜜罐拉黑！
         if trap_meta and trap_meta.get("enabled", True):
             action = "INTERCEPTED"
             is_biz = bool(trap_meta.get("is_business", False) or trap_meta.get("trap_business", False))
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
             if is_biz:
-                desc = f"业务诱捕阻断: {proc} (端口 {dst_port})" if proc else (trap_meta.get("name") or f"业务诱捕 (端口 {dst_port})")
+                biz_info = biz_ports_map.get(dst_port, {})
+                desc = f"业务诱捕阻断: {biz_info.get('name', f'业务端口 {dst_port}')}"
             else:
                 desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐诱饵探针 (端口 {dst_port})"
             port_info = {
@@ -1773,9 +1747,10 @@ class GlobalPortSniffer:
 
         # 5. 正常生产业务端口访问（且未被蜜罐诱捕）：100% 绝对顺畅放行！
         if is_normal_business:
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, "业务服务"))
+            biz_info = biz_ports_map[dst_port]
+            biz_name = biz_info.get("name", f"业务端口 ({dst_port})") if isinstance(biz_info, dict) else f"业务端口 ({dst_port})"
             action = "BUSINESS"
-            desc = f"正常业务访问: {proc} (端口 {dst_port})"
+            desc = f"正常业务访问: {biz_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
