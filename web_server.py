@@ -392,6 +392,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 padding: 6px 14px;
                 font-size: 12px;
             }
+            th {
+                padding: 8px 10px;
+                font-size: 11px;
+            }
+            td {
+                padding: 10px 10px;
+                font-size: 12px;
+            }
         }
         .card-title {
             font-size: 15px;
@@ -416,7 +424,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         @media (max-width: 480px) {
             .val-big { font-size: 24px; }
-            .card { padding: 12px 14px; border-radius: 14px; }
+            .card { padding: 12px 10px; border-radius: 14px; }
+            th { padding: 7px 8px; font-size: 10px; }
+            td { padding: 8px 8px; font-size: 11px; }
         }
 
         /* Filter Controls */
@@ -1136,7 +1146,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <!-- 统一弹出式黑名单配置卡片按钮 -->
                         <div style="position: relative; display: inline-block;">
                             <button class="pill-btn danger" id="btn-blacklist-action-menu" onclick="toggleBlacklistActionMenu(event)" style="font-weight: 700;">
-                                <span>⚙️ 黑名单管理与操作</span>
+                                <span>⚙️ 黑名单管理</span>
                                 <span style="font-size: 10px; margin-left: 2px;">▾</span>
                             </button>
                             <div id="blacklist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
@@ -1200,7 +1210,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <!-- 统一弹出式白名单配置卡片按钮 -->
                         <div style="position: relative; display: inline-block;">
                             <button class="pill-btn accent" id="btn-whitelist-action-menu" onclick="toggleWhitelistActionMenu(event)" style="font-weight: 700;">
-                                <span>⚙️ 白名单管理与配置</span>
+                                <span>⚙️ 白名单管理</span>
                                 <span style="font-size: 10px; margin-left: 2px;">▾</span>
                             </button>
                             <div id="whitelist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
@@ -1224,9 +1234,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <table>
                         <thead>
                             <tr>
-                                <th>信任 IP / 网段</th>
-                                <th>备注说明</th>
-                                <th>操作</th>
+                                <th style="width: 45%;">信任 IP / 网段</th>
+                                <th style="width: 40%;">备注说明</th>
+                                <th style="width: 15%; text-align: right;">操作</th>
                             </tr>
                         </thead>
                         <tbody id="whitelist-tbody">
@@ -4239,7 +4249,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPaginationUI(totalCount, whitelistPage, PAGE_SIZE, 'whitelist-total-cnt', 'whitelist-page-info', 'btn-whitelist-prev', 'btn-whitelist-next', 'whitelist-page-nums', 'setWhitelistPage');
 
         if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 24px;">当前无白名单记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 24px;">当前无白名单记录</td></tr>';
             return;
         }
 
@@ -4256,8 +4266,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <tr>
                 <td><span class="ip-text" onclick="showIPDetail('${safeIpParam}')" title="点击查看 IP 详情">${escapeHtml(ipStr)}</span></td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(remark)}</span></td>
-                <td><span class="tag success" style="font-size:11px; font-weight:700;">● 白名单放行</span></td>
-                <td>
+                <td style="text-align: right;">
                     <button class="action-btn danger" onclick="removeWhitelist('${safeIpParam}')">删除</button>
                 </td>
             </tr>
