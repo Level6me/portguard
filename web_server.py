@@ -1392,9 +1392,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <!-- SubTab 4: IP 隐藏过滤规则 (集成隐藏列表) -->
             <div id="policy-pane-hidden" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
-                        <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
+                            <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
+                        </div>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button type="button" class="pill-btn" onclick="openImportModal('hidden_ips')" style="padding: 4px 10px; font-size: 11px; font-weight: 600;">📥 导入隐藏列表</button>
+                            <button type="button" class="pill-btn" onclick="exportHiddenIPsJSON()" style="padding: 4px 10px; font-size: 11px; font-weight: 600;">📤 导出隐藏列表</button>
+                        </div>
                     </div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
                         被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
@@ -1596,178 +1602,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
 </div>
 
-<!-- Modal: 系统设置与高级策略弹窗 -->
-<div class="modal-overlay" id="modal-settings">
-    <div class="modal-sheet" style="max-width: 680px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-            <h3 style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; margin: 0;">
-                <span>⚙️</span>
-                <span>系统策略与高级设置</span>
-            </h3>
-            <button class="action-btn" onclick="closeModals()" style="font-size: 16px; padding: 4px 8px;">✕</button>
-        </div>
 
-        <!-- 选项卡分段切换器 -->
-        <div style="display: flex; background: var(--card-sec); border-radius: 10px; padding: 3px; border: 1px solid var(--border-subtle); margin-bottom: 14px;">
-            <button class="seg-btn active" id="settings-tab-btn-defense" onclick="switchSettingsTab('defense')" style="flex: 1; padding: 6px 12px; font-size: 12px; font-weight: 700; border-radius: 7px; border: none; cursor: pointer; background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                🛡️ 系统防御参数
-            </button>
-            <button class="seg-btn" id="settings-tab-btn-hidden" onclick="switchSettingsTab('hidden')" style="flex: 1; padding: 6px 12px; font-size: 12px; font-weight: 700; border-radius: 7px; border: none; cursor: pointer; background: transparent; color: var(--text-sec);">
-                🚫 IP 隐藏列表 <span class="badge" id="badge-hidden-ips-count" style="margin-left: 4px; padding: 1px 6px; font-size: 10px; border-radius: 10px; background: var(--card-sec); color: var(--text-sec);">0</span>
-            </button>
-        </div>
-
-        <!-- Tab 1: 系统防御参数 -->
-        <div id="settings-pane-defense" style="display: flex; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px;">
-            <!-- 0. 一键暂停 / 恢复拦截服务 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
-                    <div style="display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 200px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-weight: 700; font-size: 13px; color: var(--text);">⏸️ 威胁防御与自动拦截服务</span>
-                            <span class="tag success" id="defense-service-status-tag">🛡️ 拦截运行中</span>
-                        </div>
-                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">一键暂停所有蜜罐诱捕阻断与黑洞封禁，并临时清空内核拦截规则，方便排查运维。</span>
-                    </div>
-                    <button type="button" id="btn-toggle-defense-pause" onclick="toggleDefenseServicePause()" class="pill-btn danger" style="padding: 7px 16px; font-weight: 700; font-size: 12px; white-space: nowrap; cursor: pointer;">
-                        ⏸️ 暂停所有拦截
-                    </button>
-                </div>
-            </div>
-
-            <!-- 1. 封禁灵敏度与阈值 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🎯 诱捕探测判定与自动拉黑阈值</span>
-                    <span class="badge badge-high" id="badge-threshold-status">主动严防</span>
-                </div>
-                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                    外部 IP 在指定时间窗口内触碰蜜罐端口达到设定次数后，自动触发内核阻断并加入黑名单。
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <div>
-                        <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数</label>
-                        <select id="setting-trap-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                            <option value="1">1 次 (零容忍立即封禁)</option>
-                            <option value="2">2 次 (严苛防御)</option>
-                            <option value="3">3 次 (标准防误触)</option>
-                            <option value="5">5 次 (宽松模式)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
-                        <select id="setting-trap-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                            <option value="15">15 秒</option>
-                            <option value="30">30 秒 (标准默认)</option>
-                            <option value="60">60 秒 (长窗口感知)</option>
-                            <option value="300">300 秒 (5分钟慢速感知)</option>
-                            <option value="600">600 秒 (10分钟超长感知)</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 2. 封禁时长与自动解封周期 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⏳ 黑名单封禁周期与自动解封</div>
-                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                    被拉黑攻击 IP 的持续阻断天数。设为永久封禁时永不自动解封。
-                </div>
-                <div>
-                    <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
-                    <select id="setting-auto-clean" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                        <option value="7">7 天 (临时阻断)</option>
-                        <option value="30">30 天 (标准推荐)</option>
-                        <option value="90">90 天 (长期封锁)</option>
-                        <option value="180">180 天 (半年封锁)</option>
-                        <option value="0">永久封禁 (永不自动解封)</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- 3. 全局全端口零信任诱捕 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⚡ 全端口零信任诱捕拉黑（全网全端口诱捕）</div>
-                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                    基于 Linux 原生网络层感知，外部非白名单 IP 探测服务器上的任何端口（包括开放、未开放、蜜罐或业务端口）时，立即毫秒级拉黑并下发内核防火墙。
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
-                        <input type="checkbox" id="setting-trap-all-ports" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                        <span><b>开启探测任何端口立即诱捕拉黑</b>（所有入站非白名单探测一律直接封禁）</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
-                        <input type="checkbox" id="setting-trap-all-unopened" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                        <span><b>未开放端口隐蔽嗅探诱捕</b>（探测任意未开放端口立即拉黑阻断）</span>
-                    </label>
-                </div>
-            </div>
-
-            <!-- 4. 内核阻断机制 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ Linux 内核底层阻断联动方式</div>
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
-                        <input type="checkbox" id="setting-ban-iptables" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                        <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链顶层直接丢弃数据包）</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
-                        <input type="checkbox" id="setting-ban-blackhole" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                        <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接丢弃）</span>
-                    </label>
-                </div>
-            </div>
-
-            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px;">
-                <button class="pill-btn" onclick="closeModals()">取消</button>
-                <button class="pill-btn accent" onclick="saveSystemSettings()" style="padding: 8px 20px; font-weight: 700;">💾 保存设置</button>
-            </div>
-        </div>
-
-        <!-- Tab 2: IP 隐藏列表 -->
-        <div id="settings-pane-hidden" style="display: none; flex-direction: column; gap: 14px; max-height: 65vh; overflow-y: auto; padding-right: 4px;">
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
-                    <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
-                </div>
-                <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
-                    被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
-                </div>
-                <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="text" id="input-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP 地址 (如 1.2.3.4)" style="flex: 1; padding: 8px 12px; font-size: 12px; font-family: monospace;">
-                    <button class="pill-btn accent" onclick="addCustomHiddenIP()" style="padding: 8px 16px; font-size: 12px; font-weight: 700; white-space: nowrap;">+ 添加隐藏</button>
-                </div>
-            </div>
-
-            <!-- 隐藏 IP 表格 -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;">
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--card);">
-                    <span style="font-size: 12px; font-weight: 700; color: var(--text);">已隐藏 IP 名单 (<span id="hidden-ips-table-count">0</span>)</span>
-                    <button class="pill-btn danger" onclick="clearAllHiddenIPs()" style="padding: 3px 8px; font-size: 11px;">🗑️ 清空全部隐藏</button>
-                </div>
-                <div style="max-height: 280px; overflow-y: auto;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
-                        <thead>
-                            <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec);">
-                                <th style="padding: 8px 12px;">IP 地址 / 归属</th>
-                                <th style="padding: 8px 12px;">隐藏时间</th>
-                                <th style="padding: 8px 12px; text-align: right;">操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="hidden-ips-table-body">
-                            <!-- JS 动态渲染 -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            
-            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px;">
-                <button class="pill-btn" onclick="closeModals()">关闭</button>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- Modal: 手动拉黑 -->
 <div class="modal-overlay" id="modal-ban">
@@ -3085,12 +2920,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function openSystemSettingsModal() {
-        loadSystemSettings();
-        const m = document.getElementById('modal-settings');
-        if (m) {
-            m.style.display = 'flex';
-            m.classList.add('active');
-        }
+        switchTab('traps');
+        switchTrapTab('response');
     }
 
     function jumpToLogsFilter(cat) {
@@ -3757,6 +3588,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         showToast('已开始导出业务端口列表 (JSON)', '📤');
     }
 
+    function exportHiddenIPsJSON() {
+        if (!allHiddenIPs || allHiddenIPs.length === 0) return showToast('暂无隐藏 IP 可导出', '⚠️');
+        const exportList = allHiddenIPs.map(h => ({
+            ip: h.ip,
+            country: h.country || '',
+            region: h.region || '',
+            city: h.city || '',
+            isp: h.isp || '',
+            remark: h.remark || '',
+            create_time: h.create_time || ''
+        }));
+        const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `portsentry_hidden_ips_${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        showToast('已开始导出隐藏 IP 列表 (JSON)', '📤');
+    }
+
     function openAddBizPortModal() {
         document.getElementById('modal-biz-title').innerText = '🏢 添加正常业务端口';
         document.getElementById('biz-port-orig-val').value = '';
@@ -3810,7 +3660,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function deleteBizPort(port) {
-        if (!confirm(`确定要从业务列表中移除自定义端口 ${port} 吗？`)) return;
+        if (!confirm(`确定要从业务列表中移除端口 ${port} 吗？`)) return;
         fetch('/api/business_ports/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4083,17 +3933,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const originTag = isSys ? '<span class="tag neutral" style="font-size:11px;">🔍 系统活跃监听</span>' : '<span class="tag accent" style="font-size:11px;">👤 用户自定义</span>';
                 const statusTag = '<span class="tag success" style="font-weight:700;">🟢 100% 绝对放行</span>';
                 
-                let opHtml = '';
-                if (isSys) {
-                    opHtml = '<span style="font-size:12px; color:var(--text-sec); font-weight:600;">🔒 内核免封保护</span>';
-                } else {
-                    opHtml = `
-                        <div style="display: flex; gap: 6px; align-items: center;">
-                            <button class="action-btn" onclick="openEditBizPortModal(${port})" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
-                            <button class="action-btn danger" onclick="deleteBizPort(${port})" title="删除业务端口">🗑️</button>
-                        </div>
-                    `;
-                }
+                let opHtml = `
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button class="action-btn" onclick="openEditBizPortModal(${port})" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                        <button class="action-btn danger" onclick="deleteBizPort(${port})" title="移除业务端口">🗑️</button>
+                    </div>
+                `;
 
                 html += `
                 <tr>
@@ -4813,6 +4658,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 业务列表中的端口受内核级豁免保护，100% 免封绝对放行！
             `;
             textVal.placeholder = `粘贴业务端口列表或 JSON 数组，例如：\n8080 Keycloak认证\n3000 Node前端API\n\n或 JSON 格式：\n[{"port": 8080, "name": "Keycloak", "category": "web"}]`;
+        } else if (type === 'hidden_ips') {
+            titleEl.innerText = '🚫 批量导入审计隐藏 IP';
+            tipEl.innerHTML = `
+                支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
+                • JSON 格式: <code>[{"ip": "1.2.3.4", "remark": "测试节点"}]</code><br>
+                • 文本格式: 每行一个 IP 地址（例如 <code>1.2.3.4 内部测试</code> 或纯 <code>1.2.3.4</code>）<br>
+                隐藏列表中的 IP 在全站控制台日志中将被彻底隐藏，不影响底层正常防御！
+            `;
+            textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 内部调试节点\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "remark": "测试节点"}]`;
         } else if (type === 'whitelist') {
             titleEl.innerText = '🛡️ 批量导入安全信任白名单';
             tipEl.innerHTML = `
@@ -4900,6 +4754,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 { "port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "加密主站" },
                 { "port": 8080, "name": "Keycloak 认证中心", "category": "web", "remark": "用户鉴权" },
                 { "port": 3306, "name": "MySQL 业务数据库", "category": "db", "remark": "主库服务" }
+            ], null, 2);
+        } else if (currentImportType === 'hidden_ips') {
+            textVal.value = JSON.stringify([
+                { "ip": "198.51.100.8", "remark": "内部联调测试节点" },
+                { "ip": "203.0.113.19", "remark": "第三方探针隐藏" }
             ], null, 2);
         } else if (currentImportType === 'whitelist') {
             textVal.value = JSON.stringify([
@@ -5957,7 +5816,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 })
                 return
 
-            if path in ("/api/hidden-ips", "/api/hidden_ips"):
+            if path in ("/api/hidden-ips", "/api/hidden_ips", "/api/hidden-ips/export", "/api/hidden_ips/export"):
                 hidden_list = get_hidden_ips()
                 self._send_json(hidden_list)
                 return
@@ -6930,6 +6789,47 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path in ("/api/hidden-ips/clear", "/api/hidden_ips/clear"):
                 ok, msg = clear_hidden_ips()
                 self._send_json({"success": ok, "msg": msg})
+                return
+
+            if path in ("/api/hidden-ips/import", "/api/hidden_ips/import"):
+                raw_input = req_data.get("data")
+                mode = req_data.get("mode", "append")
+                if isinstance(raw_input, str):
+                    parsed_items = parse_loose_json_or_lines(raw_input)
+                elif isinstance(raw_input, list):
+                    parsed_items = raw_input
+                elif isinstance(raw_input, dict):
+                    parsed_items = [raw_input]
+                else:
+                    parsed_items = []
+                    
+                if not parsed_items:
+                    self._send_json({"success": False, "msg": "未解析到有效的 IP 数据，请检查格式"}, status=400)
+                    return
+                    
+                if mode == "replace":
+                    clear_hidden_ips()
+                    
+                count = 0
+                for item in parsed_items:
+                    ip = ""
+                    remark = ""
+                    if isinstance(item, str):
+                        item_s = item.strip()
+                        parts = item_s.split()
+                        if parts:
+                            ip = parts[0]
+                            remark = parts[1] if len(parts) > 1 else "批量导入隐藏"
+                    elif isinstance(item, dict):
+                        ip = str(item.get("ip", "")).strip()
+                        remark = str(item.get("remark", "批量导入隐藏")).strip()
+                    if ip:
+                        valid_ip = validate_ip(ip)
+                        if valid_ip:
+                            ok, _ = add_hidden_ip(valid_ip, remark)
+                            if ok:
+                                count += 1
+                self._send_json({"success": True, "msg": f"成功{'全量覆盖' if mode=='replace' else '增量导入'} {count} 条隐藏 IP 规则"})
                 return
 
             self._send_json({"error": "Not Found"}, status=404)
