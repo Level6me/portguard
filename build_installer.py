@@ -20,7 +20,7 @@ with open(os.path.join(BASE_DIR, 'chart.min.js'), 'rb') as f:
 
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
-# PortGuard Defense & Apple-Style WebUI - 独立自包含一行一键生产部署与更新脚本
+# PortGuard Defense & WebUI - 独立自包含一行一键生产部署与更新脚本
 # 适用系统: Ubuntu 18+, Debian 10+, CentOS 7/8/9, RHEL, Alibaba Cloud Linux, Rocky
 # ==============================================================================
 
@@ -193,7 +193,7 @@ echo -e "\n${BLUE}[4/5] 正在注册并启动 Systemd 守护进程...${NC}"
 PYTHON_BIN=$(command -v python3)
 cat << EOF > /etc/systemd/system/portguard.service
 [Unit]
-Description=PortGuard Honeypot & Apple WebUI Defense System
+Description=PortGuard Honeypot & WebUI Defense System
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -231,9 +231,9 @@ PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me || curl -s --connect-timeout
 
 echo -e "\n${CYAN}================================================================${NC}"
 if [ "$IS_UPDATE" = true ]; then
-    echo -e "${GREEN}🎉 PortGuard 苹果原生风格安全控制台更新完成！${NC}"
+    echo -e "${GREEN}🎉 PortGuard 智能主动诱捕防御控制台更新完成！${NC}"
 else
-    echo -e "${GREEN}🎉 PortGuard 苹果原生风格安全控制台部署成功！${NC}"
+    echo -e "${GREEN}🎉 PortGuard 智能主动诱捕防御控制台部署成功！${NC}"
 fi
 echo -e "${CYAN}================================================================${NC}"
 echo -e "🌐 Web 控制台访问入口: ${YELLOW}http://${PUBLIC_IP}:9099${NC}"

@@ -81,7 +81,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no, viewport-fit=cover">
-    <title>PortGuard · Apple Defense Dashboard</title>
+    <title>PortGuard · 智能主动诱捕防御系统</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -190,7 +190,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
-        /* Header (Abit 移动端与桌面自适应) */
+        /* Header (移动端与桌面自适应) */
         .header {
             margin: 4px 0 16px 0;
             display: flex;
@@ -631,7 +631,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         /* Bottom Spacer (防止 Dock 遮挡) */
         .bottom-spacer { height: 60px; width: 100%; }
 
-        /* Floating Glass Dock (Abit 经典底栏) */
+        /* Floating Glass Dock (悬浮玻璃底栏) */
         .dock {
             position: fixed;
             bottom: calc(14px + env(safe-area-inset-bottom));
@@ -759,7 +759,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="toast-container" id="toast-container"></div>
 
 <div class="container">
-    <!-- Header Bar (Abit 移动端规范，绝不折行) -->
+    <!-- Header Bar (顶部状态栏) -->
     <div class="header">
         <div class="header-left">
             <div class="date-badge">
@@ -1574,7 +1574,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 </div>
 
-<!-- Floating Glass Dock (Abit 经典底栏) -->
+<!-- Floating Glass Dock (悬浮底部导航栏) -->
 <div class="dock">
     <button class="dock-btn active" id="dock-btn-overview" onclick="switchTab('overview', this)">
         <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
