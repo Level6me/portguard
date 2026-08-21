@@ -1512,6 +1512,34 @@ def match_status_code(status_code, pattern):
         return False
 
 
+_CACHED_SERVER_PUBLIC_IP = None
+
+def get_local_public_ip():
+    global _CACHED_SERVER_PUBLIC_IP
+    if _CACHED_SERVER_PUBLIC_IP:
+        return _CACHED_SERVER_PUBLIC_IP
+    try:
+        cfg = load_config()
+        if cfg.get("server_ip"):
+            _CACHED_SERVER_PUBLIC_IP = str(cfg["server_ip"]).strip()
+            return _CACHED_SERVER_PUBLIC_IP
+    except Exception:
+        pass
+    for test_target in [("8.8.8.8", 80), ("1.1.1.1", 80)]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(1.0)
+            s.connect(test_target)
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                _CACHED_SERVER_PUBLIC_IP = ip
+                return ip
+        except Exception:
+            pass
+    return ""
+
+
 def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
     """根据 http_traps 规则库实时分析 HTTP 请求是否命中恶意扫描或高危敏感蜜罐特征"""
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127.") or ip_in_whitelist(ip):
@@ -1584,8 +1612,17 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
 
         # 5. 禁止纯 IP 直连 Web 探测
         elif mtype == "direct_ip":
-            if req_domain and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$", req_domain.strip()):
-                reason = f"Web防护: 禁止纯IP直连探测 ({req_domain})"
+            is_direct_ip = False
+            if req_domain:
+                r_clean = req_domain.strip()
+                if "纯IP" in r_clean or "全局反代" in r_clean or re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$", r_clean):
+                    is_direct_ip = True
+                elif r_clean.startswith("纯IP直连") or "默认站点" in r_clean:
+                    is_direct_ip = True
+
+            if is_direct_ip:
+                target_str = req_domain if req_domain else ip
+                reason = f"Web防护: 禁止纯IP直连探测 ({target_str})"
                 ban_ip(ip, reason=reason, category="web", level=rlevel)
                 return True
     return False
@@ -3372,18 +3409,18 @@ class SiteLogCollector:
                         domain = "1Panel站点"
                     files.append((p, domain))
 
-        # 2. 1Panel 全局访问日志
+        # 2. 1Panel 全局访问日志 (纯IP直连 / 默认兜底站点)
         for global_p in ["/opt/1panel/apps/openresty/openresty/log/access.log", "/opt/1panel/log/access.log"]:
             if os.path.exists(global_p) and global_p not in seen_paths:
                 seen_paths.add(global_p)
-                files.append((global_p, "全局反代"))
+                files.append((global_p, "纯IP直连"))
 
         # 3. 标准系统 Nginx 路径
         for p in glob.glob("/var/log/nginx/*access*.log"):
             if os.path.exists(p) and p not in seen_paths:
                 seen_paths.add(p)
                 bname = os.path.basename(p).replace(".access.log", "").replace("access.log", "").replace(".log", "")
-                domain = bname if bname and bname != "nginx" else "Nginx主站"
+                domain = bname if bname and bname != "nginx" else "纯IP直连"
                 files.append((p, domain))
 
         for p in glob.glob("/www/server/nginx/logs/*access*.log"):
@@ -3464,15 +3501,19 @@ class SiteLogCollector:
                             ref = (m.group("ref") or "").strip()
                             ua = m.group("ua") or ""
 
-                            # 域名解析：优先站点目录域名，若是全局日志且 Referer 中包含完整 URL 则提取 Host
+                            # 域名解析：优先站点目录域名，若是全局/直连日志且 Referer 中包含完整 URL 则提取 Host
                             req_domain = default_domain
-                            if (req_domain in ("全局反代", "Nginx主站", "")) and ref and (ref.startswith("http://") or ref.startswith("https://")):
+                            if (req_domain in ("纯IP直连", "全局反代", "Nginx主站", "")) and ref and (ref.startswith("http://") or ref.startswith("https://")):
                                 try:
                                     extracted = ref.split("/")[2].split(":")[0]
                                     if extracted and not extracted.replace(".", "").isdigit():
                                         req_domain = extracted
                                 except Exception:
                                     pass
+
+                            if req_domain in ("纯IP直连", "全局反代", "Nginx主站", ""):
+                                srv_ip = get_local_public_ip()
+                                req_domain = f"纯IP直连 ({srv_ip})" if srv_ip else "纯IP直连"
 
                             req_parts = request.split()
                             if len(req_parts) >= 2:

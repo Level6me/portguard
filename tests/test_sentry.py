@@ -261,6 +261,26 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertTrue(check_http_request_traps("203.0.113.88", "example.com", "GET", "/login", 302, "Mozilla/5.0"))
             mock_ban_302.assert_called_once()
 
+        # 测试禁止纯 IP 直连探测规则 (direct_ip)
+        with mock.patch("sentry_daemon.get_http_traps") as mock_traps, mock.patch("sentry_daemon.ban_ip") as mock_ban_dip:
+            mock_traps.return_value = [{
+                "rule_id": "ht_direct_ip_probe",
+                "name": "禁止纯 IP 直连 Web 探测",
+                "match_type": "direct_ip",
+                "pattern": "direct_ip",
+                "threshold": 1,
+                "window": 30,
+                "action": "ban",
+                "level": "中危",
+                "enabled": 1
+            }]
+            # 合法域名不拦截
+            self.assertFalse(check_http_request_traps("203.0.113.89", "ips.example.com", "GET", "/test", 200, "curl/7.88"))
+            mock_ban_dip.assert_not_called()
+            # 纯 IP 直连访问立即触发秒封
+            self.assertTrue(check_http_request_traps("203.0.113.89", "纯IP直连 (93.179.103.66)", "GET", "/test", 200, "curl/7.88"))
+            mock_ban_dip.assert_called_once()
+
     def test_ban_ip_comprehensive_logs_and_blacklist(self):
         from sentry_daemon import ban_ip, get_db, init_db
         init_db()
