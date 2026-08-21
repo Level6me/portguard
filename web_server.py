@@ -31,7 +31,8 @@ from sentry_daemon import (
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
     ban_ip_firewall, init_firewall_ipset, verify_cluster_token, generate_cluster_token, ban_ip,
-    normalize_cluster_node, broadcast_cluster_whitelist
+    normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
+    broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker
 )
 
 def parse_loose_json_or_lines(text):
@@ -1165,6 +1166,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 </a>
                                 <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); exportBlacklistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
                                     <span>📤</span><span>导出黑名单 (JSON)</span>
+                                </a>
+                                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                                <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); syncAllMeshState();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📡</span><span>全网协同双向全量对齐</span>
                                 </a>
                             </div>
                         </div>
@@ -5137,6 +5142,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    async function syncAllMeshState() {
+        if (!confirm('确定要与全网所有协同节点进行黑名单与白名单的【双向全量对齐】吗？\n（双方将自动交换并吸纳补齐彼此缺失的全部拦截目标与信任规则）')) return;
+        showToast('正在与全网协同节点进行双向全量对齐...', '⏳');
+        try {
+            const res = await fetch('/api/cluster/sync_all_mesh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '全网黑白名单双向对齐同步完成！', '🎉');
+                loadBlacklist();
+                loadWhitelist();
+                loadStats();
+            } else {
+                showToast(data.msg || '对齐失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
     function downloadJSONFile(dataObj, fileName) {
         const jsonStr = JSON.stringify(dataObj, null, 2);
         const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
@@ -6720,7 +6748,108 @@ class RequestHandler(BaseHTTPRequestHandler):
                 ip = valid_ip
 
                 unban_ip_core(ip, status_event="UNBANNED")
-                self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}"})
+                # 广播解封至全网集群协同节点
+                broadcast_cluster_unban(ip)
+                self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}（已同步全网集群）"})
+                return
+
+            if path == "/api/cluster/sync_unban":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                ip = req_data.get("ip", "").strip()
+                if not verify_cluster_token(f"unban_{ip}", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
+                    return
+                unban_ip_core(valid_ip, status_event="UNBANNED")
+                self._send_json({"success": True, "msg": f"已协同解封: {valid_ip}"})
+                return
+
+            if path == "/api/cluster/sync_state_exchange":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+                if not verify_cluster_token("sync_state_exchange", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                source_node = req_data.get("source_node", "远程节点").strip()
+                remote_bans = req_data.get("blacklist", [])
+                remote_whites = req_data.get("whitelist", [])
+
+                # 1. 查询本地黑名单
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
+                local_rows = c.fetchall()
+                local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
+
+                # 吸纳对方有而本地没有的黑名单
+                added_bans = 0
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                for rb in remote_bans:
+                    rb_ip = validate_ip(rb.get("ip", ""))
+                    if not rb_ip or ip_in_whitelist(rb_ip):
+                        continue
+                    if rb_ip not in local_bans_map:
+                        ban_ip_firewall(rb_ip)
+                        src = rb.get("source_node", source_node)
+                        c.execute("""
+                        INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
+                            rb.get("level", "极高危"), rb.get("ban_time", now_str),
+                            rb.get("timestamp", now_ts), rb.get("ban_expire"), f"集群 ({src})"
+                        ))
+                        added_bans += 1
+                conn.commit()
+                conn.close()
+
+                # 2. 合并白名单
+                whitelist = cfg.get("whitelist", [])
+                w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
+                added_whites = 0
+                for rw in remote_whites:
+                    rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
+                    if not rw_ip:
+                        continue
+                    unban_ip_core(rw_ip, status_event="WHITELIST")
+                    rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
+                    if rw_ip not in w_map:
+                        w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
+                        added_whites += 1
+                cfg["whitelist"] = list(w_map.values())
+                save_config(cfg)
+
+                # 返回本地独有的黑名单与白名单给发起端
+                remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
+                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips ]
+
+                remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
+                missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
+
+                self._send_json({
+                    "success": True,
+                    "added_bans": added_bans,
+                    "added_whites": added_whites,
+                    "remote_blacklist": missing_for_remote_bans,
+                    "remote_whitelist": missing_for_remote_whites
+                })
+                return
+
+            if path in ("/api/cluster/sync_all_mesh", "/api/cluster/sync_all_blacklist"):
+                res = sync_cluster_mesh_state()
+                self._send_json(res)
                 return
 
             if path == "/api/cluster/sync_ban":
@@ -8162,6 +8291,100 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
                 return
 
+            if path == "/api/cluster/sync_unban":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                ip = req_data.get("ip", "").strip()
+                if not verify_cluster_token(f"unban_{ip}", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
+                    return
+                unban_ip_core(valid_ip, status_event="UNBANNED")
+                self._send_json({"success": True, "msg": f"已协同解封: {valid_ip}"})
+                return
+
+            if path == "/api/cluster/sync_state_exchange":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+                if not verify_cluster_token("sync_state_exchange", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                source_node = req_data.get("source_node", "远程节点").strip()
+                remote_bans = req_data.get("blacklist", [])
+                remote_whites = req_data.get("whitelist", [])
+
+                # 1. 查询本地黑名单
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
+                local_rows = c.fetchall()
+                local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
+
+                # 吸纳对方有而本地没有的黑名单
+                added_bans = 0
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                for rb in remote_bans:
+                    rb_ip = validate_ip(rb.get("ip", ""))
+                    if not rb_ip or ip_in_whitelist(rb_ip):
+                        continue
+                    if rb_ip not in local_bans_map:
+                        ban_ip_firewall(rb_ip)
+                        src = rb.get("source_node", source_node)
+                        c.execute("""
+                        INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
+                            rb.get("level", "极高危"), rb.get("ban_time", now_str),
+                            rb.get("timestamp", now_ts), rb.get("ban_expire"), f"集群 ({src})"
+                        ))
+                        added_bans += 1
+                conn.commit()
+                conn.close()
+
+                # 2. 合并白名单
+                whitelist = cfg.get("whitelist", [])
+                w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
+                added_whites = 0
+                for rw in remote_whites:
+                    rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
+                    if not rw_ip:
+                        continue
+                    unban_ip_core(rw_ip, status_event="WHITELIST")
+                    rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
+                    if rw_ip not in w_map:
+                        w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
+                        added_whites += 1
+                cfg["whitelist"] = list(w_map.values())
+                save_config(cfg)
+
+                # 返回本地独有的黑名单与白名单给发起端
+                remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
+                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips ]
+
+                remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
+                missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
+
+                self._send_json({
+                    "success": True,
+                    "added_bans": added_bans,
+                    "added_whites": added_whites,
+                    "remote_blacklist": missing_for_remote_bans,
+                    "remote_whitelist": missing_for_remote_whites
+                })
+                return
+
             if path == "/api/cluster/sync_whitelist":
                 token = self.headers.get("X-Cluster-Token", "").strip()
                 cfg = load_config()
@@ -8265,6 +8488,8 @@ def run_server():
     sniffer_instance.start()
     site_collector_instance.start()
     cleanup_expired_bans()
+    # 启动多机集群黑白名单全量双向定时自动对齐巡检
+    start_cluster_autosync_worker()
 
     # 后台平滑增量重放黑名单到 iptables / 黑洞路由（彻底杜绝进程风暴与 CPU 脉冲）
     def _async_replay_blacklist():

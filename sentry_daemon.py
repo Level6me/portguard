@@ -1093,7 +1093,7 @@ def normalize_cluster_node(node):
     """规范化协同节点数据结构，确保字段完整并兼容历史字符串格式"""
     if isinstance(node, dict):
         ip = str(node.get("ip", "")).strip()
-        port = int(node.get("port", 9099) or 9099)
+        port = int(node.get("port", 9098) or 9098)
         remark = str(node.get("remark", "")).strip() or "协同节点"
         created_at = node.get("created_at") or time.strftime("%Y-%m-%d %H:%M:%S")
         status = node.get("status", "unknown")
@@ -1112,7 +1112,7 @@ def normalize_cluster_node(node):
         s = node.strip()
         if not s:
             return None
-        port = 9099
+        port = 9098
         if "://" in s:
             s = s.split("://", 1)[1]
         if "/" in s:
@@ -1123,7 +1123,7 @@ def normalize_cluster_node(node):
             try:
                 port = int(parts[1])
             except Exception:
-                port = 9099
+                port = 9098
         return {
             "ip": s,
             "port": port,
@@ -1158,7 +1158,7 @@ def broadcast_cluster_ban(ip, reason, level):
         node = normalize_cluster_node(raw_node)
         if not node or not node.get("ip"):
             continue
-        node_url = f"http://{node['ip']}:{node.get('port', 9099)}"
+        node_url = f"http://{node['ip']}:{node.get('port', 9098)}"
         def _send(url, pl, tk):
             try:
                 target = f"{url}/api/cluster/sync_ban"
@@ -1170,6 +1170,43 @@ def broadcast_cluster_ban(ip, reason, level):
                 urllib.request.urlopen(req, timeout=3)
             except Exception:
                 pass
+        _EXECUTOR.submit(_send, node_url, payload, token)
+
+
+def broadcast_cluster_unban(ip):
+    """向集群协同节点广播解封 IP"""
+    cfg = load_config()
+    cluster_cfg = cfg.get("cluster_sync", {})
+    if not cluster_cfg.get("enabled", False):
+        return
+    secret = cluster_cfg.get("cluster_secret", "").strip()
+    nodes = cluster_cfg.get("cluster_nodes", [])
+    if not secret or not nodes:
+        return
+
+    token = generate_cluster_token(f"unban_{ip}", secret)
+    payload = json.dumps({
+        "ip": ip,
+        "source_node": cfg.get("node_name", socket.gethostname())
+    }).encode("utf-8")
+
+    for raw_node in nodes:
+        node = normalize_cluster_node(raw_node)
+        if not node or not node.get("ip"):
+            continue
+        node_url = f"http://{node['ip']}:{node.get('port', 9098)}"
+        def _send(url, pl, tk):
+            try:
+                target = f"{url}/api/cluster/sync_unban"
+                req = urllib.request.Request(target, data=pl, headers={
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": tk,
+                    "User-Agent": "PortGuardMesh/2.0"
+                })
+                urllib.request.urlopen(req, timeout=3)
+            except Exception:
+                pass
+        _EXECUTOR.submit(_send, node_url, payload, token)
 def broadcast_cluster_whitelist(action, data, remark=""):
     """
     向集群协同节点异步广播白名单操作 (add / delete / batch_add / sync_all)
@@ -1197,7 +1234,7 @@ def broadcast_cluster_whitelist(action, data, remark=""):
         node = normalize_cluster_node(raw_node)
         if not node or not node.get("ip"):
             continue
-        node_url = f"http://{node['ip']}:{node.get('port', 9099)}"
+        node_url = f"http://{node['ip']}:{node.get('port', 9098)}"
         def _send(url, pl, tk):
             try:
                 target = f"{url}/api/cluster/sync_whitelist"
@@ -1210,6 +1247,130 @@ def broadcast_cluster_whitelist(action, data, remark=""):
             except Exception:
                 pass
         _EXECUTOR.submit(_send, node_url, payload, token)
+
+
+def sync_cluster_mesh_state(target_node=None):
+    """全量双向对齐集群节点的黑名单与白名单数据"""
+    cfg = load_config()
+    cluster_cfg = cfg.get("cluster_sync", {})
+    if not cluster_cfg.get("enabled", False):
+        return {"success": False, "msg": "集群联防协同功能未开启"}
+    secret = cluster_cfg.get("cluster_secret", "").strip()
+    nodes = cluster_cfg.get("cluster_nodes", [])
+    if not secret or not nodes:
+        return {"success": False, "msg": "当前未配置集群通信密钥或对端节点"}
+
+    # 1. 准备本地数据
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
+    local_black_rows = c.fetchall()
+    conn.close()
+
+    local_blacklist = [
+        {
+            "ip": r[0], "reason": r[1], "country": r[2], "level": r[3],
+            "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7]
+        }
+        for r in local_black_rows if r[0]
+    ]
+    local_whitelist = cfg.get("whitelist", [])
+
+    token = generate_cluster_token("sync_state_exchange", secret)
+    payload = json.dumps({
+        "source_node": cfg.get("node_name", socket.gethostname()),
+        "blacklist": local_blacklist,
+        "whitelist": local_whitelist
+    }).encode("utf-8")
+
+    target_nodes = [target_node] if target_node else nodes
+    synced_nodes = 0
+    merged_bans = 0
+    merged_whites = 0
+
+    for raw_node in target_nodes:
+        node = normalize_cluster_node(raw_node)
+        if not node or not node.get("ip"):
+            continue
+        node_url = f"http://{node['ip']}:{node.get('port', 9098)}"
+        try:
+            target = f"{node_url}/api/cluster/sync_state_exchange"
+            req = urllib.request.Request(target, data=payload, headers={
+                "Content-Type": "application/json",
+                "X-Cluster-Token": token,
+                "User-Agent": "PortGuardMesh/2.0"
+            })
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                res = json.loads(resp.read().decode('utf-8'))
+                if res.get("success"):
+                    synced_nodes += 1
+                    remote_missing_bans = res.get("remote_blacklist", [])
+                    remote_missing_whites = res.get("remote_whitelist", [])
+
+                    # 将对端独有的黑名单写入本地并下发防火墙阻断
+                    if remote_missing_bans:
+                        conn = get_db()
+                        cur = conn.cursor()
+                        for b in remote_missing_bans:
+                            b_ip = validate_ip(b.get("ip", ""))
+                            if not b_ip or ip_in_whitelist(b_ip):
+                                continue
+                            ban_ip_firewall(b_ip)
+                            src = b.get("source_node", node["ip"])
+                            cur.execute("""
+                            INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                b_ip, b.get("reason", "集群全量对齐"), b.get("country", "集群联防"),
+                                b.get("level", "极高危"), b.get("ban_time", time.strftime("%Y-%m-%d %H:%M:%S")),
+                                b.get("timestamp", int(time.time())), b.get("ban_expire"), f"集群 ({src})"
+                            ))
+                            merged_bans += 1
+                        conn.commit()
+                        conn.close()
+
+                    # 将对端独有的白名单写入本地
+                    if remote_missing_whites:
+                        cur_cfg = load_config()
+                        w_list = cur_cfg.get("whitelist", [])
+                        w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in w_list }
+                        for w in remote_missing_whites:
+                            w_ip = validate_ip(w.get("ip") if isinstance(w, dict) else w)
+                            if not w_ip:
+                                continue
+                            unban_ip_core(w_ip, status_event="WHITELIST")
+                            w_rem = w.get("remark", "集群对齐白名单") if isinstance(w, dict) else "集群对齐白名单"
+                            if w_ip not in w_map:
+                                w_map[w_ip] = {"ip": w_ip, "remark": w_rem}
+                                merged_whites += 1
+                        cur_cfg["whitelist"] = list(w_map.values())
+                        save_config(cur_cfg)
+        except Exception as e:
+            print(f"[PortGuard Mesh] 对齐节点 {node_url} 异常: {e}")
+
+    return {
+        "success": synced_nodes > 0,
+        "synced_nodes": synced_nodes,
+        "merged_bans": merged_bans,
+        "merged_whites": merged_whites,
+        "msg": f"已完成与 {synced_nodes} 个协同节点的双向全量对齐（已吸纳同步黑名单 {merged_bans} 条，白名单 {merged_whites} 条）"
+    }
+
+
+def start_cluster_autosync_worker():
+    """后台每 60 秒自动进行一次集群黑白名单全量双向对齐巡检"""
+    def _worker():
+        while True:
+            try:
+                time.sleep(60)
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                if cluster_cfg.get("enabled", False) and cluster_cfg.get("cluster_nodes"):
+                    sync_cluster_mesh_state()
+            except Exception:
+                pass
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
 
 
 def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
