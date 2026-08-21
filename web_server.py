@@ -533,6 +533,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             gap: 4px;
         }
         .ip-text:hover { text-decoration: underline; }
+        .geo-subline {
+            font-size: 11px;
+            color: var(--text-sec);
+            margin-top: 2px;
+            font-weight: 500;
+            line-height: 1.3;
+            max-width: 175px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: default;
+        }
 
         /* Tags & Badges */
         .tag {
@@ -3079,7 +3091,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <tr>
                     <td>
                         <div style="font-weight: 700; font-family: monospace; color: var(--text);">${escapeHtml(att.ip)}</div>
-                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(geoSub)}</div>
+                        <div class="geo-subline" title="${escapeHtml(geoSub)}">${escapeHtml(geoSub)}</div>
                     </td>
                     <td>
                         <div style="max-width: 260px; line-height: 1.4;">${portsBadge}</div>
@@ -3545,7 +3557,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div style="display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border-subtle);">
                 <div>
                     <span class="ip-text" onclick="showIPDetail('${t.ip}')" title="点击查看 IP 详情">${t.ip}</span>
-                    <span style="font-size:11px; color:var(--text-sec); margin-left:4px;">${geoText}</span>
+                    <span class="geo-subline" style="display:inline-block; vertical-align:middle; margin-left:4px; margin-top:0; max-width:150px;" title="${escapeHtml(geoText)}">${geoText}</span>
                     <div style="font-size:11px; color:var(--text-sec); margin-top:2px;">探测端口: <b>TCP/${t.port}</b> · ${t.port_name || '未定义'}</div>
                 </div>
                 <div style="text-align:right;">
@@ -3661,7 +3673,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <td>${formatTwoLineTime(e.attack_time)}</td>
                 <td>
                     <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
-                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                    <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
@@ -3733,7 +3745,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <tr>
                 <td>
                     <span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span>
-                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                    <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td>${nodeBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
@@ -4662,7 +4674,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
-                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                        <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                     </td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
                     <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(l.port_name || '网络连接')}</span></td>
@@ -4695,7 +4707,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
-                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                        <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                     </td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(domain)}">🌐 ${escapeHtml(domain)}</span></td>
                     <td>
