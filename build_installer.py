@@ -58,14 +58,14 @@ fi
 INSTALL_DIR="/opt/portguard"
 OLD_INSTALL_DIR="/opt/portsentry-ui"
 
-echo -e "\n${BLUE}[1/5] 正在检测并安装底层依赖环境 (Python3, iptables, sqlite3)...${NC}"
+echo -e "\n${BLUE}[1/5] 正在检测并安装底层依赖环境 (Python3, iptables, ipset, sqlite3)...${NC}"
 if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y
-    apt-get install -y python3 iptables iproute2 curl sqlite3
+    apt-get install -y python3 iptables ipset iproute2 curl sqlite3
 elif command -v yum >/dev/null 2>&1; then
-    yum install -y python3 iptables iproute curl sqlite
+    yum install -y python3 iptables ipset iproute curl sqlite
 elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y python3 iptables iproute curl sqlite
+    dnf install -y python3 iptables ipset iproute curl sqlite
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then

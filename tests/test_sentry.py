@@ -237,6 +237,7 @@ class IsTrapPortTest(unittest.TestCase):
         
         # 执行封禁
         ban_ip(test_ip, port=443, reason="Web特征: 探测高危敏感配置文件", category="web", level="极高危")
+        time.sleep(0.1)  # 等待异步批量日志落盘
         
         conn = get_db()
         c = conn.cursor()

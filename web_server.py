@@ -26,7 +26,8 @@ from sentry_daemon import (
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
-    get_all_business_ports_info, get_active_system_ports, unban_ip_core
+    get_all_business_ports_info, get_active_system_ports, unban_ip_core,
+    ban_ip_firewall, init_firewall_ipset
 )
 
 def parse_loose_json_or_lines(text):
@@ -7094,38 +7095,10 @@ def run_server():
     # 后台平滑增量重放黑名单到 iptables / 黑洞路由（彻底杜绝进程风暴与 CPU 脉冲）
     def _async_replay_blacklist():
         try:
-            existing_rules = set()
-            try:
-                p = subprocess.run(["iptables", "-S", "INPUT"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-                for line in (p.stdout or "").splitlines():
-                    if "-j DROP" in line and "-s" in line:
-                        parts = line.split()
-                        if "-s" in parts:
-                            idx = parts.index("-s")
-                            if idx + 1 < len(parts):
-                                existing_rules.add(parts[idx + 1].split("/")[0])
-            except Exception:
-                pass
-
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("SELECT ip FROM blacklist")
-            rows = c.fetchall()
-            conn.close()
-
-            count = 0
-            for (ip,) in rows:
-                v = validate_ip(ip)
-                if not v:
-                    continue
-                if v not in existing_rules:
-                    run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
-                    run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
-                    count += 1
-                    time.sleep(0.01)  # 10ms 间隔平滑 CPU 占用
-            print(f"[PortGuard] 异步完成 {count} 条增量黑名单防火墙规则重放 (已存在 {len(existing_rules)} 条)")
+            init_firewall_ipset()
+            print("[PortGuard] 异步完成内核 ipset 黑名单规则初始化与加载")
         except Exception as e:
-            print(f"[PortGuard] 黑名单重放失败: {e}")
+            print(f"[PortGuard] 黑名单初始化失败: {e}")
     threading.Thread(target=_async_replay_blacklist, daemon=True).start()
     
     try:
