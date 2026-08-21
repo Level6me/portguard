@@ -1169,6 +1169,45 @@ def broadcast_cluster_ban(ip, reason, level):
                 urllib.request.urlopen(req, timeout=3)
             except Exception:
                 pass
+def broadcast_cluster_whitelist(action, data, remark=""):
+    """
+    向集群协同节点异步广播白名单操作 (add / delete / batch_add / sync_all)
+    action: "add" | "delete" | "batch_add" | "sync_all"
+    """
+    cfg = load_config()
+    cluster_cfg = cfg.get("cluster_sync", {})
+    if not cluster_cfg.get("enabled", False):
+        return
+    secret = cluster_cfg.get("cluster_secret", "").strip()
+    nodes = cluster_cfg.get("cluster_nodes", [])
+    if not secret or not nodes:
+        return
+
+    sign_target = f"whitelist_{action}"
+    token = generate_cluster_token(sign_target, secret)
+    payload = json.dumps({
+        "action": action,
+        "data": data,
+        "remark": remark,
+        "source_node": cfg.get("node_name", socket.gethostname())
+    }).encode("utf-8")
+
+    for raw_node in nodes:
+        node = normalize_cluster_node(raw_node)
+        if not node or not node.get("ip"):
+            continue
+        node_url = f"http://{node['ip']}:{node.get('port', 9099)}"
+        def _send(url, pl, tk):
+            try:
+                target = f"{url}/api/cluster/sync_whitelist"
+                req = urllib.request.Request(target, data=pl, headers={
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": tk,
+                    "User-Agent": "PortGuardMesh/2.0"
+                })
+                urllib.request.urlopen(req, timeout=3)
+            except Exception:
+                pass
         _EXECUTOR.submit(_send, node_url, payload, token)
 
 

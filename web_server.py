@@ -31,7 +31,7 @@ from sentry_daemon import (
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
     ban_ip_firewall, init_firewall_ipset, verify_cluster_token, generate_cluster_token, ban_ip,
-    normalize_cluster_node
+    normalize_cluster_node, broadcast_cluster_whitelist
 )
 
 def parse_loose_json_or_lines(text):
@@ -1230,6 +1230,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 </a>
                                 <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); exportWhitelistJSON();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
                                     <span>📤</span><span>导出白名单 (JSON)</span>
+                                </a>
+                                <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
+                                <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); syncAllWhitelistToCluster();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
+                                    <span>📡</span><span>全网协同白名单同步</span>
                                 </a>
                             </div>
                         </div>
@@ -5099,6 +5103,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }).catch(() => showToast('导出白名单失败', '❌'));
     }
 
+    async function syncAllWhitelistToCluster() {
+        if (!confirm('确定要将本机的全部信任白名单立即广播同步至所有集群协同节点吗？')) return;
+        showToast('正在向全网协同节点广播同步白名单...', '⏳');
+        try {
+            const res = await fetch('/api/cluster/sync_all_whitelist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '全网协同白名单同步完成！', '🎉');
+                loadWhitelist();
+            } else {
+                showToast(data.msg || '同步失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
     function downloadJSONFile(dataObj, fileName) {
         const jsonStr = JSON.stringify(dataObj, null, 2);
         const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
@@ -6725,6 +6750,96 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
                 return
 
+            if path == "/api/cluster/sync_whitelist":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                action = req_data.get("action", "add").strip()
+                data = req_data.get("data")
+                remark = req_data.get("remark", "集群协同白名单").strip()
+                source_node = req_data.get("source_node", "远程节点").strip()
+
+                sign_target = f"whitelist_{action}"
+                if not verify_cluster_token(sign_target, token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                whitelist = cfg.get("whitelist", [])
+
+                if action == "add":
+                    ip = str(data or "").strip()
+                    valid_ip = validate_ip(ip)
+                    if not valid_ip:
+                        self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
+                        return
+                    ip = valid_ip
+                    unban_ip_core(ip, status_event="WHITELIST")
+                    if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
+                        node_remark = f"[{source_node}联防] {remark}" if not str(remark).startswith(f"[{source_node}") else remark
+                        whitelist.append({"ip": ip, "remark": node_remark})
+                        cfg["whitelist"] = whitelist
+                        save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已成功同步添加白名单: {ip}"})
+                    return
+
+                elif action == "delete":
+                    ip = str(data or "").strip()
+                    whitelist = [w for w in whitelist if (w.get("ip") if isinstance(w, dict) else w) != ip]
+                    cfg["whitelist"] = whitelist
+                    save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已成功同步移除白名单: {ip}"})
+                    return
+
+                elif action in ("batch_add", "sync_all"):
+                    items = data if isinstance(data, list) else []
+                    updated_cnt = 0
+                    current_map = {}
+                    for w in whitelist:
+                        w_ip = w.get("ip") if isinstance(w, dict) else w
+                        if w_ip:
+                            current_map[w_ip] = w if isinstance(w, dict) else {"ip": w_ip, "remark": "信任IP"}
+
+                    for it in items:
+                        if isinstance(it, dict):
+                            it_ip = str(it.get("ip", "")).strip()
+                            it_rem = str(it.get("remark", remark)).strip()
+                        else:
+                            it_ip = str(it).strip()
+                            it_rem = remark
+                        v_ip = validate_ip(it_ip)
+                        if not v_ip:
+                            continue
+                        unban_ip_core(v_ip, status_event="WHITELIST")
+                        node_rem = f"[{source_node}联防] {it_rem}" if not it_rem.startswith(f"[{source_node}") else it_rem
+                        if v_ip not in current_map:
+                            current_map[v_ip] = {"ip": v_ip, "remark": node_rem}
+                            updated_cnt += 1
+
+                    cfg["whitelist"] = list(current_map.values())
+                    save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已批量同步 {updated_cnt} 条协同白名单", "count": updated_cnt})
+                    return
+
+                self._send_json({"success": False, "msg": "未知的白名单同步操作"}, status=400)
+                return
+
+            if path == "/api/cluster/sync_all_whitelist":
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                if not cluster_cfg.get("enabled", False):
+                    self._send_json({"success": False, "msg": "集群联防协同功能未开启"}, status=400)
+                    return
+                nodes = cluster_cfg.get("cluster_nodes", [])
+                if not nodes:
+                    self._send_json({"success": False, "msg": "当前未配置任何集群协同节点"}, status=400)
+                    return
+                whitelist = cfg.get("whitelist", [])
+                broadcast_cluster_whitelist("sync_all", whitelist, "全网协同全量同步")
+                self._send_json({"success": True, "msg": f"已向 {len(nodes)} 个集群节点广播全量白名单 (共 {len(whitelist)} 条规则)"})
+                return
+
             if path == "/api/cluster/ping":
                 token = self.headers.get("X-Cluster-Token", "").strip()
                 cfg = load_config()
@@ -7243,6 +7358,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     whitelist.append({"ip": ip, "remark": remark})
                     cfg["whitelist"] = whitelist
                     save_config(cfg)
+                    # 广播至集群协同节点
+                    broadcast_cluster_whitelist("add", ip, remark)
                 
                 extra_tip = "（已自动解除原黑名单封禁并撤销防火墙阻断）" if was_banned else ""
                 self._send_json({"success": True, "msg": f"已成功将 {ip} 加入信任白名单{extra_tip}！"})
@@ -7253,6 +7370,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 cfg = load_config()
                 cfg["whitelist"] = [w for w in cfg.get("whitelist", []) if (w.get("ip") if isinstance(w, dict) else w) != ip]
                 save_config(cfg)
+                # 广播至集群协同节点
+                broadcast_cluster_whitelist("delete", ip)
                 self._send_json({"success": True, "msg": f"已移除白名单: {ip}"})
                 return
 
@@ -7314,8 +7433,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "msg": "未能提取到有效的 IP 白名单项"}, status=400)
                     return
                     
-                cfg["whitelist"] = list(current_map.values())
+                new_whitelist = list(current_map.values())
+                cfg["whitelist"] = new_whitelist
                 save_config(cfg)
+                # 广播批量导入至集群协同节点
+                broadcast_cluster_whitelist("batch_add", new_whitelist, "批量导入同步")
                 unban_tip = f"，并同步解除 {unbanned_count} 个原黑名单目标" if unbanned_count > 0 else ""
                 self._send_json({
                     "success": True,
