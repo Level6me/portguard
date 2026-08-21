@@ -73,6 +73,12 @@ DEFAULT_CONFIG = {
     "trap_all_unopened_ports": False,
     "trap_all_ports": False,
     "defense_paused": False,
+    "node_name": "本机节点",
+    "cluster_sync": {
+        "enabled": False,
+        "cluster_secret": "",
+        "cluster_nodes": []
+    },
     "business_ports": [
         {"port": 80, "name": "HTTP 网站服务", "category": "web", "remark": "默认Web服务"},
         {"port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "默认加密Web服务"}
@@ -703,7 +709,8 @@ def init_db():
         level TEXT,
         ban_time TEXT,
         timestamp INTEGER,
-        ban_expire INTEGER
+        ban_expire INTEGER,
+        source_node TEXT DEFAULT '本机'
     )
     """)
     
@@ -804,6 +811,10 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE blacklist ADD COLUMN ban_expire INTEGER")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE blacklist ADD COLUMN source_node TEXT DEFAULT '本机'")
     except Exception:
         pass
     try:
@@ -1642,10 +1653,11 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     # 将拦截记录写入内存队列批量落盘
     log_port_access_entry(ip, port_val, port_name, action="INTERCEPTED")
 
+    node_name = cfg.get("node_name", "本机") or "本机"
     c.execute("""
-    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
-    VALUES (?, ?, '分析中...', ?, ?, ?, ?)
-    """, (ip, ban_reason, event_level, now_str, now_ts, ban_expire))
+    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+    VALUES (?, ?, '分析中...', ?, ?, ?, ?, ?)
+    """, (ip, ban_reason, event_level, now_str, now_ts, ban_expire, node_name))
     conn.commit()
     conn.close()
     

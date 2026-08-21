@@ -1172,6 +1172,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <thead>
                             <tr>
                                 <th>已阻断 IP 地址</th>
+                                <th>来源服务器 / 节点</th>
                                 <th>拉黑原因 / 诱饵端口</th>
                                 <th>归属地</th>
                                 <th>处置动作</th>
@@ -1180,7 +1181,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </tr>
                         </thead>
                         <tbody id="blacklist-tbody">
-                            <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
+                            <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1375,6 +1376,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             ⏸️ 暂停所有拦截
                         </button>
                     </div>
+                </div>
+
+                <!-- 0.5 本机服务器节点名称 / 标识 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🏷️ 本机服务器节点标识名称</div>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
+                        用于在黑名单列表与多机集群联防中标记拦截来源（例如：<code>搬瓦工生产节点</code>、<code>腾讯云韩国测试机</code>、<code>阿里云韩国生产机</code>）。
+                    </div>
+                    <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产机" style="width: 100%; padding: 8px 10px; font-size: 12px; font-weight: 600;">
                 </div>
 
                 <!-- 1. 扫描与探测防御开关 -->
@@ -3526,7 +3536,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPaginationUI(totalCount, blacklistPage, PAGE_SIZE, 'blacklist-total-cnt', 'blacklist-page-info', 'btn-blacklist-prev', 'btn-blacklist-next', 'blacklist-page-nums', 'setBlacklistPage');
 
         if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 24px;">当前内核黑名单池为空</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">当前内核黑名单池为空</td></tr>';
             return;
         }
 
@@ -3537,12 +3547,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let html = '';
         pageList.forEach(b => {
             const geoText = formatGeoCN(b);
+            const node = (b.source_node || '本机').trim();
+            let nodeBadge = '';
+            if (node.includes('腾讯云')) {
+                nodeBadge = `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(node)}</span>`;
+            } else if (node.includes('阿里云')) {
+                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">🟧 ${escapeHtml(node)}</span>`;
+            } else if (node.includes('搬瓦工')) {
+                nodeBadge = `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(node)}</span>`;
+            } else if (node.includes('手动')) {
+                nodeBadge = `<span class="tag" style="background: rgba(255, 149, 0, 0.12); color: #ff9500; border: 1px solid rgba(255, 149, 0, 0.3); font-weight: 700; white-space: nowrap;">👤 手动添加</span>`;
+            } else if (node.includes('联防') || node.includes('集群')) {
+                nodeBadge = `<span class="tag" style="background: rgba(88, 86, 214, 0.12); color: #5856d6; border: 1px solid rgba(88, 86, 214, 0.3); font-weight: 700; white-space: nowrap;">🌐 ${escapeHtml(node)}</span>`;
+            } else {
+                nodeBadge = `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(node)}</span>`;
+            }
+
             html += `
             <tr>
                 <td><span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span></td>
+                <td>${nodeBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
-                <td><span class="tag danger" style="font-size:11px; font-weight:700;">iptables + blackhole</span></td>
+                <td><span class="tag danger" style="font-size:11px; font-weight:700;">ipset + blackhole</span></td>
                 <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${b.ban_time}</td>
                 <td>
                     <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
@@ -5060,6 +5087,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 updateDefensePauseUI(data.defense_paused);
             }
             // 策略中心页面控件同步
+            if (document.getElementById('setting-policy-node-name')) {
+                document.getElementById('setting-policy-node-name').value = String(data.node_name || '本机节点');
+            }
             if (document.getElementById('setting-policy-scan-threshold')) {
                 document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold || 3);
             }
@@ -5105,6 +5135,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     async function saveIntegratedPolicySettings() {
+        const nodeName = document.getElementById('setting-policy-node-name')?.value.trim() || '本机节点';
         const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '3');
         const scanWindow = parseInt(document.getElementById('setting-policy-scan-window')?.value || '15');
         const trapThreshold = parseInt(document.getElementById('setting-policy-trap-threshold')?.value || '2');
@@ -5119,6 +5150,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    node_name: nodeName,
                     enable_port_scan_defense: true,
                     port_scan_threshold: scanThreshold,
                     port_scan_window_seconds: scanWindow,
@@ -6009,6 +6041,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
                     "defense_paused": bool(cfg.get("defense_paused", False)),
+                    "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
                 })
                 return
@@ -6047,7 +6080,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/blacklist":
                 conn = get_db()
                 c = conn.cursor()
-                c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 self._send_json(rows)
@@ -6262,10 +6295,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 
                 conn = get_db()
                 c = conn.cursor()
+                node_name = cfg.get("node_name", "本机") or "本机"
                 c.execute("""
-                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp)
-                VALUES (?, ?, '手动添加', '极高危', ?, ?)
-                """, (ip, reason, now_str, now_ts))
+                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                VALUES (?, ?, '手动添加', '极高危', ?, ?, NULL, ?)
+                """, (ip, reason, now_str, now_ts, f"手动添加 ({node_name})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
                 VALUES (?, 0, 'MANUAL', ?, 'manual', '极高危', '手动添加', '', '', '', ?, ?, 'BANNED')
@@ -6312,6 +6346,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             if path == "/api/settings":
                 cfg = load_config()
+                if "node_name" in req_data:
+                    cfg["node_name"] = str(req_data["node_name"]).strip() or "本机节点"
                 if "trap_threshold" in req_data:
                     cfg["trap_threshold"] = int(req_data["trap_threshold"])
                 if "trap_window_seconds" in req_data:
@@ -6452,10 +6488,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                     run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
                     run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
 
+                    cfg_import = load_config()
+                    node_name = cfg_import.get("node_name", "本机") or "本机"
                     c.execute("""
-                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (ip, reason, country, level, ban_time, now_ts, None))
+                    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (ip, reason, country, level, ban_time, now_ts, None, f"批量导入 ({node_name})"))
                     success_count += 1
                     
                 run_firewall_cmd("iptables-save")
