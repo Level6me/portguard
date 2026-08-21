@@ -34,6 +34,15 @@ elif not os.path.exists("/opt/portguard") and os.path.exists("/opt/portsentry-ui
     DB_PATH = "/opt/portsentry-ui/data.db"
     CONFIG_PATH = "/opt/portsentry-ui/config.json"
 
+PUBLIC_INFRASTRUCTURE_IPS = {
+    "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4",
+    "114.114.114.114", "114.114.115.115",
+    "223.5.5.5", "223.6.6.6",
+    "9.9.9.9", "149.112.112.112",
+    "119.29.29.29", "182.254.116.116",
+    "180.76.76.76"
+}
+
 DEFAULT_CONFIG = {
     "trap_ports": [
         {"port": 21, "name": "FTP 暴力破解诱饵", "category": "ftp", "enabled": True, "level": "高危"},
@@ -52,6 +61,14 @@ DEFAULT_CONFIG = {
     "whitelist": [
         {"ip": "127.0.0.1", "remark": "本地回环"},
         {"ip": "::1", "remark": "IPv6 本地回环"},
+        {"ip": "1.1.1.1", "remark": "Cloudflare DNS (系统基础设施)"},
+        {"ip": "1.0.0.1", "remark": "Cloudflare DNS (系统基础设施)"},
+        {"ip": "8.8.8.8", "remark": "Google DNS (系统基础设施)"},
+        {"ip": "8.8.4.4", "remark": "Google DNS (系统基础设施)"},
+        {"ip": "223.5.5.5", "remark": "Aliyun DNS (系统基础设施)"},
+        {"ip": "223.6.6.6", "remark": "Aliyun DNS (系统基础设施)"},
+        {"ip": "119.29.29.29", "remark": "Tencent DNS (系统基础设施)"},
+        {"ip": "114.114.114.114", "remark": "114 DNS (系统基础设施)"},
         {"ip": "10.0.0.0/8", "remark": "私网 A 类地址"},
         {"ip": "172.16.0.0/12", "remark": "私网 B 类地址"},
         {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"},
@@ -299,13 +316,17 @@ def init_firewall_ipset():
             subprocess.run(["ip6tables", "-I", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # 4. 同步数据库中已有黑名单至 ipset 集合 (服务启动恢复)
+        # 4. 强制从黑名单与防火墙解封所有基础设施 IP (1.1.1.1, 8.8.8.8 等公网权威 DNS)
+        for safe_ip in PUBLIC_INFRASTRUCTURE_IPS:
+            unban_ip_core(safe_ip)
+
+        # 5. 同步数据库中已有黑名单至 ipset 集合 (服务启动恢复)
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT ip FROM blacklist")
         for row in c.fetchall():
             ip_val = validate_ip(row["ip"])
-            if ip_val:
+            if ip_val and ip_val not in PUBLIC_INFRASTRUCTURE_IPS:
                 ban_ip_firewall(ip_val)
         conn.close()
         return True
@@ -317,7 +338,7 @@ def init_firewall_ipset():
 def ban_ip_firewall(ip):
     """下发内核拦截：优先写入 ipset 集合并下发黑洞路由，降级兼容原生 iptables。"""
     valid_ip = validate_ip(ip)
-    if not valid_ip:
+    if not valid_ip or valid_ip in PUBLIC_INFRASTRUCTURE_IPS:
         return
     ip = valid_ip
     try:
@@ -509,6 +530,17 @@ def parse_packet(raw_data):
         if len(l4_hdr) < 4:
             return None
         src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
+
+        # 若为 UDP 协议：必须严格过滤所有出站回包与代理转发流量！
+        if proto_num == 17:
+            # 1. 常见公共服务源端口返回流量（DNS 53/853/5353, NTP 123, HTTPS/QUIC 443/80, OpenVPN 1194 等）直接丢弃
+            if src_port in (53, 123, 853, 5353, 443, 80, 1194, 51820):
+                return None
+            # 2. 目标端口属于出站临时随机回包端口 (ephemeral ports >= 1024) 彻底忽略
+            # (彻底避免 Trojan、代理转发、DNS、QUIC 正常出站回包被误判为入站端口扫描)
+            if dst_port >= 1024:
+                return None
+
         return ParsedPacket(src_ip, dst_port, proto_str, stealth_type=stealth_type)
     except Exception:
         return None
@@ -1398,6 +1430,10 @@ def ip_in_whitelist(ip, whitelist_items=None):
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
 
+    # 基础设施保护：公网权威 DNS (1.1.1.1 / 8.8.8.8 等) 永久放行，严禁任何机制误拉黑
+    if str(ip).strip() in PUBLIC_INFRASTRUCTURE_IPS:
+        return True
+
     # 核心防自锁盾：只要当前是正在连接服务器的管理员活跃 SSH 会话，内核级永久放行！
     active_ssh_ips = get_active_ssh_client_ips()
     if ip in active_ssh_ips:
@@ -2168,10 +2204,18 @@ class GlobalPortSniffer:
                 time.sleep(0.01)
 
     def _handle_port_access(self, src_ip, dst_port, proto="TCP", stealth_type=None):
+        # 1. 严格豁免公共基础设施与 DNS IP (1.1.1.1, 8.8.8.8 等)，彻底杜绝影响 VPS 正常上网与 DNS 解析
+        if src_ip in PUBLIC_INFRASTRUCTURE_IPS:
+            return
+
         cfg = load_config()
         whitelist = cfg.get("whitelist", [])
         active_ports_map = get_active_system_ports()
         trap_meta = is_trap_port(dst_port, cfg)
+
+        # 2. UDP 协议保护：仅处理显式配置的蜜罐探针端口，彻底忽略一切 UDP 偶发/回包/代理转发流量
+        if proto == "UDP" and not trap_meta:
+            return
 
         # 0. 优先检测并直接秒杀 Nmap 高级隐蔽/畸形扫描 (NULL, FIN, XMAS, SYN-FIN, SYN-RST)
         if stealth_type:

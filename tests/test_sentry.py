@@ -66,10 +66,10 @@ class WhitelistTest(unittest.TestCase):
         self.assertTrue(ip_in_whitelist("::1", []))
 
     def test_exact_and_cidr(self):
-        items = [{"ip": "8.8.8.8"}, {"ip": "10.0.0.0/8"}]
-        self.assertTrue(ip_in_whitelist("8.8.8.8", items))
+        items = [{"ip": "198.51.100.1"}, {"ip": "10.0.0.0/8"}]
+        self.assertTrue(ip_in_whitelist("198.51.100.1", items))
         self.assertTrue(ip_in_whitelist("10.2.3.4", items))
-        self.assertFalse(ip_in_whitelist("8.8.4.4", items))
+        self.assertFalse(ip_in_whitelist("198.51.100.2", items))
 
 
 class FirewallCmdTest(unittest.TestCase):
@@ -134,8 +134,8 @@ class ParsePacketTest(unittest.TestCase):
         self.assertEqual(parse_packet(pkt), ("1.2.65.4", 8085, "TCP"))
 
     def test_ipv4_udp(self):
-        pkt = self._ipv4_packet(17, "8.8.8.8", "1.1.1.1", 53, 5353)
-        self.assertEqual(parse_packet(pkt), ("8.8.8.8", 5353, "UDP"))
+        pkt = self._ipv4_packet(17, "198.51.100.5", "198.51.100.1", 40000, 53)
+        self.assertEqual(parse_packet(pkt), ("198.51.100.5", 53, "UDP"))
 
     def test_ipv6_tcp(self):
         pkt = self._ipv6_packet(6, "2408:8222::1", "2409::1", 12345, 443)

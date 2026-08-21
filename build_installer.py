@@ -212,6 +212,26 @@ EOF
 
 systemctl daemon-reload
 systemctl enable portguard.service
+
+# 自动释放公网 DNS 与基础设施 IP (1.1.1.1, 8.8.8.8 等)，彻底恢复系统 DNS 与代理联通性
+ip route del blackhole 1.1.1.1/32 2>/dev/null || true
+ip route del blackhole 8.8.8.8/32 2>/dev/null || true
+ip route del blackhole 223.5.5.5/32 2>/dev/null || true
+ip route del blackhole 114.114.114.114/32 2>/dev/null || true
+iptables -D INPUT -s 1.1.1.1 -j DROP 2>/dev/null || true
+iptables -D INPUT -s 8.8.8.8 -j DROP 2>/dev/null || true
+iptables -D INPUT -s 223.5.5.5 -j DROP 2>/dev/null || true
+iptables -D INPUT -s 114.114.114.114 -j DROP 2>/dev/null || true
+if command -v ipset >/dev/null 2>&1; then
+    ipset del portguard_blacklist_v4 1.1.1.1 2>/dev/null || true
+    ipset del portguard_blacklist_v4 8.8.8.8 2>/dev/null || true
+    ipset del portguard_blacklist_v4 223.5.5.5 2>/dev/null || true
+    ipset del portguard_blacklist_v4 114.114.114.114 2>/dev/null || true
+fi
+if [[ -f "${INSTALL_DIR}/data.db" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "${INSTALL_DIR}/data.db" "DELETE FROM blacklist WHERE ip IN ('1.1.1.1','8.8.8.8','223.5.5.5','114.114.114.114','1.0.0.1','8.8.4.4','223.6.6.6','119.29.29.29');" 2>/dev/null || true
+fi
+
 systemctl restart portguard.service
 sleep 2
 
