@@ -1394,7 +1394,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
                         用于在黑名单列表与多机集群联防中标记拦截来源（例如：<code>搬瓦工生产节点</code>、<code>腾讯云韩国测试机</code>、<code>阿里云韩国生产机</code>）。
                     </div>
-                    <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产机" style="width: 100%; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产机" style="flex: 1; padding: 8px 10px; font-size: 12px; font-weight: 600;" onkeydown="if(event.key==='Enter') saveNodeNameOnly()">
+                        <button type="button" class="pill-btn primary" onclick="saveNodeNameOnly()" style="font-size: 12px; font-weight: 700; padding: 8px 18px; white-space: nowrap; cursor: pointer;">💾 保存名称</button>
+                    </div>
                 </div>
 
                 <!-- 0.8 多机集群威胁情报联防 (Mesh Sync) -->
@@ -5260,21 +5263,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function updateDefensePauseUI(paused) {
         isDefensePaused = !!paused;
-        const btn = document.getElementById('btn-toggle-defense-pause');
-        const tag = document.getElementById('defense-service-status-tag');
+        const btn = document.getElementById('btn-toggle-defense-policy-pause') || document.getElementById('btn-toggle-defense-pause');
+        const tag = document.getElementById('defense-policy-status-tag') || document.getElementById('defense-service-status-tag');
         const headerDot = document.getElementById('header-status-dot');
         const headerText = document.getElementById('header-status-text');
 
-        if (btn && tag) {
+        if (btn) {
             if (paused) {
                 btn.className = 'pill-btn accent';
+                btn.style.background = '#ff9500';
+                btn.style.color = '#ffffff';
                 btn.innerHTML = '▶️ 恢复拦截服务';
-                tag.className = 'tag warning';
-                tag.innerText = '⏸️ 拦截已暂停';
             } else {
                 btn.className = 'pill-btn danger';
+                btn.style.background = '';
+                btn.style.color = '';
                 btn.innerHTML = '⏸️ 暂停所有拦截';
+            }
+        }
+
+        if (tag) {
+            if (paused) {
+                tag.className = 'tag warning';
+                tag.style.background = 'rgba(255, 149, 0, 0.15)';
+                tag.style.color = '#ff9500';
+                tag.innerText = '⏸️ 拦截已暂停';
+            } else {
                 tag.className = 'tag success';
+                tag.style.background = '';
+                tag.style.color = '';
                 tag.innerText = '🛡️ 拦截运行中';
             }
         }
@@ -5290,6 +5307,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
+    async function saveNodeNameOnly() {
+        const input = document.getElementById('setting-policy-node-name');
+        const nodeName = input ? input.value.trim() : '';
+        if (!nodeName) {
+            showToast('节点标识名称不能为空', '⚠️');
+            return;
+        }
+        try {
+            showToast('正在保存节点标识名称...', '⏳');
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_name: nodeName })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`🏷️ 本机节点标识已更新为: ${nodeName}`, '🎉');
+            } else {
+                showToast(data.msg || '保存失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('保存异常: ' + e, '⚠️');
+        }
+    }
+
     async function loadSystemSettings() {
         try {
             const res = await fetch('/api/settings');
@@ -5298,8 +5340,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 updateDefensePauseUI(data.defense_paused);
             }
             // 策略中心页面控件同步
-            if (document.getElementById('setting-policy-node-name')) {
-                document.getElementById('setting-policy-node-name').value = String(data.node_name || '本机节点');
+            const nodeInput = document.getElementById('setting-policy-node-name');
+            if (nodeInput && document.activeElement !== nodeInput) {
+                nodeInput.value = String(data.node_name || '本机节点');
             }
             if (document.getElementById('setting-policy-scan-threshold')) {
                 document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold || 3);
@@ -5423,6 +5466,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ${escapeHtml(n.created_at || '-')}
                 </td>
                 <td style="padding: 10px 12px; text-align: right; white-space: nowrap;">
+                    <button class="action-btn" onclick="editClusterNodeRemark('${jsEscape(n.ip)}', ${n.port || 9098}, '${jsEscape(n.remark || '')}')" style="margin-right: 6px; padding: 3px 8px; font-size: 11px;">✏️ 备注</button>
                     <button class="action-btn" onclick="testSingleClusterNode('${jsEscape(n.ip)}', ${n.port || 9098})" style="margin-right: 6px; padding: 3px 8px; font-size: 11px;">⚡ 测速</button>
                     <button class="action-btn danger" onclick="deleteClusterNode('${jsEscape(n.ip)}', ${n.port || 9098})" style="padding: 3px 8px; font-size: 11px;">🗑️ 删除</button>
                 </td>
@@ -5604,6 +5648,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         } catch (e) {
             showToast('移除异常: ' + e, '⚠️');
+        }
+    }
+
+    async function editClusterNodeRemark(ip, port, currentRemark) {
+        const newRemark = prompt(`请输入节点 [${ip}:${port}] 的备注标识名称:`, currentRemark || '');
+        if (newRemark === null) return;
+        const remarkVal = newRemark.trim();
+        if (!remarkVal) {
+            showToast('节点备注名称不能为空', '⚠️');
+            return;
+        }
+        try {
+            showToast('正在更新节点备注...', '⏳');
+            const res = await fetch('/api/cluster/nodes/update_remark', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ip, port: port, remark: remarkVal })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`🏷️ 节点备注已更新为: ${remarkVal}`, '🎉');
+                loadClusterNodes();
+            } else {
+                showToast(data.msg || '更新失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
         }
     }
 
@@ -7202,6 +7273,31 @@ class RequestHandler(BaseHTTPRequestHandler):
                 cfg["cluster_sync"] = cluster_cfg
                 save_config(cfg)
                 self._send_json({"success": True, "msg": f"协同节点 {ip_raw} 已成功移除", "nodes": new_list})
+                return
+
+            if path == "/api/cluster/nodes/update_remark":
+                ip_raw = str(req_data.get("ip", "")).strip()
+                port = int(req_data.get("port", 9098) or 9098)
+                new_remark = str(req_data.get("remark", "")).strip()
+                if not new_remark:
+                    self._send_json({"success": False, "msg": "节点备注名称不能为空"}, 400)
+                    return
+                
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                existing = cluster_cfg.get("cluster_nodes", [])
+                updated = False
+                for ex in existing:
+                    if isinstance(ex, dict) and ex.get("ip") == ip_raw and int(ex.get("port", 9098)) == port:
+                        ex["remark"] = new_remark
+                        updated = True
+                if updated:
+                    cluster_cfg["cluster_nodes"] = existing
+                    cfg["cluster_sync"] = cluster_cfg
+                    save_config(cfg)
+                    self._send_json({"success": True, "msg": f"节点 {ip_raw}:{port} 备注已更新为: {new_remark}", "nodes": existing})
+                else:
+                    self._send_json({"success": False, "msg": "未找到匹配的协同节点"}, 404)
                 return
 
             if path == "/api/cluster/nodes/test_all":
