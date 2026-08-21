@@ -278,7 +278,7 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertFalse(check_http_request_traps("203.0.113.89", "ips.example.com", "GET", "/test", 200, "curl/7.88"))
             mock_ban_dip.assert_not_called()
             # 纯 IP 直连访问立即触发秒封
-            self.assertTrue(check_http_request_traps("203.0.113.89", "纯IP直连 (93.179.103.66)", "GET", "/test", 200, "curl/7.88"))
+            self.assertTrue(check_http_request_traps("203.0.113.89", "43.108.18.47", "GET", "/test", 200, "curl/7.88"))
             mock_ban_dip.assert_called_once()
 
     def test_ban_ip_comprehensive_logs_and_blacklist(self):

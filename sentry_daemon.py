@@ -1520,11 +1520,35 @@ def get_local_public_ip():
         return _CACHED_SERVER_PUBLIC_IP
     try:
         cfg = load_config()
-        if cfg.get("server_ip"):
+        if cfg.get("server_ip") and validate_ip(cfg.get("server_ip")):
             _CACHED_SERVER_PUBLIC_IP = str(cfg["server_ip"]).strip()
+            return _CACHED_SERVER_PUBLIC_IP
+        if cfg.get("public_ip") and validate_ip(cfg.get("public_ip")):
+            _CACHED_SERVER_PUBLIC_IP = str(cfg["public_ip"]).strip()
             return _CACHED_SERVER_PUBLIC_IP
     except Exception:
         pass
+
+    # 尝试从公网快速解析接口获取真实公网弹性 IP（避开云厂商内网私有 VPC 172.16/10/192.168 地址）
+    urls = [
+        "https://icanhazip.com",
+        "https://ifconfig.me/ip",
+        "https://api.ipify.org",
+        "http://checkip.amazonaws.com"
+    ]
+    import urllib.request
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "curl/7.88.1"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                cand = resp.read().decode("utf-8", errors="ignore").strip()
+                if validate_ip(cand) and not cand.startswith("127.") and not cand.startswith("172.") and not cand.startswith("10.") and not cand.startswith("192.168."):
+                    _CACHED_SERVER_PUBLIC_IP = cand
+                    return cand
+        except Exception:
+            pass
+
+    # 备用：从本地网络套接字获取
     for test_target in [("8.8.8.8", 80), ("1.1.1.1", 80)]:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3409,18 +3433,18 @@ class SiteLogCollector:
                         domain = "1Panel站点"
                     files.append((p, domain))
 
-        # 2. 1Panel 全局访问日志 (纯IP直连 / 默认兜底站点)
+        # 2. 1Panel 全局访问日志 (默认兜底站点 / IP 直连)
         for global_p in ["/opt/1panel/apps/openresty/openresty/log/access.log", "/opt/1panel/log/access.log"]:
             if os.path.exists(global_p) and global_p not in seen_paths:
                 seen_paths.add(global_p)
-                files.append((global_p, "纯IP直连"))
+                files.append((global_p, "__DIRECT_IP__"))
 
         # 3. 标准系统 Nginx 路径
         for p in glob.glob("/var/log/nginx/*access*.log"):
             if os.path.exists(p) and p not in seen_paths:
                 seen_paths.add(p)
                 bname = os.path.basename(p).replace(".access.log", "").replace("access.log", "").replace(".log", "")
-                domain = bname if bname and bname != "nginx" else "纯IP直连"
+                domain = bname if bname and bname != "nginx" else "__DIRECT_IP__"
                 files.append((p, domain))
 
         for p in glob.glob("/www/server/nginx/logs/*access*.log"):
@@ -3503,7 +3527,7 @@ class SiteLogCollector:
 
                             # 域名解析：优先站点目录域名，若是全局/直连日志且 Referer 中包含完整 URL 则提取 Host
                             req_domain = default_domain
-                            if (req_domain in ("纯IP直连", "全局反代", "Nginx主站", "")) and ref and (ref.startswith("http://") or ref.startswith("https://")):
+                            if (req_domain in ("__DIRECT_IP__", "纯IP直连", "全局反代", "Nginx主站", "")) and ref and (ref.startswith("http://") or ref.startswith("https://")):
                                 try:
                                     extracted = ref.split("/")[2].split(":")[0]
                                     if extracted and not extracted.replace(".", "").isdigit():
@@ -3511,9 +3535,9 @@ class SiteLogCollector:
                                 except Exception:
                                     pass
 
-                            if req_domain in ("纯IP直连", "全局反代", "Nginx主站", ""):
+                            if req_domain in ("__DIRECT_IP__", "纯IP直连", "全局反代", "Nginx主站", ""):
                                 srv_ip = get_local_public_ip()
-                                req_domain = f"纯IP直连 ({srv_ip})" if srv_ip else "纯IP直连"
+                                req_domain = srv_ip if srv_ip else "IP直连"
 
                             req_parts = request.split()
                             if len(req_parts) >= 2:
