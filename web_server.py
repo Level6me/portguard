@@ -6773,6 +6773,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 except urllib.error.HTTPError as e:
                     self._send_json({"success": False, "msg": f"HTTP {e.code}: 鉴权失败或密钥不一致"})
                 except Exception as e:
+                    self._send_json({"success": False, "msg": f"连接超时或无法访问 ({e})"})
+                return
+
             if path == "/api/cluster/nodes/add":
                 ip_raw = str(req_data.get("ip", "")).strip()
                 port = int(req_data.get("port", 9099) or 9099)
