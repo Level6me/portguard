@@ -235,9 +235,19 @@ class IsTrapPortTest(unittest.TestCase):
         init_db()
         test_ip = "198.51.100.99"
         
-        # 执行封禁
-        ban_ip(test_ip, port=443, reason="Web特征: 探测高危敏感配置文件", category="web", level="极高危")
-        time.sleep(0.1)  # 等待异步批量日志落盘
+        # 先行清理可能存在的脏数据
+        conn_pre = get_db()
+        c_pre = conn_pre.cursor()
+        c_pre.execute("DELETE FROM events WHERE ip = ?", (test_ip,))
+        c_pre.execute("DELETE FROM blacklist WHERE ip = ?", (test_ip,))
+        c_pre.execute("DELETE FROM port_access_logs WHERE ip = ?", (test_ip,))
+        conn_pre.commit()
+        conn_pre.close()
+
+        with mock.patch("sentry_daemon.get_active_ssh_client_ips", return_value=set()):
+            # 执行封禁
+            ban_ip(test_ip, port=443, reason="Web特征: 探测高危敏感配置文件", category="web", level="极高危")
+            time.sleep(0.1)  # 等待异步批量日志落盘
         
         conn = get_db()
         c = conn.cursor()
@@ -466,6 +476,18 @@ class IsTrapPortTest(unittest.TestCase):
         self.assertEqual(norm2["ip"], "203.0.113.5")
         self.assertEqual(norm2["port"], 8080)
         self.assertEqual(norm2["remark"], "韩国节点")
+
+    def test_cloudflare_and_cdn_exemption(self):
+        from sentry_daemon import is_infrastructure_or_cdn_ip, ip_in_whitelist
+        # Cloudflare IP 必须受永久豁免保护
+        self.assertTrue(is_infrastructure_or_cdn_ip("172.68.238.114"))
+        self.assertTrue(is_infrastructure_or_cdn_ip("162.158.178.112"))
+        self.assertTrue(is_infrastructure_or_cdn_ip("104.16.12.34"))
+        self.assertTrue(ip_in_whitelist("172.68.238.114"))
+        self.assertTrue(ip_in_whitelist("1.1.1.1"))
+        self.assertTrue(ip_in_whitelist("8.8.8.8"))
+        # 普通恶意公网 IP 不豁免
+        self.assertFalse(is_infrastructure_or_cdn_ip("198.51.100.99"))
 
 
 if __name__ == "__main__":

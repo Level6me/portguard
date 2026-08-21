@@ -43,6 +43,50 @@ PUBLIC_INFRASTRUCTURE_IPS = {
     "180.76.76.76"
 }
 
+# 权威公共 CDN 节点网段 (Cloudflare 全球边缘节点，严禁误拉黑以免导致网站 502/断网)
+CLOUDFLARE_NETWORKS = [
+    ipaddress.ip_network("173.245.48.0/20"),
+    ipaddress.ip_network("103.21.244.0/22"),
+    ipaddress.ip_network("103.22.200.0/22"),
+    ipaddress.ip_network("103.31.4.0/22"),
+    ipaddress.ip_network("141.101.64.0/18"),
+    ipaddress.ip_network("108.162.192.0/18"),
+    ipaddress.ip_network("190.93.240.0/20"),
+    ipaddress.ip_network("188.114.96.0/20"),
+    ipaddress.ip_network("197.234.240.0/22"),
+    ipaddress.ip_network("198.41.128.0/17"),
+    ipaddress.ip_network("162.158.0.0/15"),
+    ipaddress.ip_network("104.16.0.0/13"),
+    ipaddress.ip_network("104.24.0.0/14"),
+    ipaddress.ip_network("172.64.0.0/13"),
+    ipaddress.ip_network("131.0.72.0/22"),
+    ipaddress.ip_network("2400:cb00::/32"),
+    ipaddress.ip_network("2606:4700::/32"),
+    ipaddress.ip_network("2803:f800::/32"),
+    ipaddress.ip_network("2405:b500::/32"),
+    ipaddress.ip_network("2405:8100::/32"),
+    ipaddress.ip_network("2a06:98c0::/29"),
+    ipaddress.ip_network("2c0f:f248::/32")
+]
+
+def is_infrastructure_or_cdn_ip(ip):
+    """判断指定 IP 是否属于权威公共 DNS 基础设施或 Cloudflare 全球 CDN 节点 (永不拉黑)"""
+    if not ip:
+        return True
+    ip_str = str(ip).strip()
+    if ip_str in PUBLIC_INFRASTRUCTURE_IPS or ip_str in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        if addr.is_loopback:
+            return True
+        for net in CLOUDFLARE_NETWORKS:
+            if addr in net:
+                return True
+    except Exception:
+        pass
+    return False
+
 DEFAULT_CONFIG = {
     "trap_ports": [
         {"port": 21, "name": "FTP 暴力破解诱饵", "category": "ftp", "enabled": True, "level": "高危"},
@@ -316,17 +360,23 @@ def init_firewall_ipset():
             subprocess.run(["ip6tables", "-I", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # 4. 强制从黑名单与防火墙解封所有基础设施 IP (1.1.1.1, 8.8.8.8 等公网权威 DNS)
-        for safe_ip in PUBLIC_INFRASTRUCTURE_IPS:
-            unban_ip_core(safe_ip)
-
-        # 5. 同步数据库中已有黑名单至 ipset 集合 (服务启动恢复)
+        # 4. 强制从黑名单与防火墙解封所有基础设施 IP 与 Cloudflare 节点
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT ip FROM blacklist")
         for row in c.fetchall():
+            chk_ip = row["ip"]
+            if is_infrastructure_or_cdn_ip(chk_ip):
+                unban_ip_core(chk_ip)
+
+        for safe_ip in PUBLIC_INFRASTRUCTURE_IPS:
+            unban_ip_core(safe_ip)
+
+        # 5. 同步数据库中已有合法黑名单至 ipset 集合 (服务启动恢复)
+        c.execute("SELECT ip FROM blacklist")
+        for row in c.fetchall():
             ip_val = validate_ip(row["ip"])
-            if ip_val and ip_val not in PUBLIC_INFRASTRUCTURE_IPS:
+            if ip_val and not is_infrastructure_or_cdn_ip(ip_val):
                 ban_ip_firewall(ip_val)
         conn.close()
         return True
@@ -338,7 +388,7 @@ def init_firewall_ipset():
 def ban_ip_firewall(ip):
     """下发内核拦截：优先写入 ipset 集合并下发黑洞路由，降级兼容原生 iptables。"""
     valid_ip = validate_ip(ip)
-    if not valid_ip or valid_ip in PUBLIC_INFRASTRUCTURE_IPS:
+    if not valid_ip or is_infrastructure_or_cdn_ip(valid_ip) or ip_in_whitelist(valid_ip):
         return
     ip = valid_ip
     try:
@@ -351,8 +401,12 @@ def ban_ip_firewall(ip):
 
         # 1. 优先使用 ipset O(1) 集合
         if is_ipset_available():
-            subprocess.run(["ipset", "add", set_name, ip, "-exist"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            res = subprocess.run(["ipset", "add", set_name, ip, "-exist"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                init_firewall_ipset()
+                subprocess.run(["ipset", "add", set_name, ip, "-exist"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             # 降级：检查并插入 iptables
             chk = subprocess.run([fw_tool, "-C", "INPUT", "-s", ip, "-j", "DROP"],
@@ -1479,8 +1533,8 @@ def ip_in_whitelist(ip, whitelist_items=None):
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
 
-    # 基础设施保护：公网权威 DNS (1.1.1.1 / 8.8.8.8 等) 永久放行，严禁任何机制误拉黑
-    if str(ip).strip() in PUBLIC_INFRASTRUCTURE_IPS:
+    # 基础设施与公共 CDN 保护：公网权威 DNS (1.1.1.1 / 8.8.8.8 等) 及 Cloudflare 节点永久放行，严禁任何机制误拉黑
+    if is_infrastructure_or_cdn_ip(ip):
         return True
 
     # 核心防自锁盾：只要当前是正在连接服务器的管理员活跃 SSH 会话，内核级永久放行！
@@ -2490,7 +2544,7 @@ class SiteLogCollector:
 
     def _collector_loop(self):
         log_regex = re.compile(
-            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d+)\s+\S+(?:\s+"(?P<ref>[^"]*)"\s+"(?P<ua>[^"]*)")?'
+            r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d+)\s+\S+(?:\s+"(?P<ref>[^"]*)"\s+"(?P<ua>[^"]*)")?(?:\s+"(?P<xff>[^"]*)")?'
         )
         
         while self.running:
@@ -2537,9 +2591,22 @@ class SiteLogCollector:
                             m = log_regex.match(line)
                             if not m:
                                 continue
-                            ip = m.group("ip")
-                            if not validate_ip(ip) and not (":" in ip or "." in ip):
+                            raw_ip = m.group("ip")
+                            xff = (m.group("xff") or "").strip()
+                            
+                            # 智能识别 CDN 与真实客户端 IP
+                            client_ip = raw_ip
+                            if xff and xff not in ("-", "null", "None"):
+                                candidate_ips = [x.strip() for x in xff.split(",") if x.strip()]
+                                for cand in candidate_ips:
+                                    v_cand = validate_ip(cand)
+                                    if v_cand and not is_infrastructure_or_cdn_ip(v_cand):
+                                        client_ip = v_cand
+                                        break
+                                        
+                            if not validate_ip(client_ip) and not (":" in client_ip or "." in client_ip):
                                 continue
+
                             time_str = m.group("time")
                             request = m.group("request") or ""
                             status = int(m.group("status") or 200)
@@ -2576,9 +2643,10 @@ class SiteLogCollector:
                                 ftime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 ts = int(time.time())
 
-                            new_records.append((ip, req_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
+                            new_records.append((client_ip, req_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
                             try:
-                                check_http_request_traps(ip, req_domain, method, path, status, ua)
+                                if not is_infrastructure_or_cdn_ip(client_ip):
+                                    check_http_request_traps(client_ip, req_domain, method, path, status, ua)
                             except Exception:
                                 pass
                     except Exception:
