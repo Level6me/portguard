@@ -1930,6 +1930,27 @@ def get_xdb_searcher():
                     print(f"[PortGuard GeoIP] 本地 IP 库载入异常 ({p}): {e}")
         return None
 
+COMMON_ISP_MAP = {
+    "电信": "中国电信",
+    "联通": "中国联通",
+    "移动": "中国移动",
+    "铁通": "中国铁通",
+    "广电": "中国广电",
+    "阿里": "阿里云",
+    "腾讯": "腾讯云",
+    "华为": "华为云",
+    "百度": "百度云",
+    "金山云": "金山云",
+    "京东云": "京东云",
+    "教育网": "中国教育科研网",
+    "科技网": "中国科技网"
+}
+
+def format_isp_name(raw_isp):
+    if not raw_isp or raw_isp == "0":
+        return ""
+    return COMMON_ISP_MAP.get(raw_isp.strip(), raw_isp.strip())
+
 def resolve_ip_geo_local(ip):
     """尝试使用本地离线 IP 库极速解析归属地 (0ms 延时)"""
     searcher = get_xdb_searcher()
@@ -1945,12 +1966,13 @@ def resolve_ip_geo_local(ip):
             raw_isp = parts[3].strip() if len(parts) > 3 and parts[3] != "0" else ""
 
             country = translate_country_cn(raw_country)
+            isp = format_isp_name(raw_isp)
             if country or raw_region or raw_city:
                 return {
                     "country": country or "公网节点",
                     "region": raw_region,
                     "city": raw_city,
-                    "isp": raw_isp
+                    "isp": isp
                 }
     except Exception:
         pass

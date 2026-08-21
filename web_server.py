@@ -2229,10 +2229,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (country === '分析中...' || !country) return '分析中...';
         country = COUNTRY_CN_MAP[country] || country;
         let region = item.region || item.city || '';
-        if (region && !country.includes(region)) {
-            return `🌐 ${country} · ${region}`;
-        }
-        return `🌐 ${country}`;
+        let isp = item.isp || '';
+        let parts = [];
+        if (country && country !== '未知地域') parts.push(country);
+        if (region && !country.includes(region)) parts.push(region);
+        if (isp && isp !== '0' && !country.includes(isp) && !region.includes(isp)) parts.push(isp);
+        if (parts.length === 0) return '🌐 公网节点';
+        return '🌐 ' + parts.join(' · ');
     }
 
     let allEvents = [];
@@ -3396,6 +3399,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         document.getElementById('ip-detail-country').innerText = countryCN;
         document.getElementById('ip-detail-region-city').innerText = (currentDetailMeta.region || currentDetailMeta.city) ? `${currentDetailMeta.region || ''} ${currentDetailMeta.city || ''}`.trim() : '未知城市';
         document.getElementById('ip-detail-isp').innerText = currentDetailMeta.isp || '未知运营商 / 本地或专用网络';
+
+        // 异步向本地极速 IP 库拉取最新的实时归属地与网络运营商信息
+        fetch(`/api/ip_info?ip=${encodeURIComponent(ip)}`).then(r => r.json()).then(geo => {
+            if (geo && currentDetailIP === ip) {
+                const cCN = COUNTRY_CN_MAP[geo.country] || geo.country || '公网节点';
+                document.getElementById('ip-detail-country').innerText = cCN;
+                document.getElementById('ip-detail-region-city').innerText = (geo.region || geo.city) ? `${geo.region || ''} ${geo.city || ''}`.trim() : '未知城市';
+                document.getElementById('ip-detail-isp').innerText = geo.isp || '未知运营商 / 本地或专用网络';
+            }
+        }).catch(() => {});
         
         const level = currentDetailMeta.level || '高危';
         document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${level === '极高危' ? 'danger' : (level === '高危' ? 'warning' : 'accent')}">${level}</span>`;
@@ -6599,12 +6612,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(rows)
                 return
 
+            if path == "/api/ip_info":
+                query = parse_qs(parsed.query)
+                ip = query.get("ip", [""])[0].strip()
+                if not ip:
+                    self._send_json({"country": "未知地域", "region": "", "city": "", "isp": ""})
+                    return
+                geo = resolve_ip_geo(ip)
+                self._send_json(geo)
+                return
+
             if path == "/api/blacklist":
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
+                for r in rows:
+                    geo = resolve_ip_geo(r["ip"])
+                    r["country"] = geo.get("country", r.get("country", "公网节点"))
+                    r["region"] = geo.get("region", "")
+                    r["city"] = geo.get("city", "")
+                    r["isp"] = geo.get("isp", "")
                 self._send_json(rows)
                 return
 
