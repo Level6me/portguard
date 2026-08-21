@@ -7004,15 +7004,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if rb_ip not in local_bans_map:
                         ban_ip_firewall(rb_ip)
                         src = rb.get("source_node", source_node)
+                        geo_country = rb.get("country")
+                        if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
+                            geo = resolve_ip_geo(rb_ip) or {}
+                            geo_country = geo.get("country") or "公网探测"
+
                         c.execute("""
                         INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
+                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), geo_country,
                             rb.get("level", "极高危"), rb.get("ban_time", now_str),
                             rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
                         ))
                         c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (rb_ip,))
+                        _EXECUTOR.submit(resolve_ip_geo, rb_ip)
                         added_bans += 1
                 conn.commit()
                 conn.close()
@@ -7092,19 +7098,32 @@ class RequestHandler(BaseHTTPRequestHandler):
                 auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
                 ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
+                geo_country = req_data.get("country") or ""
+                geo_region = req_data.get("region") or ""
+                geo_city = req_data.get("city") or ""
+                geo_isp = req_data.get("isp") or ""
+
+                if not geo_country or geo_country in ("集群联防", "公网节点", "未知地域", ""):
+                    geo = resolve_ip_geo(ip) or {}
+                    geo_country = geo.get("country") or "公网探测"
+                    geo_region = geo.get("region") or ""
+                    geo_city = geo.get("city") or ""
+                    geo_isp = geo.get("isp") or ""
+
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
                 INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-                VALUES (?, ?, '集群联防', ?, ?, ?, ?, ?)
-                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ip, f"[{source_node}联防] {reason}", geo_country, level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, 0, 'MESH', ?, 'mesh', ?, '集群联防', '', '', '', ?, ?, 'BANNED')
-                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts))
+                VALUES (?, 0, 'MESH', ?, 'mesh', ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+                """, (ip, f"[{source_node}联防] {reason}", level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
                 conn.commit()
                 conn.close()
 
+                _EXECUTOR.submit(resolve_ip_geo, ip)
                 self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
                 return
 
@@ -8514,19 +8533,32 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
                 ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
+                geo_country = req_data.get("country") or ""
+                geo_region = req_data.get("region") or ""
+                geo_city = req_data.get("city") or ""
+                geo_isp = req_data.get("isp") or ""
+
+                if not geo_country or geo_country in ("集群联防", "公网节点", "未知地域", ""):
+                    geo = resolve_ip_geo(ip) or {}
+                    geo_country = geo.get("country") or "公网探测"
+                    geo_region = geo.get("region") or ""
+                    geo_city = geo.get("city") or ""
+                    geo_isp = geo.get("isp") or ""
+
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
                 INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-                VALUES (?, ?, '集群联防', ?, ?, ?, ?, ?)
-                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ip, f"[{source_node}联防] {reason}", geo_country, level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, 0, 'MESH', ?, 'mesh', ?, '集群联防', '', '', '', ?, ?, 'BANNED')
-                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts))
+                VALUES (?, 0, 'MESH', ?, 'mesh', ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+                """, (ip, f"[{source_node}联防] {reason}", level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
                 conn.commit()
                 conn.close()
 
+                _EXECUTOR.submit(resolve_ip_geo, ip)
                 self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
                 return
 
@@ -8605,15 +8637,21 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                     if rb_ip not in local_bans_map:
                         ban_ip_firewall(rb_ip)
                         src = rb.get("source_node", source_node)
+                        geo_country = rb.get("country")
+                        if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
+                            geo = resolve_ip_geo(rb_ip) or {}
+                            geo_country = geo.get("country") or "公网探测"
+
                         c.execute("""
                         INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
+                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), geo_country,
                             rb.get("level", "极高危"), rb.get("ban_time", now_str),
                             rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
                         ))
                         c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (rb_ip,))
+                        _EXECUTOR.submit(resolve_ip_geo, rb_ip)
                         added_bans += 1
                 conn.commit()
                 conn.close()

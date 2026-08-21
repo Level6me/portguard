@@ -934,6 +934,30 @@ def init_db():
         
     conn.commit()
     conn.close()
+    heal_cluster_geo_history()
+
+
+def heal_cluster_geo_history():
+    """后台自愈：将历史上因集群同步被占位标记为 '集群联防' 的 IP 归属地，重新解析为真实国家/省市地理位置"""
+    def _worker():
+        try:
+            time.sleep(1.0)
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT ip FROM events WHERE country = '集群联防' OR country = '' OR country IS NULL LIMIT 200")
+            rows = c.fetchall()
+            for r in rows:
+                ip = r[0]
+                geo = resolve_ip_geo(ip)
+                if geo and geo.get("country") not in ("集群联防", "公网节点", "未知地域", "", None):
+                    c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                              (geo.get("country"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), ip))
+                    c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (geo.get("country"), ip))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    threading.Thread(target=_worker, daemon=True).start()
 
 def get_hidden_ips_set():
     """获取所有隐藏 IP 的集合"""
@@ -1189,11 +1213,16 @@ def broadcast_cluster_ban(ip, reason, level):
     if not secret or not nodes:
         return
 
+    geo = resolve_ip_geo(ip) or {}
     token = generate_cluster_token(ip, secret)
     payload = json.dumps({
         "ip": ip,
         "reason": reason,
         "level": level,
+        "country": geo.get("country", ""),
+        "region": geo.get("region", ""),
+        "city": geo.get("city", ""),
+        "isp": geo.get("isp", ""),
         "source_node": cfg.get("node_name", socket.gethostname())
     }).encode("utf-8")
 
@@ -1380,15 +1409,21 @@ def sync_cluster_mesh_state(target_node=None):
 
                     ban_ip_firewall(b_ip)
                     src = clean_cluster_node_name(b.get("source_node") or node.get("name") or node.get("ip"))
+                    geo_country = b.get("country")
+                    if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
+                        geo = resolve_ip_geo(b_ip) or {}
+                        geo_country = geo.get("country") or "公网探测"
+
                     cur.execute("""
                     INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        b_ip, b.get("reason", "集群全量对齐"), b.get("country", "集群联防"),
+                        b_ip, b.get("reason", "集群全量对齐"), geo_country,
                         b.get("level", "极高危"), b.get("ban_time", time.strftime("%Y-%m-%d %H:%M:%S")),
                         b.get("timestamp", b_ts or int(time.time())), b.get("ban_expire"), f"集群 ({src})"
                     ))
                     cur.execute("DELETE FROM unbanned_ips WHERE ip = ?", (b_ip,))
+                    _EXECUTOR.submit(resolve_ip_geo, b_ip)
                     merged_bans += 1
                 conn.commit()
                 conn.close()
