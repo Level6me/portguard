@@ -18,6 +18,8 @@ import threading
 import time
 import urllib.request
 import queue
+import hmac
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -419,11 +421,22 @@ def get_local_ips():
     return ips
 
 
-def parse_packet(raw_data):
-    """解析以太网帧 / SLL 帧 / 原始 IP 报文 (IPv4 / IPv6) 中的 TCP/UDP 报文。
+class ParsedPacket(tuple):
+    """兼具 3 元组兼容性与隐蔽扫描属性扩展的数据包解析结果"""
+    def __new__(cls, src_ip, dst_port, proto_str, stealth_type=None):
+        return super(ParsedPacket, cls).__new__(cls, (src_ip, dst_port, proto_str))
 
-    返回 (src_ip, dst_port, proto_str) 或 None。支持 IPv4 与 IPv6。
-    自适应原始 IP (0B)、以太网头 (14B) 或 SLL 头 (16B) 三种报文形态。
+    def __init__(self, src_ip, dst_port, proto_str, stealth_type=None):
+        self.src_ip = src_ip
+        self.dst_port = dst_port
+        self.proto = proto_str
+        self.stealth_type = stealth_type
+
+
+def parse_packet(raw_data):
+    """解析以太网帧 / SLL 帧 / 原始 IP 报文 (IPv4 / IPv6) 中的 TCP/UDP 报文与隐蔽畸形扫描标志位。
+
+    返回 ParsedPacket(src_ip, dst_port, proto_str, stealth_type) 或 None。
     """
     try:
         if not raw_data or len(raw_data) < 20:
@@ -466,18 +479,31 @@ def parse_packet(raw_data):
             return None
         proto_str = "TCP" if proto_num == 6 else "UDP"
 
-        # 若为 TCP 协议：严格判定仅处理 SYN 连接建立握手包 (SYN=1 且 ACK=0)，彻底过滤海量已连接数据流
+        stealth_type = None
         if proto_num == 6 and len(raw_data) >= offset + ihl + 14:
             tcp_flags = raw_data[offset + ihl + 13]
-            # 仅放行 SYN 探测请求 (SYN=0x02, ACK=0x10)
-            if not (tcp_flags & 0x02) or (tcp_flags & 0x10):
+            # 深度检测 Nmap 隐蔽逃逸扫描标志位 (NULL, FIN, XMAS, SYN-FIN, SYN-RST)
+            if tcp_flags == 0:
+                stealth_type = "NULL_SCAN"
+            elif tcp_flags == 0x01:  # 仅 FIN
+                stealth_type = "FIN_SCAN"
+            elif (tcp_flags & 0x29) == 0x29:  # FIN(1) + PSH(8) + URG(32)
+                stealth_type = "XMAS_SCAN"
+            elif (tcp_flags & 0x03) == 0x03:  # SYN(2) + FIN(1)
+                stealth_type = "SYN_FIN_SCAN"
+            elif (tcp_flags & 0x06) == 0x06:  # SYN(2) + RST(4)
+                stealth_type = "SYN_RST_SCAN"
+            elif (tcp_flags & 0x02) and not (tcp_flags & 0x10):
+                stealth_type = None  # 正常标准 TCP SYN 连接探测
+            else:
+                # 过滤已建立连接的数据流与纯 ACK
                 return None
 
         l4_hdr = raw_data[offset + ihl:offset + ihl + 4]
         if len(l4_hdr) < 4:
             return None
         src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
-        return (src_ip, dst_port, proto_str)
+        return ParsedPacket(src_ip, dst_port, proto_str, stealth_type=stealth_type)
     except Exception:
         return None
 
@@ -901,10 +927,115 @@ def get_http_traps():
 _IP_404_RATE_CACHE = {}
 _IP_404_LOCK = threading.Lock()
 
+_CRAWLER_VERIFY_CACHE = {}
+_CRAWLER_CACHE_LOCK = threading.Lock()
+
+def verify_search_engine_crawler(ip, user_agent):
+    """
+    RFC 标准搜索引擎爬虫反向 DNS (PTR) 双向校验：
+    防止黑客伪造 Googlebot / Baiduspider / Bingbot 等 UA 逃逸诱捕。
+    """
+    ua = (user_agent or "").lower()
+    crawler_name = None
+    expected_suffixes = []
+
+    if "googlebot" in ua:
+        crawler_name = "Googlebot"
+        expected_suffixes = [".googlebot.com", ".google.com"]
+    elif "baiduspider" in ua:
+        crawler_name = "Baiduspider"
+        expected_suffixes = [".baidu.com", ".baidu.jp"]
+    elif "bingbot" in ua or "msnbot" in ua:
+        crawler_name = "Bingbot"
+        expected_suffixes = [".bing.com", ".search.msn.com"]
+    elif "yandexbot" in ua:
+        crawler_name = "YandexBot"
+        expected_suffixes = [".yandex.ru", ".yandex.net", ".yandex.com"]
+
+    if not crawler_name:
+        return True, None
+
+    cache_key = (ip, crawler_name)
+    with _CRAWLER_CACHE_LOCK:
+        if cache_key in _CRAWLER_VERIFY_CACHE:
+            cached_time, is_valid, msg = _CRAWLER_VERIFY_CACHE[cache_key]
+            if time.time() - cached_time < 3600:
+                return is_valid, msg
+
+    try:
+        host, _, _ = socket.gethostbyaddr(ip)
+        host = host.lower()
+        if not any(host.endswith(sfx) for sfx in expected_suffixes):
+            res = (False, f"冒充 {crawler_name} 搜索引擎爬虫 (PTR: {host})")
+        else:
+            resolved_ips = socket.gethostbyname_ex(host)[2]
+            if ip not in resolved_ips:
+                res = (False, f"冒充 {crawler_name} 爬虫 (PTR解析IP不一致: {host})")
+            else:
+                res = (True, crawler_name)
+    except Exception:
+        res = (False, f"伪造 {crawler_name} 爬虫 (无权威PTR反向记录)")
+
+    with _CRAWLER_CACHE_LOCK:
+        _CRAWLER_VERIFY_CACHE[cache_key] = (time.time(), res[0], res[1])
+    return res
+
+
+def generate_cluster_token(ip, secret):
+    return hmac.new(secret.encode('utf-8'), ip.encode('utf-8'), hashlib.sha256).hexdigest()
+
+def verify_cluster_token(ip, token, secret):
+    if not secret or not token:
+        return False
+    expected = generate_cluster_token(ip, secret)
+    return hmac.compare_digest(expected, token)
+
+def broadcast_cluster_ban(ip, reason, level):
+    cfg = load_config()
+    cluster_cfg = cfg.get("cluster_sync", {})
+    if not cluster_cfg.get("enabled", False):
+        return
+    secret = cluster_cfg.get("cluster_secret", "").strip()
+    nodes = cluster_cfg.get("cluster_nodes", [])
+    if not secret or not nodes:
+        return
+
+    token = generate_cluster_token(ip, secret)
+    payload = json.dumps({
+        "ip": ip,
+        "reason": reason,
+        "level": level,
+        "source_node": cfg.get("node_name", socket.gethostname())
+    }).encode("utf-8")
+
+    for node_url in nodes:
+        node_url = node_url.strip().rstrip("/")
+        if not node_url:
+            continue
+        def _send(url, pl, tk):
+            try:
+                target = f"{url}/api/cluster/sync_ban"
+                req = urllib.request.Request(target, data=pl, headers={
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": tk,
+                    "User-Agent": "PortGuardMesh/2.0"
+                })
+                urllib.request.urlopen(req, timeout=3)
+            except Exception:
+                pass
+        _EXECUTOR.submit(_send, node_url, payload, token)
+
+
 def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
     """根据 http_traps 规则库实时分析 HTTP 请求是否命中恶意扫描或高危敏感蜜罐特征"""
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127.") or ip_in_whitelist(ip):
         return False
+
+    # 0. 检验伪造的搜索引擎爬虫 (Fake Googlebot / Baiduspider / Bingbot)
+    is_valid_crawler, crawler_err = verify_search_engine_crawler(ip, ua)
+    if not is_valid_crawler:
+        ban_ip(ip, reason=f"爬虫防御: {crawler_err}", category="fake_crawler", level="极高危")
+        return True
 
     rules = get_http_traps()
     if not rules:
@@ -1518,7 +1649,10 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     conn.commit()
     conn.close()
     
-    # 5. 后台异步解析地理位置并回填
+    # 5. 向集群联防节点异步广播黑名单情报
+    broadcast_cluster_ban(ip, ban_reason, event_level)
+
+    # 6. 后台异步解析地理位置并回填
     def _async_geo():
         geo = resolve_ip_geo(ip)
         try:
@@ -1748,6 +1882,51 @@ class TrapServer:
             if bound_count_for_item > 0:
                 print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
 
+    def _handle_trap_client(self, client_sock, client_addr, port, port_info):
+        """交互式蜜罐服务仿真：应答逼真 Banner 并嗅探首包攻击指令 Payload (100% 恶意行为确权)"""
+        client_ip = client_addr[0]
+        payload_captured = ""
+        try:
+            client_sock.settimeout(1.2)
+            banner = None
+            if port == 21:
+                banner = b"220 ProFTPD 1.3.5 Server (Ubuntu) ready.\r\n"
+            elif port in (22, 2222):
+                banner = b"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n"
+            elif port == 23:
+                banner = b"\r\nUbuntu 22.04.4 LTS\r\nlogin: "
+            elif port == 3306:
+                banner = b"N\x00\x00\x00\n5.7.42-log\x00\x01\x00\x00\x00\x0b\x0c\r\x0e\x0f\x10\x11\x12\x00\xff\xf7\x21\x02\x00\x7f\x80\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x00mysql_native_password\x00"
+
+            if banner:
+                try:
+                    client_sock.sendall(banner)
+                except Exception:
+                    pass
+
+            try:
+                recv_data = client_sock.recv(512)
+                if recv_data:
+                    payload_captured = recv_data.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        finally:
+            try:
+                client_sock.close()
+            except Exception:
+                pass
+
+        reason_text = f"探测蜜罐端口 {port} ({port_info.get('name')})"
+        if payload_captured:
+            clean_p = " ".join(payload_captured.split())[:70]
+            reason_text += f" [捕获载荷: {clean_p}]"
+
+        print(f"[ALERT] 捕获真实攻击: IP {client_ip} 触发蜜罐 {port} - {reason_text}")
+        _THREAT_ENGINE.add_score(client_ip, 100)
+        ban_ip(client_ip, port, port_info, reason=reason_text, level="极高危")
+
     def _loop(self):
         while self.running:
             try:
@@ -1763,15 +1942,14 @@ class TrapServer:
                             try:
                                 client_sock, client_addr = s.accept()
                                 client_ip = client_addr[0]
-                                client_sock.close()
                                 
                                 # 严格忽略本机及本地回环测试流量
                                 if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
+                                    client_sock.close()
                                     continue
                                 
                                 port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
-                                print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
-                                _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
+                                _EXECUTOR.submit(self._handle_trap_client, client_sock, client_addr, port, port_info)
                             except Exception:
                                 time.sleep(0.01)
                 else:
@@ -1784,14 +1962,13 @@ class TrapServer:
                                 try:
                                     client_sock, client_addr = s.accept()
                                     client_ip = client_addr[0]
-                                    client_sock.close()
                                     
                                     if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
+                                        client_sock.close()
                                         continue
                                     
                                     port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
-                                    print(f"[ALERT] 捕获扫描攻击: IP {client_ip} 正在探测蜜罐 {port} ({port_info.get('name')})")
-                                    _EXECUTOR.submit(ban_ip, client_ip, port, port_info)
+                                    _EXECUTOR.submit(self._handle_trap_client, client_sock, client_addr, port, port_info)
                                 except Exception:
                                     time.sleep(0.01)
             except Exception as e:
@@ -1919,56 +2096,91 @@ class GlobalPortSniffer:
             self.running = False
             return
         except Exception as e:
-            print(f"[GlobalSniffer] 创建 Raw Socket 异常: {e}")
+            print(f"[GlobalSniffer] 创建 TCP Raw Socket 异常: {e}")
             self.running = False
             return
 
+        # 尝试启动 UDP Raw Socket 监听以捕获 UDP 探针扫描
+        self.raw_sock_udp = None
+        try:
+            self.raw_sock_udp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+        except Exception:
+            pass
+
         while self.running:
             try:
-                raw_data, _ = self.raw_sock.recvfrom(65535)
-                parsed = parse_packet(raw_data)
-                if not parsed:
-                    continue
-                src_ip, dst_port, proto_str = parsed
-
-                # 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
-                if (src_ip in self.local_ips
-                        or src_ip.startswith("127.")
-                        or src_ip == "0.0.0.0"
-                        or src_ip.startswith("10.")
-                        or src_ip.startswith("192.168.")
-                        or src_ip.startswith("172.16.") or src_ip.startswith("172.17.")
-                        or src_ip.startswith("172.18.") or src_ip.startswith("172.19.")
-                        or src_ip.startswith("172.2") or src_ip.startswith("172.3")
-                        or src_ip == "::1"
-                        or src_ip.startswith("fe80:")
-                        or src_ip.startswith("fc")
-                        or src_ip.startswith("fd")):
-                    continue
-
-                now_ts = time.time()
-                cache_key = (src_ip, dst_port, proto_str)
-                # 1秒内相同 IP + 端口去重防抖 (防单次突发报文风暴)
-                if cache_key in self._recent_cache:
-                    if now_ts - self._recent_cache[cache_key] < 1.0:
-                        continue
-                self._recent_cache[cache_key] = now_ts
+                sock_list = [self.raw_sock]
+                if self.raw_sock_udp:
+                    sock_list.append(self.raw_sock_udp)
                 
-                # 定期清理防抖缓存
-                if len(self._recent_cache) > 2000:
-                    cutoff = now_ts - 15.0
-                    self._recent_cache = {k: v for k, v in self._recent_cache.items() if v > cutoff}
+                readable, _, _ = select.select(sock_list, [], [], 1.0)
+                for sock in readable:
+                    raw_data, _ = sock.recvfrom(65535)
+                    parsed = parse_packet(raw_data)
+                    if not parsed:
+                        continue
+                    src_ip, dst_port, proto_str = parsed
+                    stealth_type = getattr(parsed, 'stealth_type', None)
+
+                    # 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
+                    if (src_ip in self.local_ips
+                            or src_ip.startswith("127.")
+                            or src_ip == "0.0.0.0"
+                            or src_ip.startswith("10.")
+                            or src_ip.startswith("192.168.")
+                            or src_ip.startswith("172.16.") or src_ip.startswith("172.17.")
+                            or src_ip.startswith("172.18.") or src_ip.startswith("172.19.")
+                            or src_ip.startswith("172.2") or src_ip.startswith("172.3")
+                            or src_ip == "::1"
+                            or src_ip.startswith("fe80:")
+                            or src_ip.startswith("fc")
+                            or src_ip.startswith("fd")):
+                        continue
+
+                    now_ts = time.time()
+                    cache_key = (src_ip, dst_port, proto_str)
+                    # 1秒内相同 IP + 端口去重防抖 (防单次突发报文风暴)
+                    if cache_key in self._recent_cache:
+                        if now_ts - self._recent_cache[cache_key] < 1.0 and not stealth_type:
+                            continue
+                    self._recent_cache[cache_key] = now_ts
                     
-                # 异步记录此端口连接事件
-                self._handle_port_access(src_ip, dst_port, proto=proto_str)
+                    # 定期清理防抖缓存
+                    if len(self._recent_cache) > 2000:
+                        cutoff = now_ts - 15.0
+                        self._recent_cache = {k: v for k, v in self._recent_cache.items() if v > cutoff}
+                        
+                    # 异步记录此端口连接事件
+                    self._handle_port_access(src_ip, dst_port, proto=proto_str, stealth_type=stealth_type)
             except Exception:
                 time.sleep(0.01)
 
-    def _handle_port_access(self, src_ip, dst_port, proto="TCP"):
+    def _handle_port_access(self, src_ip, dst_port, proto="TCP", stealth_type=None):
         cfg = load_config()
         whitelist = cfg.get("whitelist", [])
         active_ports_map = get_active_system_ports()
         trap_meta = is_trap_port(dst_port, cfg)
+
+        # 0. 优先检测并直接秒杀 Nmap 高级隐蔽/畸形扫描 (NULL, FIN, XMAS, SYN-FIN, SYN-RST)
+        if stealth_type:
+            stealth_names = {
+                "NULL_SCAN": "Nmap空标志位扫描 (NULL Scan)",
+                "FIN_SCAN": "Nmap FIN隐蔽扫描 (FIN Scan)",
+                "XMAS_SCAN": "Nmap圣诞树异常扫描 (XMAS Scan)",
+                "SYN_FIN_SCAN": "TCP SYN-FIN畸形逃逸扫描",
+                "SYN_RST_SCAN": "TCP SYN-RST异常扫描"
+            }
+            desc = stealth_names.get(stealth_type, f"TCP畸形逃逸扫描 ({stealth_type})")
+            port_info = {
+                "name": f"{desc} (探测端口 {dst_port})",
+                "category": "scan",
+                "level": "极高危",
+                "is_business": False
+            }
+            print(f"[STEALTH] 捕获高级逃逸扫描: IP {src_ip} -> {desc}")
+            _THREAT_ENGINE.add_score(src_ip, 100)
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+            return
         
         def _async_write(act, d):
             try:

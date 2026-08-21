@@ -27,7 +27,7 @@ from sentry_daemon import (
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
-    ban_ip_firewall, init_firewall_ipset
+    ban_ip_firewall, init_firewall_ipset, verify_cluster_token, generate_cluster_token, ban_ip
 )
 
 def parse_loose_json_or_lines(text):
@@ -5537,6 +5537,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     });
 </script>
+<div style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;" aria-hidden="true">
+    <a href="/admin_internal_backup/" rel="nofollow" tabindex="-1">System Backup Archive</a>
+    <a href="/system-debug-console/" rel="nofollow" tabindex="-1">Internal Debug Console</a>
+    <a href="/backup_internal_2026.tar.gz" rel="nofollow" tabindex="-1">Production Database Dump</a>
+</div>
 </body>
 </html>
 """
@@ -5622,6 +5627,40 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             path = parsed.path
+
+            # 0. Web 隐形金丝雀蜜标与爬虫诱捕 (Canary Honey Tokens)
+            CANARY_PATHS = {
+                "/admin_internal_backup/": "高危管理备份目录",
+                "/system-debug-console/": "系统调试控制台入口",
+                "/.env_backup": "环境配置文件备份",
+                "/api/v1/internal_debug_auth": "内部调试授权接口",
+                "/backup_internal_2026.tar.gz": "全站源码与数据库备份包"
+            }
+            if path == "/robots.txt":
+                robots_content = (
+                    "User-agent: *\n"
+                    "Disallow: /admin_internal_backup/\n"
+                    "Disallow: /system-debug-console/\n"
+                    "Disallow: /.env_backup\n"
+                    "Disallow: /api/v1/internal_debug_auth\n"
+                    "Disallow: /backup_internal_2026.tar.gz\n"
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', str(len(robots_content)))
+                self.end_headers()
+                self.wfile.write(robots_content)
+                return
+
+            if path in CANARY_PATHS:
+                client_ip = self.client_address[0]
+                canary_desc = CANARY_PATHS[path]
+                ban_ip(client_ip, reason=f"Web金丝雀蜜标命中: 爬虫嗅探隐藏诱饵 ({canary_desc})", category="canary", level="极高危")
+                self.send_response(404)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(b"<h1>404 Not Found</h1>")
+                return
 
             if path in ("/", "/index.html"):
                 self._send_html(HTML_TEMPLATE)
@@ -6157,6 +6196,53 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}"})
                 return
 
+            if path == "/api/cluster/sync_ban":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                ip = req_data.get("ip", "").strip()
+                reason = req_data.get("reason", "集群威胁同步").strip()
+                level = req_data.get("level", "极高危").strip()
+                source_node = req_data.get("source_node", "远程探针").strip()
+
+                if not verify_cluster_token(ip, token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
+                    return
+                ip = valid_ip
+
+                if ip_in_whitelist(ip):
+                    self._send_json({"success": True, "msg": "本地白名单已忽略"})
+                    return
+
+                ban_ip_firewall(ip)
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
+                ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
+
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("""
+                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
+                VALUES (?, ?, '集群联防', ?, ?, ?, ?)
+                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire))
+                c.execute("""
+                INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
+                VALUES (?, 0, 'MESH', ?, 'mesh', ?, '集群联防', '', '', '', ?, ?, 'BANNED')
+                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts))
+                conn.commit()
+                conn.close()
+
+                self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
+                return
+
             if path == "/api/ban":
                 ip = req_data.get("ip", "").strip()
                 reason = req_data.get("reason", "管理员手动封禁").strip()
@@ -6169,10 +6255,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 ip = valid_ip
 
-                run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
-                run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
-                run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
-                run_firewall_cmd("iptables-save")
+                ban_ip_firewall(ip)
                 
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())

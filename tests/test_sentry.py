@@ -405,8 +405,62 @@ class IsTrapPortTest(unittest.TestCase):
         conn.close()
 
 
+    def test_stealth_scan_packet_parsing(self):
+        from sentry_daemon import parse_packet
+        import struct
+        # 构造 IPv4 TCP NULL Scan 报文 (flags = 0)
+        ip_hdr = b"\x45\x00\x00\x28\x00\x01\x00\x00\x40\x06\x00\x00" + socket.inet_aton("198.51.100.1") + socket.inet_aton("198.51.100.2")
+        tcp_null = struct.pack("!HHIIBBHHH", 12345, 80, 0, 0, 0x50, 0x00, 1024, 0, 0)
+        pkt_null = ip_hdr + tcp_null
+        res_null = parse_packet(pkt_null)
+        self.assertIsNotNone(res_null)
+        self.assertEqual(res_null.stealth_type, "NULL_SCAN")
+
+        # 构造 XMAS Scan (FIN+PSH+URG = 0x29)
+        tcp_xmas = struct.pack("!HHIIBBHHH", 12345, 443, 0, 0, 0x50, 0x29, 1024, 0, 0)
+        pkt_xmas = ip_hdr + tcp_xmas
+        res_xmas = parse_packet(pkt_xmas)
+        self.assertIsNotNone(res_xmas)
+        self.assertEqual(res_xmas.stealth_type, "XMAS_SCAN")
+
+        # 构造 FIN Scan (0x01)
+        tcp_fin = struct.pack("!HHIIBBHHH", 12345, 22, 0, 0, 0x50, 0x01, 1024, 0, 0)
+        pkt_fin = ip_hdr + tcp_fin
+        res_fin = parse_packet(pkt_fin)
+        self.assertIsNotNone(res_fin)
+        self.assertEqual(res_fin.stealth_type, "FIN_SCAN")
+
+    def test_search_engine_crawler_verification(self):
+        from sentry_daemon import verify_search_engine_crawler
+        # 1. 冒充 Googlebot 但 PTR 解析失败
+        with mock.patch("socket.gethostbyaddr") as mock_ptr:
+            mock_ptr.side_effect = Exception("No PTR")
+            is_val, err = verify_search_engine_crawler("1.2.3.4", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+            self.assertFalse(is_val)
+            self.assertIn("伪造", err)
+
+        # 2. 合法 Googlebot PTR
+        with mock.patch("socket.gethostbyaddr") as mock_ptr2, \
+             mock.patch("socket.gethostbyname_ex") as mock_fwd:
+            mock_ptr2.return_value = ("crawl-66-249-66-1.googlebot.com", [], ["66.249.66.1"])
+            mock_fwd.return_value = ("crawl-66-249-66-1.googlebot.com", [], ["66.249.66.1"])
+            is_val2, name = verify_search_engine_crawler("66.249.66.1", "Googlebot/2.1")
+            self.assertTrue(is_val2)
+            self.assertEqual(name, "Googlebot")
+
+    def test_cluster_mesh_token(self):
+        from sentry_daemon import generate_cluster_token, verify_cluster_token
+        secret = "my_cluster_secret_key_12345"
+        ip = "203.0.113.88"
+        token = generate_cluster_token(ip, secret)
+        self.assertTrue(verify_cluster_token(ip, token, secret))
+        self.assertFalse(verify_cluster_token(ip, "invalid_token", secret))
+        self.assertFalse(verify_cluster_token("203.0.113.89", token, secret))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 
