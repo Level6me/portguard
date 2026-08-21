@@ -223,15 +223,15 @@ DEFAULT_HTTP_TRAPS = [
     },
     {
         "rule_id": "ht_rate_404",
-        "name": "高频 404/403 爆破熔断",
+        "name": "异常状态码爆破熔断",
         "match_type": "status_rate",
-        "pattern": "",
+        "pattern": "400,403,404",
         "threshold": 6,
         "window": 30,
         "action": "ban",
         "level": "高危",
         "enabled": 1,
-        "description": "30秒内对不存在路径连续产生 6 次以上 404/403 异常直接熔断拉黑"
+        "description": "30秒内对不存在路径或受限资源连续产生 6 次以上 400/403/404 异常直接熔断拉黑（可自定义为任意状态码如 302 或 500-599）"
     }
 ]
 
@@ -1435,6 +1435,83 @@ def start_cluster_autosync_worker():
     t.start()
 
 
+def match_status_code(status_code, pattern):
+    """
+    匹配 HTTP 响应状态码，支持多种灵活格式：
+    1. 空或未配置：默认匹配常见探测错误码 404, 403, 400
+    2. 单状态码：如 '302', '500', '404'
+    3. 多状态码列表（逗号/空格/分号/竖线分隔）：如 '400,403,404', '301|302', '500 502 503 504'
+    4. 状态码范围：如 '400-499', '500-599', '300-399'
+    5. 正则表达式：如 '^30[1-8]$', '4\\d\\d'
+    6. 特殊关键字：'all_4xx'/'4xx', 'all_5xx'/'5xx', 'all_3xx'/'3xx', 'all_2xx'/'2xx', 'any_error' (4xx+5xx)
+    """
+    try:
+        sc = int(status_code)
+    except (ValueError, TypeError):
+        return False
+
+    if not pattern or not str(pattern).strip():
+        # 默认匹配 404/403/400 探测错误码
+        return sc in (404, 403, 400)
+
+    pat_str = str(pattern).strip().lower()
+
+    # 快捷关键字
+    if pat_str in ("all_4xx", "4xx"):
+        return 400 <= sc <= 499
+    if pat_str in ("all_5xx", "5xx"):
+        return 500 <= sc <= 599
+    if pat_str in ("all_3xx", "3xx"):
+        return 300 <= sc <= 399
+    if pat_str in ("all_2xx", "2xx"):
+        return 200 <= sc <= 299
+    if pat_str in ("any_error", "error", "errors"):
+        return 400 <= sc <= 599
+
+    # 范围匹配 400-499
+    if "-" in pat_str and not pat_str.startswith("-"):
+        parts = pat_str.split("-", 1)
+        try:
+            low, high = int(parts[0].strip()), int(parts[1].strip())
+            return low <= sc <= high
+        except ValueError:
+            pass
+
+    # 分隔列表 301,302 / 400|403|404 / 500 502
+    delimiters = [",", "|", ";", " "]
+    for d in delimiters:
+        if d in pat_str:
+            tokens = [t.strip() for t in pat_str.split(d) if t.strip()]
+            for tok in tokens:
+                if "-" in tok:
+                    p = tok.split("-", 1)
+                    try:
+                        if int(p[0]) <= sc <= int(p[1]):
+                            return True
+                    except ValueError:
+                        pass
+                elif tok.isdigit():
+                    if sc == int(tok):
+                        return True
+                else:
+                    try:
+                        if re.search(tok, str(sc)):
+                            return True
+                    except Exception:
+                        pass
+            return False
+
+    # 单纯数字如 "302"
+    if pat_str.isdigit():
+        return sc == int(pat_str)
+
+    # 正则表达式匹配
+    try:
+        return bool(re.search(pat_str, str(sc)))
+    except Exception:
+        return False
+
+
 def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
     """根据 http_traps 规则库实时分析 HTTP 请求是否命中恶意扫描或高危敏感蜜罐特征"""
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127.") or ip_in_whitelist(ip):
@@ -1474,19 +1551,26 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
                 ban_ip(ip, reason=reason, category="web", level=rlevel)
                 return True
 
-        # 3. 404/403 频次熔断
-        elif mtype == "status_rate":
-            if status_code in (404, 403, 400):
-                threshold = int(rule.get("threshold") or 6)
+        # 3. HTTP 响应状态码 / 频次熔断 (支持任意状态码如 302, 500, 404, 400-499, 500-599 等)
+        elif mtype in ("status_rate", "status_code"):
+            pat = rule.get("pattern", "")
+            if match_status_code(status_code, pat):
+                threshold = int(rule.get("threshold") or 1)
                 window = int(rule.get("window") or 30)
+                rule_key = str(rule.get("rule_id") or rule.get("id") or "status")
+                cache_key = f"{ip}:{rule_key}"
                 with _IP_404_LOCK:
-                    history = _IP_404_RATE_CACHE.setdefault(ip, [])
+                    history = _IP_404_RATE_CACHE.setdefault(cache_key, [])
                     history = [item for item in history if now - item[0] <= window]
-                    history.append((now, path))
-                    _IP_404_RATE_CACHE[ip] = history
+                    history.append((now, path, status_code))
+                    _IP_404_RATE_CACHE[cache_key] = history
                     if len(history) >= threshold:
-                        _IP_404_RATE_CACHE[ip] = []
-                        reason = f"Web防扫: {window}s内触发 {len(history)}次 404/403 ({path[:20]})"
+                        _IP_404_RATE_CACHE[cache_key] = []
+                        target_code_desc = pat if pat else f"{status_code}"
+                        if threshold <= 1:
+                            reason = f"Web状态码诱捕: 触发 {status_code} ({path[:24]})"
+                        else:
+                            reason = f"Web状态码熔断: {window}s内触发 {len(history)}次 [{target_code_desc}] ({path[:20]})"
                         ban_ip(ip, reason=reason, category="web", level=rlevel)
                         return True
 

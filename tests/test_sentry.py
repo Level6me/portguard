@@ -230,6 +230,37 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertTrue(res_sqlmap)
             mock_ban_ua.assert_called_once()
 
+        # 测试自定义状态码匹配函数 (match_status_code)
+        from sentry_daemon import match_status_code
+        self.assertTrue(match_status_code(302, "302"))
+        self.assertFalse(match_status_code(200, "302"))
+        self.assertTrue(match_status_code(301, "301|302"))
+        self.assertTrue(match_status_code(302, "301,302"))
+        self.assertTrue(match_status_code(502, "500-599"))
+        self.assertTrue(match_status_code(404, "4xx"))
+        self.assertTrue(match_status_code(500, "any_error"))
+        self.assertTrue(match_status_code(403, "400,403,404"))
+
+        # 测试自定义 302 规则单次秒级封禁
+        with mock.patch("sentry_daemon.get_http_traps") as mock_traps, mock.patch("sentry_daemon.ban_ip") as mock_ban_302:
+            mock_traps.return_value = [{
+                "rule_id": "ht_custom_302",
+                "name": "302状态码秒封",
+                "match_type": "status_rate",
+                "pattern": "302",
+                "threshold": 1,
+                "window": 30,
+                "action": "ban",
+                "level": "极高危",
+                "enabled": 1
+            }]
+            # 200 不触发
+            self.assertFalse(check_http_request_traps("203.0.113.88", "example.com", "GET", "/page", 200, "Mozilla/5.0"))
+            mock_ban_302.assert_not_called()
+            # 302 触发立即秒封
+            self.assertTrue(check_http_request_traps("203.0.113.88", "example.com", "GET", "/login", 302, "Mozilla/5.0"))
+            mock_ban_302.assert_called_once()
+
     def test_ban_ip_comprehensive_logs_and_blacklist(self):
         from sentry_daemon import ban_ip, get_db, init_db
         init_db()

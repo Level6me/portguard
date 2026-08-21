@@ -1942,7 +1942,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
                 <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
                 <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
-                <option value="status_rate">404 / 403 异常高频熔断</option>
+                <option value="status_rate">HTTP 响应状态码诱捕 / 频次熔断 (支持 302/404/500 等任意状态码)</option>
             </select>
         </div>
         <div class="form-group" id="http-trap-pattern-group">
@@ -1952,12 +1952,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="form-group" id="http-trap-rate-group" style="display: none;">
             <div style="display: flex; gap: 12px;">
                 <div style="flex: 1;">
-                    <label class="form-label">时间窗口 (秒)</label>
-                    <input type="number" class="form-control" id="http-trap-window-val" value="30" min="5" max="300">
+                    <label class="form-label">统计时间窗口 (秒)</label>
+                    <input type="number" class="form-control" id="http-trap-window-val" value="30" min="1" max="3600">
                 </div>
                 <div style="flex: 1;">
-                    <label class="form-label">熔断阈值 (次 404/403)</label>
-                    <input type="number" class="form-control" id="http-trap-threshold-val" value="6" min="2" max="100">
+                    <label class="form-label">触发阈值 (设为 1 即刻秒封)</label>
+                    <input type="number" class="form-control" id="http-trap-threshold-val" value="6" min="1" max="1000">
                 </div>
             </div>
         </div>
@@ -1996,7 +1996,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
                 <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
                 <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
-                <option value="status_rate">404 / 403 异常高频熔断</option>
+                <option value="status_rate">HTTP 响应状态码诱捕 / 频次熔断 (支持 302/404/500 等任意状态码)</option>
             </select>
         </div>
         <div class="form-group" id="edit-http-trap-pattern-group">
@@ -2006,12 +2006,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="form-group" id="edit-http-trap-rate-group" style="display: none;">
             <div style="display: flex; gap: 12px;">
                 <div style="flex: 1;">
-                    <label class="form-label">时间窗口 (秒)</label>
-                    <input type="number" class="form-control" id="edit-http-trap-window-val" min="5" max="300">
+                    <label class="form-label">统计时间窗口 (秒)</label>
+                    <input type="number" class="form-control" id="edit-http-trap-window-val" min="1" max="3600">
                 </div>
                 <div style="flex: 1;">
-                    <label class="form-label">熔断阈值 (次 404/403)</label>
-                    <input type="number" class="form-control" id="edit-http-trap-threshold-val" min="2" max="100">
+                    <label class="form-label">触发阈值 (设为 1 即刻秒封)</label>
+                    <input type="number" class="form-control" id="edit-http-trap-threshold-val" min="1" max="1000">
                 </div>
             </div>
         </div>
@@ -4290,7 +4290,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 'ua_keyword': '扫描工具指纹',
                 'survey_engine': '测绘引擎识别',
                 'direct_ip': '纯IP直连探测',
-                'status_rate': '高频404熔断'
+                'status_rate': '状态码诱捕/熔断'
             };
 
             let html = '';
@@ -4305,7 +4305,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 
                 let ruleContentHtml = '';
                 if (mtype === 'status_rate') {
-                    ruleContentHtml = `<span style="font-size:12px; font-weight:600; color:var(--accent);">⚡ ${rule.window || 30} 秒内累计 404/403 ≥ ${rule.threshold || 6} 次即熔断封禁</span>`;
+                    const patDesc = rule.pattern ? rule.pattern : '400,403,404';
+                    const th = parseInt(rule.threshold) || 1;
+                    const win = parseInt(rule.window) || 30;
+                    if (th <= 1) {
+                        ruleContentHtml = `<span style="font-size:12px; font-weight:700; color:var(--accent);">⚡ 触发状态码 [<code>${escapeHtml(patDesc)}</code>] 立即秒级封禁</span>`;
+                    } else {
+                        ruleContentHtml = `<span style="font-size:12px; font-weight:700; color:var(--accent);">⚡ ${win} 秒内状态码 [<code>${escapeHtml(patDesc)}</code>] ≥ ${th} 次触发熔断封禁</span>`;
+                    }
                 } else {
                     const pat = rule.pattern || '';
                     ruleContentHtml = `<code style="background:var(--card-sec); padding:3px 8px; border-radius:6px; font-size:12px; color:var(--text); max-width:340px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle;" title="${escapeHtml(pat)}">${escapeHtml(pat)}</code>`;
@@ -4346,8 +4353,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (!typeEl) return;
         const val = typeEl.value;
         if (val === 'status_rate') {
-            if (patGroup) patGroup.style.display = 'none';
+            if (patGroup) patGroup.style.display = 'block';
             if (rateGroup) rateGroup.style.display = 'block';
+            if (labelEl) labelEl.innerText = '目标状态码 (支持单个如 302、多状态码如 400,403,404 或 301|302 或范围如 500-599 或 4xx/5xx/all_error)';
+            if (patInput) {
+                patInput.placeholder = '例如：302 或 400,403,404 或 500-599 或 4xx';
+                if (!patInput.value && prefix === 'add') patInput.value = '400,403,404';
+            }
         } else if (val === 'direct_ip') {
             if (patGroup) patGroup.style.display = 'block';
             if (rateGroup) rateGroup.style.display = 'none';
@@ -4363,6 +4375,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (rateGroup) rateGroup.style.display = 'none';
             if (labelEl) {
                 labelEl.innerText = (val === 'ua_keyword') ? 'User-Agent 扫描工具指纹 (正则/关键词)' : 'URL 敏感路径特征表达式 (支持 | 分隔)';
+            }
+            if (patInput) {
+                patInput.placeholder = (val === 'ua_keyword') ? '例如：sqlmap|nikto|dirsearch|wpscan' : '例如：\\.env|\\.git|config\\.json';
             }
         }
     }
@@ -4382,14 +4397,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function submitAddHttpTrap() {
         const name = document.getElementById('http-trap-name-val').value.trim();
         const match_type = document.getElementById('http-trap-type-val').value;
-        const pattern = document.getElementById('http-trap-pattern-val').value.trim();
+        let pattern = document.getElementById('http-trap-pattern-val').value.trim();
         const window = parseInt(document.getElementById('http-trap-window-val').value) || 30;
-        const threshold = parseInt(document.getElementById('http-trap-threshold-val').value) || 6;
+        const threshold = parseInt(document.getElementById('http-trap-threshold-val').value) || 1;
         const level = document.getElementById('http-trap-level-val').value;
         const description = document.getElementById('http-trap-desc-val').value.trim();
 
         if (!name) return showToast('请输入策略名称', '⚠️');
-        if (match_type !== 'status_rate' && !pattern) return showToast('请输入特征表达式或关键词', '⚠️');
+        if (match_type === 'status_rate' && !pattern) {
+            pattern = '400,403,404';
+        } else if (match_type !== 'status_rate' && !pattern) {
+            return showToast('请输入特征表达式或关键词', '⚠️');
+        }
 
         fetch('/api/http_traps/add', {
             method: 'POST',
@@ -4427,14 +4446,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const id = document.getElementById('edit-http-trap-id').value;
         const name = document.getElementById('edit-http-trap-name-val').value.trim();
         const match_type = document.getElementById('edit-http-trap-type-val').value;
-        const pattern = document.getElementById('edit-http-trap-pattern-val').value.trim();
+        let pattern = document.getElementById('edit-http-trap-pattern-val').value.trim();
         const window = parseInt(document.getElementById('edit-http-trap-window-val').value) || 30;
-        const threshold = parseInt(document.getElementById('edit-http-trap-threshold-val').value) || 6;
+        const threshold = parseInt(document.getElementById('edit-http-trap-threshold-val').value) || 1;
         const level = document.getElementById('edit-http-trap-level-val').value;
         const description = document.getElementById('edit-http-trap-desc-val').value.trim();
 
         if (!name) return showToast('请输入策略名称', '⚠️');
-        if (match_type !== 'status_rate' && !pattern) return showToast('请输入特征表达式或关键词', '⚠️');
+        if (match_type === 'status_rate' && !pattern) {
+            pattern = '400,403,404';
+        } else if (match_type !== 'status_rate' && !pattern) {
+            return showToast('请输入特征表达式或关键词', '⚠️');
+        }
 
         fetch('/api/http_traps/edit', {
             method: 'POST',
