@@ -1178,7 +1178,7 @@ def normalize_cluster_node(node):
 
 
 def _send_cluster_msg(node, endpoint, payload, token):
-    """向协同节点发送通信数据，自适应尝试目标端口及备用端口 (9098/9099)"""
+    """向协同节点发送通信数据，自适应尝试目标端口及备用端口 (9098/9099) 并支持自动重试"""
     if not node or not node.get("ip"):
         return False
     ports_to_try = []
@@ -1192,18 +1192,21 @@ def _send_cluster_msg(node, endpoint, payload, token):
             ports_to_try.append(p)
 
     for p in ports_to_try:
-        try:
-            target = f"http://{node['ip']}:{p}{endpoint}"
-            req = urllib.request.Request(target, data=payload, headers={
-                "Content-Type": "application/json",
-                "X-Cluster-Token": token,
-                "User-Agent": "PortGuardMesh/2.0"
-            })
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                if resp.status in (200, 201):
-                    return True
-        except Exception:
-            continue
+        for attempt in range(2):
+            try:
+                target = f"http://{node['ip']}:{p}{endpoint}"
+                req = urllib.request.Request(target, data=payload, headers={
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": token,
+                    "User-Agent": "PortGuardMesh/2.0"
+                })
+                with urllib.request.urlopen(req, timeout=3.5) as resp:
+                    if resp.status in (200, 201):
+                        return True
+            except Exception:
+                if attempt == 0:
+                    time.sleep(0.5)
+                continue
     return False
 
 
@@ -1462,11 +1465,21 @@ def sync_cluster_mesh_state(target_node=None):
 
 
 def start_cluster_autosync_worker():
-    """后台每 60 秒自动进行一次集群黑白名单全量双向对齐巡检"""
+    """后台启动即刻执行一次全量对齐，随后每 20 秒自动进行一次集群黑白名单全量双向对齐巡检"""
     def _worker():
+        # 服务启动 3 秒后即刻执行首次全量对齐（弥补节点重启/更新时的同步间隙）
+        time.sleep(3)
+        try:
+            cfg = load_config()
+            cluster_cfg = cfg.get("cluster_sync", {})
+            if cluster_cfg.get("enabled", False) and cluster_cfg.get("cluster_nodes"):
+                sync_cluster_mesh_state()
+        except Exception:
+            pass
+
         while True:
             try:
-                time.sleep(60)
+                time.sleep(20)
                 cfg = load_config()
                 cluster_cfg = cfg.get("cluster_sync", {})
                 if cluster_cfg.get("enabled", False) and cluster_cfg.get("cluster_nodes"):
