@@ -307,7 +307,7 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sentry")
 
 
 def validate_ip(ip):
-    """严格校验 IPv4 / IPv6 地址，拒绝任何带端口、路径或 shell 元字符的输入。"""
+    """严格校验 IPv4 / IPv6 地址或 CIDR 网段，拒绝任何带端口、路径或 shell 元字符的输入。"""
     if not ip or not isinstance(ip, str):
         return None
     ip = ip.strip()
@@ -317,6 +317,8 @@ def validate_ip(ip):
     if re.search(r"[;&|`$()<>\"'\\ \t\n\r]", ip):
         return None
     try:
+        if "/" in ip:
+            return str(ipaddress.ip_network(ip, strict=False))
         return str(ipaddress.ip_address(ip))
     except ValueError:
         return None
