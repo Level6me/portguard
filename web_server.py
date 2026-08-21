@@ -3668,6 +3668,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 uaBadge = `<span class="tag ${uaInfo.cls}" style="margin-left:4px; font-size:10px; padding:1px 6px; cursor:help; font-weight:700; display:inline-inline-flex; align-items:center; gap:2px;" title="扫描器/客户端指纹: ${escapeHtml(e.user_agent)}">${uaInfo.icon} ${escapeHtml(uaInfo.tag)}</span>`;
             }
 
+            const pNum = parseInt(e.port) || 0;
+            const pProto = (e.proto || 'TCP').toUpperCase();
+            let portBadge = '';
+            if (pNum === 0 || pProto === 'MANUAL') {
+                portBadge = `<span class="tag neutral" style="font-size:11px; font-weight:700;">🌐 全局封禁</span>`;
+            } else {
+                portBadge = `<span class="tag neutral" style="font-size:12px; font-weight:700;">${escapeHtml(pProto)} / ${pNum}</span>`;
+            }
+
             html += `
             <tr>
                 <td>${formatTwoLineTime(e.attack_time)}</td>
@@ -3675,7 +3684,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
                     <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
-                <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
+                <td>${portBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
                 <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
@@ -7110,6 +7119,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     geo_city = geo.get("city") or ""
                     geo_isp = geo.get("isp") or ""
 
+                synced_port = int(req_data.get("port") or 443)
+                synced_proto = str(req_data.get("proto") or "TCP").upper()
+                synced_category = req_data.get("category") or "mesh"
+
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
@@ -7118,8 +7131,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 """, (ip, f"[{source_node}联防] {reason}", geo_country, level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, 0, 'MESH', ?, 'mesh', ?, ?, ?, ?, ?, ?, ?, 'BANNED')
-                """, (ip, f"[{source_node}联防] {reason}", level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+                """, (ip, synced_port, synced_proto, f"[{source_node}联防] {reason}", synced_category, level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
                 conn.commit()
                 conn.close()
 
@@ -8545,6 +8558,10 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                     geo_city = geo.get("city") or ""
                     geo_isp = geo.get("isp") or ""
 
+                synced_port = int(req_data.get("port") or 443)
+                synced_proto = str(req_data.get("proto") or "TCP").upper()
+                synced_category = req_data.get("category") or "mesh"
+
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
@@ -8553,8 +8570,8 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 """, (ip, f"[{source_node}联防] {reason}", geo_country, level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, 0, 'MESH', ?, 'mesh', ?, ?, ?, ?, ?, ?, ?, 'BANNED')
-                """, (ip, f"[{source_node}联防] {reason}", level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+                """, (ip, synced_port, synced_proto, f"[{source_node}联防] {reason}", synced_category, level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
                 conn.commit()
                 conn.close()
 

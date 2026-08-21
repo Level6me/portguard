@@ -938,12 +938,16 @@ def init_db():
 
 
 def heal_cluster_geo_history():
-    """后台自愈：将历史上因集群同步被占位标记为 '集群联防' 的 IP 归属地，重新解析为真实国家/省市地理位置"""
+    """后台自愈：将历史上因集群同步被占位标记为 '集群联防' 的 IP 归属地，重新解析为真实国家/省市地理位置，并修复历史记录中遗留的 0 端口"""
     def _worker():
         try:
             time.sleep(1.0)
             conn = get_db()
             c = conn.cursor()
+            # 修复历史 0 端口
+            c.execute("UPDATE events SET port = 443, proto = 'TCP' WHERE port = 0 AND (port_name LIKE '%Web%' OR port_name LIKE '%HTTP%' OR port_name LIKE '%IP直连%' OR port_name LIKE '%诱捕%')")
+            c.execute("UPDATE events SET proto = 'TCP' WHERE proto = 'MESH'")
+            # 修复历史归属地
             c.execute("SELECT DISTINCT ip FROM events WHERE country = '集群联防' OR country = '' OR country IS NULL LIMIT 200")
             rows = c.fetchall()
             for r in rows:
@@ -1203,7 +1207,7 @@ def _send_cluster_msg(node, endpoint, payload, token):
     return False
 
 
-def broadcast_cluster_ban(ip, reason, level):
+def broadcast_cluster_ban(ip, reason, level, port=443, proto="TCP", category="web"):
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
     if not cluster_cfg.get("enabled", False):
@@ -1217,6 +1221,9 @@ def broadcast_cluster_ban(ip, reason, level):
     token = generate_cluster_token(ip, secret)
     payload = json.dumps({
         "ip": ip,
+        "port": port,
+        "proto": proto,
+        "category": category,
         "reason": reason,
         "level": level,
         "country": geo.get("country", ""),
@@ -2746,7 +2753,7 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     conn.close()
     
     # 5. 向集群联防节点异步广播黑名单情报
-    broadcast_cluster_ban(ip, ban_reason, event_level)
+    broadcast_cluster_ban(ip, ban_reason, event_level, port=port_val, proto="TCP", category=event_category)
 
     # 6. 后台异步解析地理位置并回填
     def _async_geo():
