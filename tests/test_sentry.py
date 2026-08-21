@@ -449,13 +449,23 @@ class IsTrapPortTest(unittest.TestCase):
             self.assertEqual(name, "Googlebot")
 
     def test_cluster_mesh_token(self):
-        from sentry_daemon import generate_cluster_token, verify_cluster_token
+        from sentry_daemon import generate_cluster_token, verify_cluster_token, normalize_cluster_node
         secret = "my_cluster_secret_key_12345"
         ip = "203.0.113.88"
         token = generate_cluster_token(ip, secret)
         self.assertTrue(verify_cluster_token(ip, token, secret))
         self.assertFalse(verify_cluster_token(ip, "invalid_token", secret))
         self.assertFalse(verify_cluster_token("203.0.113.89", token, secret))
+
+        # 测试节点结构规范化
+        norm1 = normalize_cluster_node("http://198.51.100.20:9099")
+        self.assertEqual(norm1["ip"], "198.51.100.20")
+        self.assertEqual(norm1["port"], 9099)
+
+        norm2 = normalize_cluster_node({"ip": "203.0.113.5", "port": 8080, "remark": "韩国节点"})
+        self.assertEqual(norm2["ip"], "203.0.113.5")
+        self.assertEqual(norm2["port"], 8080)
+        self.assertEqual(norm2["remark"], "韩国节点")
 
 
 if __name__ == "__main__":

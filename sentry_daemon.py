@@ -1033,6 +1033,54 @@ def verify_cluster_token(ip, token, secret):
     expected = generate_cluster_token(ip, secret)
     return hmac.compare_digest(expected, token)
 
+
+def normalize_cluster_node(node):
+    """规范化协同节点数据结构，确保字段完整并兼容历史字符串格式"""
+    if isinstance(node, dict):
+        ip = str(node.get("ip", "")).strip()
+        port = int(node.get("port", 9099) or 9099)
+        remark = str(node.get("remark", "")).strip() or "协同节点"
+        created_at = node.get("created_at") or time.strftime("%Y-%m-%d %H:%M:%S")
+        status = node.get("status", "unknown")
+        latency_ms = int(node.get("latency_ms", 0) or 0)
+        country = node.get("country", "")
+        return {
+            "ip": ip,
+            "port": port,
+            "remark": remark,
+            "created_at": created_at,
+            "status": status,
+            "latency_ms": latency_ms,
+            "country": country
+        }
+    elif isinstance(node, str):
+        s = node.strip()
+        if not s:
+            return None
+        port = 9099
+        if "://" in s:
+            s = s.split("://", 1)[1]
+        if "/" in s:
+            s = s.split("/", 1)[0]
+        if ":" in s:
+            parts = s.split(":")
+            s = parts[0]
+            try:
+                port = int(parts[1])
+            except Exception:
+                port = 9099
+        return {
+            "ip": s,
+            "port": port,
+            "remark": f"协同节点 ({s})",
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "unknown",
+            "latency_ms": 0,
+            "country": ""
+        }
+    return None
+
+
 def broadcast_cluster_ban(ip, reason, level):
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
@@ -1051,10 +1099,11 @@ def broadcast_cluster_ban(ip, reason, level):
         "source_node": cfg.get("node_name", socket.gethostname())
     }).encode("utf-8")
 
-    for node_url in nodes:
-        node_url = node_url.strip().rstrip("/")
-        if not node_url:
+    for raw_node in nodes:
+        node = normalize_cluster_node(raw_node)
+        if not node or not node.get("ip"):
             continue
+        node_url = f"http://{node['ip']}:{node.get('port', 9099)}"
         def _send(url, pl, tk):
             try:
                 target = f"{url}/api/cluster/sync_ban"
