@@ -1387,6 +1387,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产机" style="width: 100%; padding: 8px 10px; font-size: 12px; font-weight: 600;">
                 </div>
 
+                <!-- 0.8 多机集群威胁情报联防 (Mesh Sync) -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+                        <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-weight: 700; font-size: 13px; color: var(--text);">🌐 多机集群威胁情报联防 (Mesh Sync)</span>
+                                <span class="tag" id="cluster-sync-status-badge" style="background: rgba(142, 142, 147, 0.15); color: var(--text-sec); font-weight: 700;">未启用</span>
+                            </div>
+                            <span style="font-size: 11px; color: var(--text-sec); line-height: 1.5;">
+                                采用对等网格广播拓扑：任何一台服务器捕获到黑客扫描时，瞬间向所有协同服务器广播并下发防火墙阻断！
+                            </span>
+                        </div>
+                        <button type="button" onclick="openClusterModal()" class="pill-btn primary" style="padding: 7px 16px; font-weight: 700; font-size: 12px; white-space: nowrap; cursor: pointer;">
+                            ⚙️ 配置集群协同网络
+                        </button>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px;">
+                        <div>
+                            <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 3px;">联防通信密钥</div>
+                            <div id="cluster-sync-summary-secret" style="font-size: 12px; font-family: monospace; font-weight: 600; color: var(--text);">未配置密钥</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 3px;">协同节点数量</div>
+                            <div id="cluster-sync-summary-nodes" style="font-size: 12px; font-weight: 600; color: var(--text);">0 个对端节点</div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 1. 扫描与探测防御开关 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                     <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🔍 恶意端口扫描与探测行为识别设置</div>
@@ -1977,6 +2006,72 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
             <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 一键拉黑</button>
             <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在全站控制台中全局隐藏此 IP 的所有日志记录与态势统计">🙈 隐藏此 IP 日志</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 多机集群威胁情报联防 (Mesh Sync) 配置 -->
+<div class="modal-overlay" id="modal-cluster">
+    <div class="modal-sheet" style="max-width: 620px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                <span>🌐 多机集群威胁情报联防 (Mesh Sync)</span>
+            </h3>
+            <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+
+        <div style="background: var(--card-sec); border-radius: 10px; padding: 12px; font-size: 12px; color: var(--text-sec); margin-bottom: 14px; border: 1px solid var(--border-subtle); line-height: 1.5;">
+            <div style="font-weight: 700; color: var(--text); margin-bottom: 4px;">💡 去中心化对等网格 (P2P Mesh) 联防原理：</div>
+            每台服务器设置相同的<strong style="color: var(--accent);">「集群通信密钥」</strong>并填入彼此的 Web 控制台地址。任何一台节点触发封禁拉黑时，会在 0.1 秒内通过 HMAC-SHA256 签名向其他所有节点广播，实现<strong style="color: #34c759;">「一处捕获，全网联防免疫」</strong>！
+        </div>
+
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;">
+            <div>
+                <div style="font-weight: 700; font-size: 13px; color: var(--text);">启用多机情报网格联防</div>
+                <div style="font-size: 11px; color: var(--text-sec);">开启后自动参与多节点威胁阻断同步</div>
+            </div>
+            <input type="checkbox" id="cluster-modal-enabled" style="transform: scale(1.3); cursor: pointer;">
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">本机节点标识名称</label>
+            <input type="text" id="cluster-modal-node-name" class="form-control" placeholder="例如：搬瓦工生产节点 或 腾讯云测试机" style="font-weight: 600;">
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>集群通信鉴权密钥 (Cluster Secret Key)</span>
+                <span style="font-size: 11px; color: var(--text-sec);">所有节点必须保持一致</span>
+            </label>
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="cluster-modal-secret" class="form-control" placeholder="输入或生成安全的集群加密密钥" style="font-family: monospace; font-size: 12px; font-weight: 600;">
+                <button type="button" class="pill-btn" onclick="generateRandomClusterSecret()" style="white-space: nowrap; font-size: 11px;">🎲 随机生成</button>
+                <button type="button" class="pill-btn" onclick="copyClusterSecret()" style="white-space: nowrap; font-size: 11px;">📋 复制</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>协同服务器节点列表 (每行一个 URL)</span>
+                <span style="font-size: 11px; color: var(--text-sec);">格式如: http://ip:9099</span>
+            </label>
+            <textarea class="form-control" id="cluster-modal-nodes" rows="4" placeholder="http://43.155.173.146:9099&#10;http://43.108.18.47:9099&#10;http://t.example.com:9099" style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+        </div>
+
+        <!-- 连通性测试结果面板 -->
+        <div id="cluster-ping-results-box" style="display: none; margin-bottom: 14px; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px 12px;">
+            <div style="font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 6px;">⚡ 节点连通性检测结果：</div>
+            <div id="cluster-ping-results-list" style="font-size: 12px; display: flex; flex-direction: column; gap: 6px;"></div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; flex-wrap: wrap; gap: 10px;">
+            <button type="button" class="pill-btn" onclick="testClusterNodesConnectivity()" id="btn-cluster-ping-test" style="border-color: var(--accent); color: var(--accent);">
+                ⚡ 一键测试所有节点连通性
+            </button>
+            <div style="display: flex; gap: 8px;">
+                <button class="pill-btn" onclick="closeModals()">取消</button>
+                <button class="pill-btn primary" onclick="saveClusterSettingsFromModal()">💾 保存集群配置</button>
+            </div>
         </div>
     </div>
 </div>
@@ -5128,9 +5223,175 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (document.getElementById('setting-ban-blackhole')) {
                 document.getElementById('setting-ban-blackhole').checked = data.ban_action_blackhole !== false;
             }
+
+            // 集群联防状态卡片同步
+            if (data.cluster_sync) {
+                currentClusterSync = data.cluster_sync;
+                const isEnabled = Boolean(data.cluster_sync.enabled);
+                const nodes = data.cluster_sync.cluster_nodes || [];
+                const secret = data.cluster_sync.cluster_secret || '';
+
+                const badge = document.getElementById('cluster-sync-status-badge');
+                if (badge) {
+                    if (isEnabled) {
+                        badge.className = 'tag success';
+                        badge.style.background = '';
+                        badge.style.color = '';
+                        badge.innerText = '🛡️ 联防同步运行中';
+                    } else {
+                        badge.className = 'tag';
+                        badge.style.background = 'rgba(142, 142, 147, 0.15)';
+                        badge.style.color = 'var(--text-sec)';
+                        badge.innerText = '未启用';
+                    }
+                }
+
+                const secretEl = document.getElementById('cluster-sync-summary-secret');
+                if (secretEl) {
+                    secretEl.innerText = secret ? (secret.length > 8 ? secret.slice(0, 4) + '••••••••' + secret.slice(-4) : '••••••••') : '未配置密钥';
+                }
+
+                const nodesEl = document.getElementById('cluster-sync-summary-nodes');
+                if (nodesEl) {
+                    nodesEl.innerText = `${nodes.length} 个对端节点`;
+                }
+            }
+
             updateThresholdBadge();
         } catch (e) {
             console.error(e);
+        }
+    }
+
+    let currentClusterSync = { enabled: false, cluster_secret: '', cluster_nodes: [] };
+
+    function openClusterModal() {
+        document.getElementById('cluster-modal-enabled').checked = Boolean(currentClusterSync.enabled);
+        document.getElementById('cluster-modal-node-name').value = document.getElementById('setting-policy-node-name')?.value || '本机节点';
+        document.getElementById('cluster-modal-secret').value = currentClusterSync.cluster_secret || '';
+        document.getElementById('cluster-modal-nodes').value = (currentClusterSync.cluster_nodes || []).join('\n');
+        document.getElementById('cluster-ping-results-box').style.display = 'none';
+        document.getElementById('cluster-ping-results-list').innerHTML = '';
+        document.getElementById('modal-cluster').style.display = 'flex';
+    }
+
+    function generateRandomClusterSecret() {
+        const arr = new Uint8Array(16);
+        window.crypto.getRandomValues(arr);
+        const sec = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+        document.getElementById('cluster-modal-secret').value = sec;
+        showToast('已随机生成 32 位安全通信密钥', '🎲');
+    }
+
+    function copyClusterSecret() {
+        const sec = document.getElementById('cluster-modal-secret')?.value.trim();
+        if (!sec) {
+            showToast('密钥内容为空', '⚠️');
+            return;
+        }
+        navigator.clipboard.writeText(sec).then(() => {
+            showToast('集群通信密钥已复制到剪贴板', '📋');
+        }).catch(() => {
+            showToast('复制失败，请手动选择复制', '⚠️');
+        });
+    }
+
+    async function testClusterNodesConnectivity() {
+        const secret = document.getElementById('cluster-modal-secret')?.value.trim();
+        const nodesRaw = document.getElementById('cluster-modal-nodes')?.value.trim();
+        const nodes = nodesRaw ? nodesRaw.split('\n').map(n => n.trim()).filter(Boolean) : [];
+
+        if (!secret) {
+            showToast('请先输入或生成集群通信密钥', '⚠️');
+            return;
+        }
+        if (nodes.length === 0) {
+            showToast('请在下方填入至少一个对端服务器节点 URL', '⚠️');
+            return;
+        }
+
+        const box = document.getElementById('cluster-ping-results-box');
+        const list = document.getElementById('cluster-ping-results-list');
+        const btn = document.getElementById('btn-cluster-ping-test');
+        box.style.display = 'block';
+        list.innerHTML = '<div style="color: var(--text-sec); padding: 4px;">⏳ 正在探测各协同节点连通性与密钥鉴权...</div>';
+        btn.disabled = true;
+
+        let resultsHtml = '';
+        for (const url of nodes) {
+            try {
+                const res = await fetch('/api/cluster/test_node', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ node_url: url, secret: secret })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    resultsHtml += `
+                        <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(52, 199, 89, 0.08); border: 1px solid rgba(52, 199, 89, 0.25); border-radius: 6px; padding: 6px 10px;">
+                            <div style="font-weight: 600; color: var(--text);">✅ <span style="font-family: monospace;">${escapeHtml(url)}</span> (${escapeHtml(data.node_name || '远程节点')})</div>
+                            <span class="tag success" style="font-size: 11px;">连通正常 · ${data.latency_ms}ms</span>
+                        </div>
+                    `;
+                } else {
+                    resultsHtml += `
+                        <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 59, 48, 0.08); border: 1px solid rgba(255, 59, 48, 0.25); border-radius: 6px; padding: 6px 10px;">
+                            <div style="font-weight: 600; color: var(--text);">❌ <span style="font-family: monospace;">${escapeHtml(url)}</span></div>
+                            <span class="tag danger" style="font-size: 11px;">${escapeHtml(data.msg || '连接失败')}</span>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                resultsHtml += `
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255, 59, 48, 0.08); border: 1px solid rgba(255, 59, 48, 0.25); border-radius: 6px; padding: 6px 10px;">
+                        <div style="font-weight: 600; color: var(--text);">❌ <span style="font-family: monospace;">${escapeHtml(url)}</span></div>
+                        <span class="tag danger" style="font-size: 11px;">网络请求异常</span>
+                    </div>
+                `;
+            }
+        }
+        list.innerHTML = resultsHtml;
+        btn.disabled = false;
+    }
+
+    async function saveClusterSettingsFromModal() {
+        const isEnabled = document.getElementById('cluster-modal-enabled').checked;
+        const nodeName = document.getElementById('cluster-modal-node-name').value.trim() || '本机节点';
+        const secret = document.getElementById('cluster-modal-secret').value.trim();
+        const nodesRaw = document.getElementById('cluster-modal-nodes').value.trim();
+        const nodes = nodesRaw ? nodesRaw.split('\n').map(n => n.trim()).filter(Boolean) : [];
+
+        if (isEnabled && !secret) {
+            showToast('开启集群联防时必须配置通信鉴权密钥', '⚠️');
+            return;
+        }
+
+        try {
+            showToast('正在保存多机集群联防配置...', '⏳');
+            const newClusterSync = {
+                enabled: isEnabled,
+                cluster_secret: secret,
+                cluster_nodes: nodes
+            };
+
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    node_name: nodeName,
+                    cluster_sync: newClusterSync
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('多机集群威胁情报联防配置已成功保存！', '🎉');
+                closeModals();
+                loadSystemSettings();
+            } else {
+                showToast(data.msg || '保存失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('保存异常: ' + e, '⚠️');
         }
     }
 
@@ -6042,6 +6303,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
                     "defense_paused": bool(cfg.get("defense_paused", False)),
                     "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
+                    "cluster_sync": cfg.get("cluster_sync", {
+                        "enabled": False,
+                        "cluster_secret": "",
+                        "cluster_nodes": []
+                    }),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
                 })
                 return
@@ -6263,9 +6529,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("""
-                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
-                VALUES (?, ?, '集群联防', ?, ?, ?, ?)
-                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire))
+                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                VALUES (?, ?, '集群联防', ?, ?, ?, ?, ?)
+                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
                 c.execute("""
                 INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
                 VALUES (?, 0, 'MESH', ?, 'mesh', ?, '集群联防', '', '', '', ?, ?, 'BANNED')
@@ -6274,6 +6540,60 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn.close()
 
                 self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
+                return
+
+            if path == "/api/cluster/ping":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+                if not secret or not verify_cluster_token("ping", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
+                    return
+                self._send_json({
+                    "success": True,
+                    "node_name": cfg.get("node_name", "远程节点"),
+                    "version": "2.0.0"
+                })
+                return
+
+            if path == "/api/cluster/test_node":
+                node_url = req_data.get("node_url", "").strip().rstrip("/")
+                secret = req_data.get("secret", "").strip()
+                if not node_url:
+                    self._send_json({"success": False, "msg": "节点地址不能为空"}, status=400)
+                    return
+                if not secret:
+                    self._send_json({"success": False, "msg": "通信密钥不能为空"}, status=400)
+                    return
+                token = generate_cluster_token("ping", secret)
+                t0 = time.time()
+                try:
+                    target = f"{node_url}/api/cluster/ping"
+                    req = urllib.request.Request(target, data=b"{}", headers={
+                        "Content-Type": "application/json",
+                        "X-Cluster-Token": token,
+                        "User-Agent": "PortGuardMesh/2.0"
+                    })
+                    with urllib.request.urlopen(req, timeout=3.0) as resp:
+                        res_data = json.loads(resp.read().decode('utf-8'))
+                        latency = int((time.time() - t0) * 1000)
+                        if res_data.get("success"):
+                            self._send_json({
+                                "success": True,
+                                "node_name": res_data.get("node_name", "远程节点"),
+                                "latency_ms": latency,
+                                "msg": f"连接成功！节点响应正常 (延迟 {latency}ms)"
+                            })
+                        else:
+                            self._send_json({
+                                "success": False,
+                                "msg": res_data.get("msg", "鉴权失败")
+                            })
+                except urllib.error.HTTPError as e:
+                    self._send_json({"success": False, "msg": f"HTTP {e.code}: 鉴权失败或密钥不一致"})
+                except Exception as e:
+                    self._send_json({"success": False, "msg": f"连接超时或无法访问 ({e})"})
                 return
 
             if path == "/api/ban":
@@ -6372,6 +6692,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cfg["trap_all_ports"] = bool(req_data["trap_all_ports"])
                 if "defense_paused" in req_data:
                     cfg["defense_paused"] = bool(req_data["defense_paused"])
+                if "cluster_sync" in req_data and isinstance(req_data["cluster_sync"], dict):
+                    cfg["cluster_sync"] = req_data["cluster_sync"]
                 save_config(cfg)
                 self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
                 return
