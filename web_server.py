@@ -1045,8 +1045,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <table>
                         <thead>
                             <tr>
-                                <th>威胁源 IP</th>
-                                <th>归属地域 / 运营商</th>
+                                <th>威胁源 IP (及运营商)</th>
                                 <th>嗅探目标端口集</th>
                                 <th>累计触碰频次</th>
                                 <th>危险等级</th>
@@ -1055,7 +1054,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </tr>
                         </thead>
                         <tbody id="analytics-attackers-tbody">
-                            <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">正在分析威胁档案...</td></tr>
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 24px;">正在分析威胁档案...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1101,7 +1100,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr>
                             <th>攻击拦截时间</th>
                             <th>攻击者 IP</th>
-                            <th>归属地</th>
                             <th>命中诱饵端口</th>
                             <th>服务特征分类</th>
                             <th>威胁评级</th>
@@ -1110,7 +1108,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </tr>
                     </thead>
                     <tbody id="logs-tbody">
-                        <tr><td colspan="8" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入审计日志...</td></tr>
+                        <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入审计日志...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1183,14 +1181,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 <th>已阻断 IP 地址</th>
                                 <th>来源服务器 / 节点</th>
                                 <th>拉黑原因 / 诱饵端口</th>
-                                <th>归属地</th>
                                 <th>处置动作</th>
                                 <th>封禁时间</th>
                                 <th>管理操作</th>
                             </tr>
                         </thead>
                         <tbody id="blacklist-tbody">
-                            <tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入黑名单...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1678,14 +1675,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <tr>
                             <th>访问时间</th>
                             <th>来源 IP</th>
-                            <th>归属地</th>
                             <th>目标端口</th>
                             <th>服务说明</th>
                             <th>防御处置</th>
                         </tr>
                     </thead>
                     <tbody id="access-logs-tbody">
-                        <tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入访问日志...</td></tr>
+                        <tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入访问日志...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -2236,6 +2232,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (isp && isp !== '0' && !country.includes(isp) && !region.includes(isp)) parts.push(isp);
         if (parts.length === 0) return '🌐 公网节点';
         return '🌐 ' + parts.join(' · ');
+    }
+
+    function formatTwoLineTime(timeStr) {
+        if (!timeStr || timeStr === '--' || timeStr === '-') {
+            return '<span style="color: var(--text-sec); font-size: 12px;">--</span>';
+        }
+        const str = String(timeStr).trim();
+        const parts = str.split(/\s+/);
+        if (parts.length >= 2) {
+            return `
+                <div style="line-height: 1.25; display: inline-flex; flex-direction: column; vertical-align: middle;">
+                    <span style="font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text);">${escapeHtml(parts[0])}</span>
+                    <span style="font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-sec); margin-top: 2px;">${escapeHtml(parts.slice(1).join(' '))}</span>
+                </div>
+            `;
+        }
+        return `<span style="font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-sec);">${escapeHtml(str)}</span>`;
     }
 
     let allEvents = [];
@@ -3046,7 +3059,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const tbody = document.getElementById('analytics-attackers-tbody');
         if (!tbody) return;
         if (!attackers || attackers.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">暂无持续攻击者记录</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 24px;">暂无持续攻击者记录</td></tr>';
             return;
         }
 
@@ -3057,15 +3070,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 '<span class="badge badge-danger">🚫 已下发封禁</span>' :
                 '<span class="badge badge-warning">👀 监控中</span>';
             const portsBadge = (att.ports || '').split(',').slice(0, 8).map(p => `<span style="display: inline-block; background: var(--card-sec); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: monospace; margin: 1px;">${p}</span>`).join(' ');
+            const geoSub = (att.country || att.isp) ? `🌐 ${(att.country || '公网节点')}${(att.isp && att.isp !== '0') ? ` · ${att.isp}` : ''}` : '🌐 公网节点';
 
             html += `
                 <tr>
                     <td>
-                        <div style="font-weight: 700; font-family: monospace; color: var(--text);">${att.ip}</div>
-                    </td>
-                    <td>
-                        <div style="font-size: 12px;">🌐 ${att.country}</div>
-                        <div style="font-size: 10px; color: var(--text-sec);">${att.isp}</div>
+                        <div style="font-weight: 700; font-family: monospace; color: var(--text);">${escapeHtml(att.ip)}</div>
+                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(geoSub)}</div>
                     </td>
                     <td>
                         <div style="max-width: 260px; line-height: 1.4;">${portsBadge}</div>
@@ -3075,7 +3086,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </td>
                     <td><span class="badge ${levelClass}">${att.level}</span></td>
                     <td>${banStatusBadge}</td>
-                    <td style="font-size: 11px; color: var(--text-sec); font-family: monospace;">${att.last_seen}</td>
+                    <td>${formatTwoLineTime(att.last_seen)}</td>
                 </tr>
             `;
         });
@@ -3644,12 +3655,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             html += `
             <tr>
-                <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${e.attack_time}</td>
+                <td>${formatTwoLineTime(e.attack_time)}</td>
                 <td>
                     <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
                     <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
                 </td>
-                <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
                 <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
@@ -3724,9 +3734,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </td>
                 <td>${nodeBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
-                <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag danger" style="font-size:11px; font-weight:700;">ipset + blackhole</span></td>
-                <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${b.ban_time}</td>
+                <td>${formatTwoLineTime(b.ban_time)}</td>
                 <td>
                     <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
                 </td>
@@ -4538,9 +4547,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
-                        <th style="width: 150px;">访问时间</th>
-                        <th style="width: 150px;">来源 IP</th>
-                        <th style="width: 150px;">归属地域</th>
+                        <th style="width: 130px;">访问时间</th>
+                        <th style="width: 220px;">来源 IP</th>
                         <th style="width: 120px;">目标端口</th>
                         <th>服务说明</th>
                         <th style="width: 110px;">防御处置</th>
@@ -4556,9 +4564,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (theadEl) {
                 theadEl.innerHTML = `
                     <tr>
-                        <th style="width: 150px;">访问时间</th>
-                        <th style="width: 150px;">客户端 IP</th>
-                        <th style="width: 150px;">归属地域</th>
+                        <th style="width: 130px;">访问时间</th>
+                        <th style="width: 220px;">客户端 IP</th>
                         <th style="width: 180px;">访问域名 (Host)</th>
                         <th>请求方法 & 访问路径 (URI)</th>
                         <th style="width: 90px;">状态码</th>
@@ -4626,7 +4633,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         renderPaginationUI(totalCount, accessLogPage, PAGE_SIZE, 'access-log-total-cnt', 'access-log-page-info', 'btn-access-prev', 'btn-access-next', 'access-log-page-nums', 'setAccessLogPage');
 
         if (totalCount === 0) {
-            const emptyColspan = (currentAccessLogMode === 'port') ? 6 : 7;
+            const emptyColspan = (currentAccessLogMode === 'port') ? 5 : 6;
             tbody.innerHTML = `<tr><td colspan="${emptyColspan}" style="text-align:center; padding:24px; color:var(--text-sec);">未检索到匹配的${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}记录</td></tr>`;
             return;
         }
@@ -4649,12 +4656,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 html += `
                 <tr>
-                    <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
+                    <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
                         <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
                     </td>
-                    <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
                     <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(l.port_name || '网络连接')}</span></td>
                     <td>${actionTag}</td>
@@ -4683,12 +4689,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const pathDisplay = (rawPath.length > 45) ? (rawPath.slice(0, 42) + '...') : rawPath;
                 html += `
                 <tr>
-                    <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
+                    <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
                         <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
                     </td>
-                    <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(domain)}">🌐 ${escapeHtml(domain)}</span></td>
                     <td>
                         <div style="display:inline-flex; align-items:center; gap:6px; max-width:320px;">
