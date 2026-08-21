@@ -60,6 +60,15 @@ if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     exit 1
 fi
 
+if [ ! -f "$INSTALL_DIR/ip2region.xdb" ] || [ ! -s "$INSTALL_DIR/ip2region.xdb" ]; then
+    echo -e "正在获取 IP2Region 本地离线 IP 库 (约 11MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/ip2region.xdb" -o ip2region.xdb 2>/dev/null || curl -fsSL "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb" -o ip2region.xdb 2>/dev/null || true
+    if [ -s ip2region.xdb ]; then
+        cp -f ip2region.xdb "$INSTALL_DIR/ip2region.xdb"
+        chmod 644 "$INSTALL_DIR/ip2region.xdb"
+    fi
+fi
+
 echo -e "\n${BLUE}[2/4] 正在更新模块 (保留现有数据库与策略配置)...${NC}"
 cp -f web_server.py "$INSTALL_DIR/web_server.py"
 chmod 644 "$INSTALL_DIR/web_server.py"
@@ -76,7 +85,7 @@ if [ -s uninstall.sh ]; then
 fi
 
 rm -rf "$TMP_UPDATE_DIR"
-echo -e "${GREEN}[✓] 核心程序已平滑覆盖更新 (原有 config.json 与 data.db 保持完好)${NC}"
+echo -e "${GREEN}[✓] 核心程序与本地离线 IP 库已平滑覆盖更新 (原有 config.json 与 data.db 保持完好)${NC}"
 
 echo -e "\n${BLUE}[3/4] 正在重启 PortGuard 防御服务...${NC}"
 systemctl daemon-reload 2>/dev/null || true

@@ -4,6 +4,7 @@
 PortGuard Core Daemon v2.0 - 智能端口诱捕与主动威胁防御引擎
 """
 import glob
+import io
 import ipaddress
 import json
 import os
@@ -1799,6 +1800,162 @@ def translate_country_cn(name):
         return "未知地域"
     return GEO_COUNTRY_CN.get(name.strip(), name.strip())
 
+# ==============================================================================
+# IP2Region v2 本地离线 IP 地理位置高并发微秒级解析引擎 (纯 Python 零依赖)
+# ==============================================================================
+class XdbSearcher:
+    HEADER_INFO_LENGTH = 256
+    VECTOR_INDEX_ROWS = 256
+    VECTOR_INDEX_COLS = 256
+    VECTOR_INDEX_SIZE = 8
+    SEGMENT_INDEX_SIZE = 14
+
+    def __init__(self, dbfile=None, contentBuff=None):
+        self.dbfile = dbfile
+        self.contentBuff = contentBuff
+        self.handle = None
+        if not self.contentBuff and self.dbfile:
+            self.handle = io.open(self.dbfile, "rb")
+
+    def close(self):
+        if self.handle:
+            self.handle.close()
+            self.handle = None
+
+    @staticmethod
+    def loadContentFromFile(dbfile):
+        with io.open(dbfile, "rb") as f:
+            return f.read()
+
+    @staticmethod
+    def ip_to_long(ip_str):
+        parts = ip_str.split(".")
+        if len(parts) != 4:
+            return 0
+        try:
+            return (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
+        except Exception:
+            return 0
+
+    def searchByIPStr(self, ip_str):
+        ip = self.ip_to_long(ip_str)
+        if ip == 0:
+            return None
+        il0 = (ip >> 24) & 0xFF
+        il1 = (ip >> 16) & 0xFF
+        v_idx = il0 * self.VECTOR_INDEX_COLS * self.VECTOR_INDEX_SIZE + il1 * self.VECTOR_INDEX_SIZE
+        v_offset = self.HEADER_INFO_LENGTH + v_idx
+
+        if self.contentBuff:
+            if v_offset + 8 > len(self.contentBuff):
+                return None
+            s_ptr, e_ptr = struct.unpack("<II", self.contentBuff[v_offset:v_offset + 8])
+        else:
+            self.handle.seek(v_offset)
+            s_ptr, e_ptr = struct.unpack("<II", self.handle.read(8))
+
+        if s_ptr == 0:
+            return None
+
+        low = 0
+        high = (e_ptr - s_ptr) // self.SEGMENT_INDEX_SIZE
+        data_len = 0
+        data_ptr = 0
+
+        while low <= high:
+            mid = (low + high) >> 1
+            pos = s_ptr + mid * self.SEGMENT_INDEX_SIZE
+            if self.contentBuff:
+                buffer = self.contentBuff[pos:pos + self.SEGMENT_INDEX_SIZE]
+            else:
+                self.handle.seek(pos)
+                buffer = self.handle.read(self.SEGMENT_INDEX_SIZE)
+
+            sip, eip, d_len, d_ptr = struct.unpack("<IIHI", buffer)
+
+            if ip < sip:
+                high = mid - 1
+            elif ip > eip:
+                low = mid + 1
+            else:
+                data_len = d_len
+                data_ptr = d_ptr
+                break
+
+        if data_len == 0:
+            return None
+
+        if self.contentBuff:
+            region_bytes = self.contentBuff[data_ptr:data_ptr + data_len]
+        else:
+            self.handle.seek(data_ptr)
+            region_bytes = self.handle.read(data_len)
+
+        return region_bytes.decode("utf-8", errors="ignore")
+
+_GLOBAL_XDB_SEARCHER = None
+_GLOBAL_XDB_LOCK = threading.Lock()
+_XDB_TRIED_INIT = False
+
+def get_xdb_searcher():
+    """获取全局常驻内存的 IP2Region 本地离线引擎实例"""
+    global _GLOBAL_XDB_SEARCHER, _XDB_TRIED_INIT
+    if _GLOBAL_XDB_SEARCHER is not None:
+        return _GLOBAL_XDB_SEARCHER
+    with _GLOBAL_XDB_LOCK:
+        if _GLOBAL_XDB_SEARCHER is not None:
+            return _GLOBAL_XDB_SEARCHER
+        if _XDB_TRIED_INIT:
+            return None
+        _XDB_TRIED_INIT = True
+
+        candidate_paths = [
+            "/opt/portguard/ip2region.xdb",
+            "/opt/portguard/ip2region_v4.xdb",
+            "/opt/portsentry-ui/ip2region.xdb",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "ip2region.xdb"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "ip2region_v4.xdb"),
+            os.path.join(os.getcwd(), "ip2region.xdb"),
+            os.path.join(os.getcwd(), "ip2region_v4.xdb")
+        ]
+
+        for p in candidate_paths:
+            if os.path.isfile(p) and os.path.getsize(p) > 1024 * 1024:
+                try:
+                    c_buff = XdbSearcher.loadContentFromFile(p)
+                    _GLOBAL_XDB_SEARCHER = XdbSearcher(contentBuff=c_buff)
+                    print(f"[PortGuard GeoIP] ⚡ 成功载入本地 IP2Region 离线数据库: {p} (全内存高速检索模式)")
+                    return _GLOBAL_XDB_SEARCHER
+                except Exception as e:
+                    print(f"[PortGuard GeoIP] 本地 IP 库载入异常 ({p}): {e}")
+        return None
+
+def resolve_ip_geo_local(ip):
+    """尝试使用本地离线 IP 库极速解析归属地 (0ms 延时)"""
+    searcher = get_xdb_searcher()
+    if not searcher:
+        return None
+    try:
+        raw = searcher.searchByIPStr(ip)
+        if raw:
+            parts = raw.split("|")
+            raw_country = parts[0].strip() if parts and parts[0] != "0" else ""
+            raw_region = parts[1].strip() if len(parts) > 1 and parts[1] != "0" else ""
+            raw_city = parts[2].strip() if len(parts) > 2 and parts[2] != "0" else ""
+            raw_isp = parts[3].strip() if len(parts) > 3 and parts[3] != "0" else ""
+
+            country = translate_country_cn(raw_country)
+            if country or raw_region or raw_city:
+                return {
+                    "country": country or "公网节点",
+                    "region": raw_region,
+                    "city": raw_city,
+                    "isp": raw_isp
+                }
+    except Exception:
+        pass
+    return None
+
 _GEO_CACHE = {}
 _GEO_CACHE_LOCK = threading.Lock()
 
@@ -1814,7 +1971,14 @@ def resolve_ip_geo(ip):
     if ip.startswith("10.") or ip.startswith("192.168.") or (ip.startswith("172.") and len(ip.split(".")) > 1 and ip.split(".")[1].isdigit() and 16 <= int(ip.split(".")[1]) <= 31):
         return {"country": "局域私网", "region": "", "city": "", "isp": "Private LAN"}
 
-    # 1. 首选高可用源：ipwho.is (原生支持简体中文返回，数据精准，无频控限制)
+    # 1. 🚀 第一级：本地 IP2Region 离线库极速检索 (0ms 延时、零外网依赖、无频控)
+    local_geo = resolve_ip_geo_local(ip)
+    if local_geo and local_geo.get("country") not in ("未知地域", "", None):
+        with _GEO_CACHE_LOCK:
+            _GEO_CACHE[ip] = local_geo
+        return local_geo
+
+    # 2. 🌐 第二级备选源：ipwho.is (原生支持简体中文返回，数据精准)
     try:
         url = f"http://ipwho.is/{ip}?lang=zh-CN"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
@@ -1835,7 +1999,7 @@ def resolve_ip_geo(ip):
     except Exception:
         pass
 
-    # 2. 备选源：ip-api.com HTTP 接口
+    # 3. 🌐 第三级备选源：ip-api.com HTTP 接口
     try:
         url2 = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp"
         req2 = urllib.request.Request(url2, headers={"User-Agent": "PortGuardUI/2.0"})
@@ -1856,7 +2020,7 @@ def resolve_ip_geo(ip):
     except Exception:
         pass
 
-    # 3. 备选源：api.ip.sb
+    # 4. 🌐 第四级备选源：api.ip.sb
     try:
         url3 = f"https://api.ip.sb/geoip/{ip}"
         req3 = urllib.request.Request(url3, headers={"User-Agent": "PortGuardUI/2.0"})
