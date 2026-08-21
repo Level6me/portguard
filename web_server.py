@@ -4769,7 +4769,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     function unbanIP(ip) {
-        if (!confirm(`确定要从内核黑名单中解除对 ${ip} 的封禁吗？`)) return;
+        if (!confirm(`确定要从内核黑名单中解除对 ${ip} 的封禁吗？\n（将自动联动所有协同节点同步解除封禁）`)) return;
         fetch('/api/unban', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4777,6 +4777,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }).then(res => res.json()).then(res => {
             showToast(res.msg || '解封成功', '🔓');
             fetchData(false);
+        }).catch(err => {
+            showToast('解封请求失败: ' + err.message, '⚠️');
+        });
+    }
+
+    function quickBanIP(ip, reason) {
+        if (!confirm(`确定要立即将 ${ip} 下发至内核黑名单并同步全网封禁吗？`)) return;
+        fetch('/api/ban', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, reason: reason || '手动封禁观察中IP' })
+        }).then(res => res.json()).then(res => {
+            showToast(res.msg || `已成功封禁 IP: ${ip}`, '🚫');
+            fetchData(false);
+        }).catch(err => {
+            showToast('封禁请求失败: ' + err.message, '⚠️');
         });
     }
 
@@ -6882,10 +6898,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 ip = valid_ip
 
-                unban_ip_core(ip, status_event="UNBANNED")
+                cfg = load_config()
+                node_name = cfg.get("node_name", "本机") or "本机"
+                unban_ip_core(ip, status_event="UNBANNED", source_node=f"手动解封({node_name})")
                 # 广播解封至全网集群协同节点
                 broadcast_cluster_unban(ip)
-                self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}（已同步全网集群）"})
+                self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}（已同步全网集群协同解封）"})
                 return
 
             if path == "/api/cluster/sync_unban":
@@ -6903,7 +6921,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if not valid_ip:
                     self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
                     return
-                unban_ip_core(valid_ip, status_event="UNBANNED")
+                source_node = req_data.get("source_node", "协同节点").strip()
+                unban_ip_core(valid_ip, status_event="UNBANNED", source_node=f"集群解封({source_node})")
                 self._send_json({"success": True, "msg": f"已协同解封: {valid_ip}"})
                 return
 
@@ -6918,16 +6937,35 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 source_node = req_data.get("source_node", "远程节点").strip()
                 remote_bans = req_data.get("blacklist", [])
+                remote_unbanned = req_data.get("unbanned_list", [])
                 remote_whites = req_data.get("whitelist", [])
 
-                # 1. 查询本地黑名单
                 conn = get_db()
                 c = conn.cursor()
+                c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
                 c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
                 local_rows = c.fetchall()
                 local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
+                c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
+                local_unbanned_rows = c.fetchall()
+                local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
 
-                # 吸纳对方有而本地没有的黑名单
+                # 1. 优先对齐远端发来的解封墓碑
+                for ru in remote_unbanned:
+                    ru_ip = validate_ip(ru.get("ip", ""))
+                    ru_ts = int(ru.get("timestamp", 0) or 0)
+                    if ru_ip:
+                        if ru_ip in local_bans_map:
+                            local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
+                            if ru_ts >= local_ban_ts:
+                                unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
+                        local_unbanned_map[ru_ip] = ru_ts
+                        c.execute("""
+                        INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
+                        VALUES (?, ?, ?, ?)
+                        """, (ru_ip, ru.get("unban_time", time.strftime("%Y-%m-%d %H:%M:%S")), ru_ts, f"集群同步({source_node})"))
+
+                # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑)
                 added_bans = 0
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())
@@ -6935,6 +6973,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     rb_ip = validate_ip(rb.get("ip", ""))
                     if not rb_ip or ip_in_whitelist(rb_ip):
                         continue
+                    rb_ts = int(rb.get("timestamp", 0) or 0)
+                    local_unban_ts = local_unbanned_map.get(rb_ip)
+                    if local_unban_ts is not None and local_unban_ts >= rb_ts:
+                        continue
+
                     if rb_ip not in local_bans_map:
                         ban_ip_firewall(rb_ip)
                         src = rb.get("source_node", source_node)
@@ -6944,13 +6987,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                         """, (
                             rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
                             rb.get("level", "极高危"), rb.get("ban_time", now_str),
-                            rb.get("timestamp", now_ts), rb.get("ban_expire"), f"集群 ({src})"
+                            rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
                         ))
+                        c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (rb_ip,))
                         added_bans += 1
                 conn.commit()
                 conn.close()
 
-                # 2. 合并白名单
+                # 3. 合并白名单
                 whitelist = cfg.get("whitelist", [])
                 w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
                 added_whites = 0
@@ -6966,18 +7010,25 @@ class RequestHandler(BaseHTTPRequestHandler):
                 cfg["whitelist"] = list(w_map.values())
                 save_config(cfg)
 
-                # 返回本地独有的黑名单与白名单给发起端
+                # 返回本地独有的黑名单、解封墓碑与白名单给发起端
                 remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
-                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips ]
+                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips and ip_k not in local_unbanned_map ]
 
                 remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
                 missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
+
+                # 本地解封墓碑数据
+                local_unbanned_resp = [
+                    { "ip": r[0], "unban_time": r[1], "timestamp": r[2], "source_node": r[3] }
+                    for r in local_unbanned_rows if r[0]
+                ]
 
                 self._send_json({
                     "success": True,
                     "added_bans": added_bans,
                     "added_whites": added_whites,
                     "remote_blacklist": missing_for_remote_bans,
+                    "remote_unbanned": local_unbanned_resp,
                     "remote_whitelist": missing_for_remote_whites
                 })
                 return
@@ -7427,6 +7478,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn = get_db()
                 c = conn.cursor()
                 node_name = cfg.get("node_name", "本机") or "本机"
+                c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
+                c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (ip,))
                 c.execute("""
                 INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                 VALUES (?, ?, '手动添加', '极高危', ?, ?, NULL, ?)
@@ -7437,8 +7490,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 """, (ip, reason, now_str, now_ts))
                 conn.commit()
                 conn.close()
+
+                # 同步广播手动封禁至全网集群节点
+                broadcast_cluster_ban(ip, reason, "极高危")
                 
-                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}"})
+                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已同步全网集群协同阻断）"})
                 return
 
             if path == "/api/defense/toggle_pause":
@@ -8466,7 +8522,8 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 if not valid_ip:
                     self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
                     return
-                unban_ip_core(valid_ip, status_event="UNBANNED")
+                source_node = req_data.get("source_node", "协同节点").strip()
+                unban_ip_core(valid_ip, status_event="UNBANNED", source_node=f"集群解封({source_node})")
                 self._send_json({"success": True, "msg": f"已协同解封: {valid_ip}"})
                 return
 
@@ -8481,16 +8538,35 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
 
                 source_node = req_data.get("source_node", "远程节点").strip()
                 remote_bans = req_data.get("blacklist", [])
+                remote_unbanned = req_data.get("unbanned_list", [])
                 remote_whites = req_data.get("whitelist", [])
 
-                # 1. 查询本地黑名单
                 conn = get_db()
                 c = conn.cursor()
+                c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
                 c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
                 local_rows = c.fetchall()
                 local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
+                c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
+                local_unbanned_rows = c.fetchall()
+                local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
 
-                # 吸纳对方有而本地没有的黑名单
+                # 1. 优先对齐远端发来的解封墓碑
+                for ru in remote_unbanned:
+                    ru_ip = validate_ip(ru.get("ip", ""))
+                    ru_ts = int(ru.get("timestamp", 0) or 0)
+                    if ru_ip:
+                        if ru_ip in local_bans_map:
+                            local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
+                            if ru_ts >= local_ban_ts:
+                                unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
+                        local_unbanned_map[ru_ip] = ru_ts
+                        c.execute("""
+                        INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
+                        VALUES (?, ?, ?, ?)
+                        """, (ru_ip, ru.get("unban_time", time.strftime("%Y-%m-%d %H:%M:%S")), ru_ts, f"集群同步({source_node})"))
+
+                # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑)
                 added_bans = 0
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())
@@ -8498,6 +8574,11 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                     rb_ip = validate_ip(rb.get("ip", ""))
                     if not rb_ip or ip_in_whitelist(rb_ip):
                         continue
+                    rb_ts = int(rb.get("timestamp", 0) or 0)
+                    local_unban_ts = local_unbanned_map.get(rb_ip)
+                    if local_unban_ts is not None and local_unban_ts >= rb_ts:
+                        continue
+
                     if rb_ip not in local_bans_map:
                         ban_ip_firewall(rb_ip)
                         src = rb.get("source_node", source_node)
@@ -8507,13 +8588,14 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                         """, (
                             rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), rb.get("country", "集群联防"),
                             rb.get("level", "极高危"), rb.get("ban_time", now_str),
-                            rb.get("timestamp", now_ts), rb.get("ban_expire"), f"集群 ({src})"
+                            rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
                         ))
+                        c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (rb_ip,))
                         added_bans += 1
                 conn.commit()
                 conn.close()
 
-                # 2. 合并白名单
+                # 3. 合并白名单
                 whitelist = cfg.get("whitelist", [])
                 w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
                 added_whites = 0
@@ -8529,18 +8611,25 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 cfg["whitelist"] = list(w_map.values())
                 save_config(cfg)
 
-                # 返回本地独有的黑名单与白名单给发起端
+                # 返回本地独有的黑名单、解封墓碑与白名单给发起端
                 remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
-                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips ]
+                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips and ip_k not in local_unbanned_map ]
 
                 remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
                 missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
+
+                # 本地解封墓碑数据
+                local_unbanned_resp = [
+                    { "ip": r[0], "unban_time": r[1], "timestamp": r[2], "source_node": r[3] }
+                    for r in local_unbanned_rows if r[0]
+                ]
 
                 self._send_json({
                     "success": True,
                     "added_bans": added_bans,
                     "added_whites": added_whites,
                     "remote_blacklist": missing_for_remote_bans,
+                    "remote_unbanned": local_unbanned_resp,
                     "remote_whitelist": missing_for_remote_whites
                 })
                 return
