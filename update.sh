@@ -69,6 +69,18 @@ if [ ! -f "$INSTALL_DIR/ip2region.xdb" ] || [ ! -s "$INSTALL_DIR/ip2region.xdb" 
     fi
 fi
 
+if [ ! -f "$INSTALL_DIR/GeoLite2-ASN.mmdb" ] || [ ! -s "$INSTALL_DIR/GeoLite2-ASN.mmdb" ]; then
+    echo -e "正在获取 MaxMind GeoLite2-ASN 全球自治系统与运营商数据库 (约 12MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb" -o "$INSTALL_DIR/GeoLite2-ASN.mmdb" 2>/dev/null || true
+    chmod 644 "$INSTALL_DIR/GeoLite2-ASN.mmdb" 2>/dev/null || true
+fi
+
+if [ ! -f "$INSTALL_DIR/GeoLite2-City.mmdb" ] || [ ! -s "$INSTALL_DIR/GeoLite2-City.mmdb" ]; then
+    echo -e "正在获取 MaxMind GeoLite2-City 全球高精度城市数据库 (约 65MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb" -o "$INSTALL_DIR/GeoLite2-City.mmdb" 2>/dev/null || true
+    chmod 644 "$INSTALL_DIR/GeoLite2-City.mmdb" 2>/dev/null || true
+fi
+
 echo -e "\n${BLUE}[2/4] 正在更新模块 (保留现有数据库与策略配置)...${NC}"
 cp -f web_server.py "$INSTALL_DIR/web_server.py"
 chmod 644 "$INSTALL_DIR/web_server.py"

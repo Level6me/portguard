@@ -117,6 +117,24 @@ fi
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1)
 LOCAL_IP=${LOCAL_IP:-127.0.0.1}
 
+if [ ! -f "${INSTALL_DIR}/ip2region.xdb" ] || [ ! -s "${INSTALL_DIR}/ip2region.xdb" ]; then
+    echo -e "正在获取 IP2Region 本地离线 IP 库 (约 11MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb" -o "${INSTALL_DIR}/ip2region.xdb" 2>/dev/null || true
+    chmod 644 "${INSTALL_DIR}/ip2region.xdb" 2>/dev/null || true
+fi
+
+if [ ! -f "${INSTALL_DIR}/GeoLite2-ASN.mmdb" ] || [ ! -s "${INSTALL_DIR}/GeoLite2-ASN.mmdb" ]; then
+    echo -e "正在获取 MaxMind GeoLite2-ASN 全球自治系统与运营商数据库 (约 12MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb" -o "${INSTALL_DIR}/GeoLite2-ASN.mmdb" 2>/dev/null || true
+    chmod 644 "${INSTALL_DIR}/GeoLite2-ASN.mmdb" 2>/dev/null || true
+fi
+
+if [ ! -f "${INSTALL_DIR}/GeoLite2-City.mmdb" ] || [ ! -s "${INSTALL_DIR}/GeoLite2-City.mmdb" ]; then
+    echo -e "正在获取 MaxMind GeoLite2-City 全球高精度城市数据库 (约 65MB)..."
+    curl -fsSL "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb" -o "${INSTALL_DIR}/GeoLite2-City.mmdb" 2>/dev/null || true
+    chmod 644 "${INSTALL_DIR}/GeoLite2-City.mmdb" 2>/dev/null || true
+fi
+
 if [[ ! -f "${INSTALL_DIR}/config.json" ]]; then
     cat << EOF > "${INSTALL_DIR}/config.json"
 {
