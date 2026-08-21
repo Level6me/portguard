@@ -2249,14 +2249,14 @@ def resolve_ip_geo_local(ip):
         except Exception:
             pass
 
-    # 智能融合决议
+    # 智能融合决议：以全球权威 MaxMind 为主，ip2region 为国内细化辅助
     country = mm_country or translate_country_cn(xdb_country)
-    region = mm_region
-    city = mm_city
+    region = mm_region or xdb_region
+    city = mm_city or xdb_city
     isp = format_isp_name(mm_asn_org or xdb_isp)
 
-    # 若为中国境内 IP，结合 ip2region 的国内精细省市和运营商
-    if country in ("中国", "China") or xdb_country in ("中国", "0"):
+    # 仅当确认国家为中国时，优先采用 ip2region 的国内精细地级市与三大运营商
+    if (country in ("中国", "China") or xdb_country == "中国") and mm_country in ("中国", "China", "", None):
         country = "中国"
         if xdb_region: region = xdb_region
         if xdb_city: city = xdb_city
