@@ -130,7 +130,7 @@ class ParsePacketTest(unittest.TestCase):
 
     def test_ipv4_tcp_raw(self):
         # 针对带 0x41 字节的特殊 IP 测试 raw socket 模式下的 offset 判定
-        pkt = self._ipv4_packet(6, "1.2.65.4", "43.108.18.47", 12345, 8085, with_eth=False)
+        pkt = self._ipv4_packet(6, "1.2.65.4", "198.51.100.1", 12345, 8085, with_eth=False)
         self.assertEqual(parse_packet(pkt), ("1.2.65.4", 8085, "TCP"))
 
     def test_ipv4_udp(self):

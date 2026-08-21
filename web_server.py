@@ -2055,7 +2055,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <span>协同服务器节点列表 (每行一个 URL)</span>
                 <span style="font-size: 11px; color: var(--text-sec);">格式如: http://ip:9099</span>
             </label>
-            <textarea class="form-control" id="cluster-modal-nodes" rows="4" placeholder="http://43.155.173.146:9099&#10;http://43.108.18.47:9099&#10;http://t.example.com:9099" style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
+            <textarea class="form-control" id="cluster-modal-nodes" rows="4" placeholder="http://192.0.2.10:9099&#10;http://198.51.100.20:9099&#10;http://203.0.113.30:9099" style="font-family: monospace; font-size: 12px; line-height: 1.5;"></textarea>
         </div>
 
         <!-- 连通性测试结果面板 -->

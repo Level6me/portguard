@@ -131,7 +131,7 @@ if [[ -z "${CURRENT_SSH_IP}" ]]; then
     CURRENT_SSH_IP=$(echo "${SSH_CLIENT:-${SSH_CONNECTION:-}}" | awk '{print $1}')
 fi
 if [[ -z "${CURRENT_SSH_IP}" ]] && command -v ss >/dev/null 2>&1; then
-    CURRENT_SSH_IP=$(ss -tn state established '( sport = :22 or sport = :29675 )' 2>/dev/null | awk 'NR>1 {print $4}' | awk -F: '{print $(NF-1)}' | grep -v '^127\.' | head -n 1)
+    CURRENT_SSH_IP=$(ss -tn state established 2>/dev/null | awk 'NR>1 {print $4}' | awk -F: '{print $(NF-1)}' | grep -v '^127\.' | grep -v '^::' | head -n 1)
 fi
 
 LOCAL_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n 1)
