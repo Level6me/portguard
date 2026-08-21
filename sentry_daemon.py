@@ -1250,7 +1250,13 @@ def broadcast_cluster_whitelist(action, data, remark=""):
             except Exception:
                 pass
         _EXECUTOR.submit(_send, node_url, payload, token)
-
+def clean_cluster_node_name(name):
+    if not name:
+        return "协同节点"
+    s = str(name).strip()
+    while s.startswith("集群 (") and s.endswith(")"):
+        s = s[4:-1].strip()
+    return s
 
 def sync_cluster_mesh_state(target_node=None):
     """全量双向对齐集群节点的黑名单与白名单数据"""
@@ -1319,7 +1325,7 @@ def sync_cluster_mesh_state(target_node=None):
                             if not b_ip or ip_in_whitelist(b_ip):
                                 continue
                             ban_ip_firewall(b_ip)
-                            src = b.get("source_node", node["ip"])
+                            src = clean_cluster_node_name(b.get("source_node") or node.get("name") or node.get("ip"))
                             cur.execute("""
                             INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)

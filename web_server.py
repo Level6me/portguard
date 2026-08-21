@@ -3645,7 +3645,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr>
                 <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${e.attack_time}</td>
-                <td><span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span></td>
+                <td>
+                    <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                </td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                 <td><span class="tag neutral" style="font-size:12px; font-weight:700;">TCP / ${e.port}</span></td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
@@ -3691,25 +3694,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let html = '';
         pageList.forEach(b => {
             const geoText = formatGeoCN(b);
-            const node = (b.source_node || '本机').trim();
+            const rawNode = (b.source_node || '本机').trim();
+            let cleanNode = rawNode;
+            while (cleanNode.startsWith('集群 (') && cleanNode.endsWith(')')) {
+                cleanNode = cleanNode.slice(4, -1).trim();
+            }
+            cleanNode = cleanNode.replace(/集群\s*\(\s*/g, '').replace(/\)+$/g, '').trim() || rawNode;
+
             let nodeBadge = '';
-            if (node.includes('腾讯云')) {
-                nodeBadge = `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(node)}</span>`;
-            } else if (node.includes('阿里云')) {
-                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">🟧 ${escapeHtml(node)}</span>`;
-            } else if (node.includes('搬瓦工')) {
-                nodeBadge = `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(node)}</span>`;
-            } else if (node.includes('手动')) {
+            if (rawNode.includes('腾讯云') || cleanNode.includes('腾讯云')) {
+                nodeBadge = `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(cleanNode)}</span>`;
+            } else if (rawNode.includes('阿里云') || cleanNode.includes('Ali') || cleanNode.includes('阿里')) {
+                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">🟧 ${escapeHtml(cleanNode)}</span>`;
+            } else if (rawNode.includes('搬瓦工') || cleanNode.includes('BWH') || cleanNode.includes('搬瓦工')) {
+                nodeBadge = `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(cleanNode)}</span>`;
+            } else if (rawNode.includes('手动')) {
                 nodeBadge = `<span class="tag" style="background: rgba(255, 149, 0, 0.12); color: #ff9500; border: 1px solid rgba(255, 149, 0, 0.3); font-weight: 700; white-space: nowrap;">👤 手动添加</span>`;
-            } else if (node.includes('联防') || node.includes('集群')) {
-                nodeBadge = `<span class="tag" style="background: rgba(88, 86, 214, 0.12); color: #5856d6; border: 1px solid rgba(88, 86, 214, 0.3); font-weight: 700; white-space: nowrap;">🌐 ${escapeHtml(node)}</span>`;
+            } else if (rawNode.includes('联防') || rawNode.includes('集群')) {
+                nodeBadge = `<span class="tag" style="background: rgba(88, 86, 214, 0.12); color: #5856d6; border: 1px solid rgba(88, 86, 214, 0.3); font-weight: 700; white-space: nowrap;">🌐 ${escapeHtml(cleanNode)}</span>`;
             } else {
-                nodeBadge = `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(node)}</span>`;
+                nodeBadge = `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(rawNode)}</span>`;
             }
 
             html += `
             <tr>
-                <td><span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span></td>
+                <td>
+                    <span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                </td>
                 <td>${nodeBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
                 <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
@@ -4638,7 +4650,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span></td>
+                    <td>
+                        <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
+                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                    </td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
                     <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(l.port_name || '网络连接')}</span></td>
@@ -4669,7 +4684,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 html += `
                 <tr>
                     <td style="font-size:12px; font-variant-numeric:tabular-nums; color:var(--text-sec);">${l.access_time}</td>
-                    <td><span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span></td>
+                    <td>
+                        <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
+                        <div style="font-size: 11px; color: var(--text-sec); margin-top: 3px; font-weight: 500; line-height: 1.3;">${geoText}</div>
+                    </td>
                     <td><span style="font-size:12px; color:var(--text); font-weight:600;">${geoText}</span></td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(domain)}">🌐 ${escapeHtml(domain)}</span></td>
                     <td>
