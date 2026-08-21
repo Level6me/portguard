@@ -3718,7 +3718,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (rawNode.includes('腾讯云') || cleanNode.includes('腾讯云')) {
                 nodeBadge = `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(cleanNode)}</span>`;
             } else if (rawNode.includes('阿里云') || cleanNode.includes('Ali') || cleanNode.includes('阿里')) {
-                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">🟧 ${escapeHtml(cleanNode)}</span>`;
+                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">⚡ ${escapeHtml(cleanNode)}</span>`;
             } else if (rawNode.includes('搬瓦工') || cleanNode.includes('BWH') || cleanNode.includes('搬瓦工')) {
                 nodeBadge = `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(cleanNode)}</span>`;
             } else if (rawNode.includes('手动')) {
