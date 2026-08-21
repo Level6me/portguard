@@ -15,6 +15,9 @@ except ImportError:
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
+import urllib.request
+import urllib.error
+import urllib.parse
 from urllib.parse import urlparse, parse_qs
 
 _RAW_HTML_CACHE = None

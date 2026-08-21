@@ -1542,6 +1542,18 @@ def ip_in_whitelist(ip, whitelist_items=None):
     if ip in active_ssh_ips:
         return True
 
+    # 协同集群联防节点 IP 永久放行，避免节点间同步与探测误触拉黑
+    try:
+        cfg_obj = load_config() if whitelist_items is None else None
+        if cfg_obj:
+            c_nodes = cfg_obj.get("cluster_sync", {}).get("cluster_nodes", [])
+            for raw_n in c_nodes:
+                norm_n = normalize_cluster_node(raw_n)
+                if norm_n and norm_n.get("ip") == ip:
+                    return True
+    except Exception:
+        pass
+
     if whitelist_items is None:
         try:
             cfg = load_config()
