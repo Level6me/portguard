@@ -1415,17 +1415,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </div>
                     </div>
 
-                    <!-- 密钥配置栏 -->
-                    <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px; margin-bottom: 14px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 6px;">
-                            <label style="font-size: 11px; font-weight: 700; color: var(--text-sec);">🔑 集群通信鉴权密钥 (Cluster Secret Key)</label>
-                            <span style="font-size: 11px; color: var(--text-sec);">各协同服务器必须设置完全一致的密钥</span>
+                    <!-- 通信端口与鉴权密钥配置栏 -->
+                    <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; margin-bottom: 14px;">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 12px;">
+                            <div>
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔌 本机集群通信监听端口 (Cluster Listen Port)</label>
+                                <input type="number" id="cluster-sync-port-input" class="input-field" placeholder="默认: 9098 (与WebUI分离)" min="1" max="65535" style="width: 100%; font-family: monospace; font-size: 12px; font-weight: 600; padding: 8px 10px;">
+                                <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
+                                    💡 独立于 Web UI 端口（如设置为 <code>9098</code>），仅处理节点加密联防协议，彻底与管理控制台解耦，避免向外暴露 Web 登录界面。
+                                </div>
+                            </div>
+                            <div>
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔑 集群通信鉴权密钥 (Cluster Secret Key)</label>
+                                <div style="display: flex; gap: 6px;">
+                                    <input type="text" id="cluster-sync-secret-input" class="input-field" placeholder="输入或生成集群通信鉴权密钥" style="flex: 1; min-width: 140px; font-family: monospace; font-size: 12px; font-weight: 600; padding: 8px 10px;">
+                                    <button type="button" class="pill-btn" onclick="generateRandomClusterSecret()" style="font-size: 11px; white-space: nowrap;">🎲 随机</button>
+                                    <button type="button" class="pill-btn" onclick="copyClusterSecret()" style="font-size: 11px; white-space: nowrap;">📋 复制</button>
+                                </div>
+                                <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
+                                    💡 所有协同节点必须配置完全一致的通信密钥（基于 HMAC-SHA256 签名鉴权）。
+                                </div>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                            <input type="text" id="cluster-sync-secret-input" class="input-field" placeholder="输入或生成集群通信鉴权密钥" style="flex: 1; min-width: 220px; font-family: monospace; font-size: 12px; font-weight: 600; padding: 8px 10px;">
-                            <button type="button" class="pill-btn" onclick="generateRandomClusterSecret()" style="font-size: 11px; white-space: nowrap;">🎲 随机生成</button>
-                            <button type="button" class="pill-btn" onclick="copyClusterSecret()" style="font-size: 11px; white-space: nowrap;">📋 复制密钥</button>
-                            <button type="button" class="pill-btn primary" onclick="saveClusterSecretOnly()" style="font-size: 11px; white-space: nowrap;">💾 保存密钥</button>
+                        <div style="display: flex; justify-content: flex-end;">
+                            <button type="button" class="pill-btn primary" onclick="saveClusterSecretOnly()" style="font-size: 11px; font-weight: 700; padding: 6px 16px;">💾 保存集群网络设置</button>
                         </div>
                     </div>
 
@@ -5300,7 +5313,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    let currentClusterSync = { enabled: false, cluster_secret: '', cluster_nodes: [] };
+    let currentClusterSync = { enabled: false, port: 9098, cluster_secret: '', cluster_nodes: [] };
 
     function renderClusterNodesTable() {
         const tbody = document.getElementById('cluster-nodes-tbody');
@@ -5331,7 +5344,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             html += `
             <tr style="border-bottom: 1px solid var(--border-subtle);">
                 <td style="padding: 10px 12px; font-family: monospace; font-weight: 700; font-size: 12px; color: var(--text);">
-                    ${escapeHtml(n.ip)}<span style="color: var(--text-sec); font-weight: normal;">:${n.port || 9099}</span>
+                    ${escapeHtml(n.ip)}<span style="color: var(--text-sec); font-weight: normal;">:${n.port || 9098}</span>
                 </td>
                 <td style="padding: 10px 12px; font-size: 12px; font-weight: 600; color: var(--text);">
                     ${escapeHtml(n.remark || '-')}
@@ -5346,8 +5359,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ${escapeHtml(n.created_at || '-')}
                 </td>
                 <td style="padding: 10px 12px; text-align: right; white-space: nowrap;">
-                    <button class="action-btn" onclick="testSingleClusterNode('${jsEscape(n.ip)}', ${n.port || 9099})" style="margin-right: 6px; padding: 3px 8px; font-size: 11px;">⚡ 测速</button>
-                    <button class="action-btn danger" onclick="deleteClusterNode('${jsEscape(n.ip)}', ${n.port || 9099})" style="padding: 3px 8px; font-size: 11px;">🗑️ 删除</button>
+                    <button class="action-btn" onclick="testSingleClusterNode('${jsEscape(n.ip)}', ${n.port || 9098})" style="margin-right: 6px; padding: 3px 8px; font-size: 11px;">⚡ 测速</button>
+                    <button class="action-btn danger" onclick="deleteClusterNode('${jsEscape(n.ip)}', ${n.port || 9098})" style="padding: 3px 8px; font-size: 11px;">🗑️ 删除</button>
                 </td>
             </tr>
             `;
@@ -5360,11 +5373,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const res = await fetch('/api/cluster/nodes');
             const data = await res.json();
             currentClusterSync.enabled = Boolean(data.enabled);
+            currentClusterSync.port = data.port || 9098;
             currentClusterSync.cluster_secret = data.cluster_secret || '';
             currentClusterSync.cluster_nodes = data.nodes || [];
 
             const toggle = document.getElementById('cluster-sync-enabled-toggle');
             if (toggle) toggle.checked = currentClusterSync.enabled;
+
+            const portInput = document.getElementById('cluster-sync-port-input');
+            if (portInput) portInput.value = currentClusterSync.port;
 
             const secretInput = document.getElementById('cluster-sync-secret-input');
             if (secretInput) secretInput.value = currentClusterSync.cluster_secret;
@@ -5421,7 +5438,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const sec = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
         const secretInput = document.getElementById('cluster-sync-secret-input');
         if (secretInput) secretInput.value = sec;
-        showToast('已随机生成 32 位安全通信密钥，请点击「保存密钥」', '🎲');
+        showToast('已随机生成 32 位安全通信密钥，请点击「保存设置」', '🎲');
     }
 
     function copyClusterSecret() {
@@ -5439,9 +5456,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     async function saveClusterSecretOnly() {
         const sec = document.getElementById('cluster-sync-secret-input')?.value.trim() || '';
+        const port = parseInt(document.getElementById('cluster-sync-port-input')?.value || '9098');
         currentClusterSync.cluster_secret = sec;
+        currentClusterSync.port = port;
         try {
-            showToast('正在保存集群通信密钥...', '⏳');
+            showToast('正在保存集群通信网络设置...', '⏳');
             const res = await fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -5451,7 +5470,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
             const data = await res.json();
             if (data.success) {
-                showToast('集群通信鉴权密钥已保存成功！', '🎉');
+                showToast('集群通信端口与鉴权密钥保存成功！(需重启生效独立通信端口)', '🎉');
                 loadClusterNodes();
             } else {
                 showToast(data.msg || '保存失败', '⚠️');
@@ -5463,7 +5482,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function openAddClusterNodeModal() {
         document.getElementById('cluster-node-add-ip').value = '';
-        document.getElementById('cluster-node-add-port').value = '9099';
+        document.getElementById('cluster-node-add-port').value = currentClusterSync.port || 9098;
         document.getElementById('cluster-node-add-remark').value = '';
         document.getElementById('modal-add-cluster-node').style.display = 'flex';
         setTimeout(() => { document.getElementById('cluster-node-add-ip')?.focus(); }, 100);
@@ -6515,6 +6534,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         norm_nodes.append(n)
                 self._send_json({
                     "enabled": bool(cluster_cfg.get("enabled", False)),
+                    "port": int(cluster_cfg.get("port", 9098) or 9098),
                     "cluster_secret": cluster_cfg.get("cluster_secret", ""),
                     "nodes": norm_nodes
                 })
@@ -8029,15 +8049,217 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, status=500)
 
+class ClusterRequestHandler(BaseHTTPRequestHandler):
+    """
+    专门处理多机网格情报联防的独立安全通信通道 (与 Web UI 完全隔离)
+    只接收与处理带有效 HMAC-SHA256 签名的集群指令 (ping, sync_ban, sync_whitelist)
+    对任何未授权或非集群请求直接返回 403 Forbidden，不暴露 Web 控制台与登录界面。
+    """
+    def log_message(self, format, *args):
+        pass
+
+    def _send_json(self, data, status=200):
+        try:
+            body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Server', 'PortGuardMesh/2.0')
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/api/cluster/ping":
+            token = self.headers.get("X-Cluster-Token", "").strip()
+            cfg = load_config()
+            cluster_cfg = cfg.get("cluster_sync", {})
+            secret = cluster_cfg.get("cluster_secret", "").strip()
+            if not secret or not verify_cluster_token("ping", token, secret):
+                self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
+                return
+            self._send_json({
+                "success": True,
+                "node_name": cfg.get("node_name", "远程节点"),
+                "version": "2.0.0"
+            })
+            return
+        self._send_json({"error": "Forbidden: Dedicated PortGuard Cluster Channel"}, status=403)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+            try:
+                req_data = json.loads(body)
+            except Exception:
+                req_data = {}
+
+            if path == "/api/cluster/ping":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+                if not secret or not verify_cluster_token("ping", token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
+                    return
+                self._send_json({
+                    "success": True,
+                    "node_name": cfg.get("node_name", "远程节点"),
+                    "version": "2.0.0"
+                })
+                return
+
+            if path == "/api/cluster/sync_ban":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                ip = req_data.get("ip", "").strip()
+                reason = req_data.get("reason", "集群威胁同步").strip()
+                level = req_data.get("level", "极高危").strip()
+                source_node = req_data.get("source_node", "远程探针").strip()
+
+                if not verify_cluster_token(ip, token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                valid_ip = validate_ip(ip)
+                if not valid_ip:
+                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
+                    return
+                ip = valid_ip
+
+                if ip_in_whitelist(ip):
+                    self._send_json({"success": True, "msg": "本地白名单已忽略"})
+                    return
+
+                ban_ip_firewall(ip)
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                now_ts = int(time.time())
+                auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
+                ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
+
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("""
+                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+                VALUES (?, ?, '集群联防', ?, ?, ?, ?, ?)
+                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
+                c.execute("""
+                INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
+                VALUES (?, 0, 'MESH', ?, 'mesh', ?, '集群联防', '', '', '', ?, ?, 'BANNED')
+                """, (ip, f"[{source_node}联防] {reason}", level, now_str, now_ts))
+                conn.commit()
+                conn.close()
+
+                self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
+                return
+
+            if path == "/api/cluster/sync_whitelist":
+                token = self.headers.get("X-Cluster-Token", "").strip()
+                cfg = load_config()
+                cluster_cfg = cfg.get("cluster_sync", {})
+                secret = cluster_cfg.get("cluster_secret", "").strip()
+
+                action = req_data.get("action", "add").strip()
+                data = req_data.get("data")
+                remark = req_data.get("remark", "集群协同白名单").strip()
+                source_node = req_data.get("source_node", "远程节点").strip()
+
+                sign_target = f"whitelist_{action}"
+                if not verify_cluster_token(sign_target, token, secret):
+                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
+                    return
+
+                whitelist = cfg.get("whitelist", [])
+
+                if action == "add":
+                    ip = str(data or "").strip()
+                    valid_ip = validate_ip(ip)
+                    if not valid_ip:
+                        self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
+                        return
+                    ip = valid_ip
+                    unban_ip_core(ip, status_event="WHITELIST")
+                    if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
+                        node_remark = f"[{source_node}联防] {remark}" if not str(remark).startswith(f"[{source_node}") else remark
+                        whitelist.append({"ip": ip, "remark": node_remark})
+                        cfg["whitelist"] = whitelist
+                        save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已成功同步添加白名单: {ip}"})
+                    return
+
+                elif action == "delete":
+                    ip = str(data or "").strip()
+                    whitelist = [w for w in whitelist if (w.get("ip") if isinstance(w, dict) else w) != ip]
+                    cfg["whitelist"] = whitelist
+                    save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已成功同步移除白名单: {ip}"})
+                    return
+
+                elif action in ("batch_add", "sync_all"):
+                    items = data if isinstance(data, list) else []
+                    updated_cnt = 0
+                    current_map = {}
+                    for w in whitelist:
+                        w_ip = w.get("ip") if isinstance(w, dict) else w
+                        if w_ip:
+                            current_map[w_ip] = w if isinstance(w, dict) else {"ip": w_ip, "remark": "信任IP"}
+
+                    for it in items:
+                        if isinstance(it, dict):
+                            it_ip = str(it.get("ip", "")).strip()
+                            it_rem = str(it.get("remark", remark)).strip()
+                        else:
+                            it_ip = str(it).strip()
+                            it_rem = remark
+                        v_ip = validate_ip(it_ip)
+                        if not v_ip:
+                            continue
+                        unban_ip_core(v_ip, status_event="WHITELIST")
+                        node_rem = f"[{source_node}联防] {it_rem}" if not it_rem.startswith(f"[{source_node}") else it_rem
+                        if v_ip not in current_map:
+                            current_map[v_ip] = {"ip": v_ip, "remark": node_rem}
+                            updated_cnt += 1
+
+                    cfg["whitelist"] = list(current_map.values())
+                    save_config(cfg)
+                    self._send_json({"success": True, "msg": f"已批量同步 {updated_cnt} 条协同白名单", "count": updated_cnt})
+                    return
+
+                self._send_json({"success": False, "msg": "未知的白名单同步操作"}, status=400)
+                return
+
+            self._send_json({"error": "Forbidden: Dedicated PortGuard Cluster Channel"}, status=403)
+        except Exception as e:
+            self._send_json({"error": str(e)}, status=500)
+
 def run_server():
     init_db()
     cfg = load_config()
     bind_ip = cfg.get("web_bind", "0.0.0.0")
     bind_port = int(cfg.get("web_port", 9099))
+    cluster_port = int(cfg.get("cluster_sync", {}).get("port", 9098) or 9098)
 
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((bind_ip, bind_port), RequestHandler)
     print(f"[PortGuard Full-Responsive] 控制台已就绪: http://{bind_ip}:{bind_port}")
+
+    # 若配置了独立于 WebUI 的集群通信端口，启动轻量级独立集群通信服务
+    if cluster_port > 0 and cluster_port != bind_port:
+        try:
+            cluster_httpd = ThreadingHTTPServer((bind_ip, cluster_port), ClusterRequestHandler)
+            print(f"[PortGuard Mesh] 独立集群联防通信服务已就绪: http://{bind_ip}:{cluster_port}")
+            threading.Thread(target=cluster_httpd.serve_forever, daemon=True).start()
+        except Exception as e:
+            print(f"[PortGuard Mesh] 独立集群通信服务端口 ({cluster_port}) 启动异常: {e}")
     
     trap_instance.start()
     sniffer_instance.start()

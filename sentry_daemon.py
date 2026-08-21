@@ -137,6 +137,7 @@ DEFAULT_CONFIG = {
     "node_name": "本机节点",
     "cluster_sync": {
         "enabled": False,
+        "port": 9098,
         "cluster_secret": "",
         "cluster_nodes": []
     },
@@ -2053,8 +2054,9 @@ class TrapServer:
                 continue
 
             bound_count_for_item = 0
+            cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
             for port in range(start_p, end_p + 1):
-                if port == web_port or port in active_ports or port in self.trap_map:
+                if port == web_port or (cluster_port > 0 and port == cluster_port) or port in active_ports or port in self.trap_map:
                     continue
                 if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
                     print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
@@ -2180,7 +2182,8 @@ def is_trap_port(port, cfg=None):
     if cfg is None:
         cfg = load_config()
     web_port = int(cfg.get("web_port", 9099) or 9099)
-    if port == web_port:
+    cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
+    if port == web_port or (cluster_port > 0 and port == cluster_port):
         return None
     
     # 1. 判定是否属于用户在列表中配置的正常业务端口 (P2 优先级高于蜜罐策略)
