@@ -368,8 +368,10 @@ def init_firewall_ipset():
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT ip FROM blacklist")
-        for row in c.fetchall():
-            chk_ip = row["ip"]
+        black_ips = [row["ip"] for row in c.fetchall()]
+        conn.close()
+
+        for chk_ip in black_ips:
             if is_infrastructure_or_cdn_ip(chk_ip):
                 unban_ip_core(chk_ip)
 
@@ -377,12 +379,10 @@ def init_firewall_ipset():
             unban_ip_core(safe_ip)
 
         # 5. 同步数据库中已有合法黑名单至 ipset 集合 (服务启动恢复)
-        c.execute("SELECT ip FROM blacklist")
-        for row in c.fetchall():
-            ip_val = validate_ip(row["ip"])
+        for ip_raw in black_ips:
+            ip_val = validate_ip(ip_raw)
             if ip_val and not is_infrastructure_or_cdn_ip(ip_val):
                 ban_ip_firewall(ip_val)
-        conn.close()
         return True
     except Exception as e:
         print(f"[IPSET] 初始化异常: {e}")
@@ -941,24 +941,34 @@ def heal_cluster_geo_history():
     """后台自愈：将历史上因集群同步被占位标记为 '集群联防' 的 IP 归属地，重新解析为真实国家/省市地理位置，并修复历史记录中遗留的 0 端口"""
     def _worker():
         try:
-            time.sleep(1.0)
+            time.sleep(2.0)
             conn = get_db()
             c = conn.cursor()
             # 修复历史 0 端口
             c.execute("UPDATE events SET port = 443, proto = 'TCP' WHERE port = 0 AND (port_name LIKE '%Web%' OR port_name LIKE '%HTTP%' OR port_name LIKE '%IP直连%' OR port_name LIKE '%诱捕%')")
             c.execute("UPDATE events SET proto = 'TCP' WHERE proto = 'MESH'")
-            # 修复历史归属地
-            c.execute("SELECT DISTINCT ip FROM events WHERE country = '集群联防' OR country = '' OR country IS NULL LIMIT 200")
-            rows = c.fetchall()
-            for r in rows:
-                ip = r[0]
-                geo = resolve_ip_geo(ip)
-                if geo and geo.get("country") not in ("集群联防", "公网节点", "未知地域", "", None):
-                    c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
-                              (geo.get("country"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), ip))
-                    c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (geo.get("country"), ip))
+            # 获取需要修复归属地的 IP 列表并立即关闭连接
+            c.execute("SELECT DISTINCT ip FROM events WHERE country = '集群联防' OR country = '' OR country IS NULL LIMIT 100")
+            rows = [r[0] for r in c.fetchall()]
             conn.commit()
             conn.close()
+
+            # 在不持有数据库连接的情况下执行地理位置解析
+            for ip in rows:
+                geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip)
+                if not geo or not geo.get("country") or geo.get("country") in ("集群联防", "公网节点", "未知地域", "", None):
+                    geo = resolve_ip_geo(ip)
+                if geo and geo.get("country") not in ("集群联防", "公网节点", "未知地域", "", None):
+                    try:
+                        u_conn = get_db()
+                        u_c = u_conn.cursor()
+                        u_c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                                  (geo.get("country"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), ip))
+                        u_c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (geo.get("country"), ip))
+                        u_conn.commit()
+                        u_conn.close()
+                    except Exception:
+                        pass
         except Exception:
             pass
     threading.Thread(target=_worker, daemon=True).start()
