@@ -1726,18 +1726,22 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
             return
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
+        geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
+        country = geo.get("country") or "公网节点"
+        region = geo.get("region", "")
+        city = geo.get("city", "")
+        isp = geo.get("isp", "")
+
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("""
         INSERT INTO access_logs (ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
-        VALUES (?, ?, ?, ?, ?, '分析中...', '', '', '', ?, ?)
-        """, (ip, method, path, status_code, (user_agent or "")[:200], now_str, now_ts))
-        web_log_id = cursor.lastrowid
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ip, method, path, status_code, (user_agent or "")[:200], country, region, city, isp, now_str, now_ts))
         
         # 同时以 5 秒防抖在 port_access_logs 中记录 Web 控制台业务连接
         global _WEB_PORT_LOG_CACHE
         last_t = _WEB_PORT_LOG_CACHE.get(ip, 0)
-        port_log_id = None
         if (now_ts - last_t) >= 5:
             _WEB_PORT_LOG_CACHE[ip] = now_ts
             cfg = load_config()
@@ -1747,32 +1751,13 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
             desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: PortGuard Web控制台 (端口 {web_port})"
             cursor.execute("""
             INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-            VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', ?, ?, ?)
-            """, (ip, web_port, desc, act, now_str, now_ts))
-            port_log_id = cursor.lastrowid
+            VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ip, web_port, desc, country, region, city, isp, act, now_str, now_ts))
             
         conn.commit()
         conn.close()
-        
-        # 异步解析地理位置
-        if ip not in ("127.0.0.1", "::1", "localhost"):
-            def _async_geo_web(w_id, p_id, client_ip):
-                try:
-                    g = resolve_ip_geo(client_ip)
-                    c2 = get_db()
-                    cur2 = c2.cursor()
-                    cur2.execute("""
-                    UPDATE access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
-                    """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), w_id))
-                    if p_id:
-                        cur2.execute("""
-                        UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
-                        """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), p_id))
-                    c2.commit()
-                    c2.close()
-                except Exception:
-                    pass
-            _EXECUTOR.submit(_async_geo_web, web_log_id, port_log_id, ip)
+    except Exception:
+        pass
     except Exception:
         pass
 
@@ -2756,48 +2741,34 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     else:
         ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
+    geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
+    geo_country = geo.get("country") or "公网节点"
+    geo_region = geo.get("region", "")
+    geo_city = geo.get("city", "")
+    geo_isp = geo.get("isp", "")
+
     # 4. 写入事件与黑名单库与端口访问日志
     conn = get_db()
     c = conn.cursor()
     c.execute("""
     INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-    VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'BANNED')
-    """, (ip, port_val, port_name, event_category, event_level, now_str, now_ts))
-    event_id = c.lastrowid
+    VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+    """, (ip, port_val, port_name, event_category, event_level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
     
     # 将拦截记录写入内存队列批量落盘
-    log_port_access_entry(ip, port_val, port_name, action="INTERCEPTED")
+    log_port_access_entry(ip, port_val, port_name, action="INTERCEPTED", geo=geo)
 
     node_name = cfg.get("node_name", "本机") or "本机"
     c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (ip,))
     c.execute("""
     INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-    VALUES (?, ?, '分析中...', ?, ?, ?, ?, ?)
-    """, (ip, ban_reason, event_level, now_str, now_ts, ban_expire, node_name))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (ip, ban_reason, geo_country, event_level, now_str, now_ts, ban_expire, node_name))
     conn.commit()
     conn.close()
     
     # 5. 向集群联防节点异步广播黑名单情报
     broadcast_cluster_ban(ip, ban_reason, event_level, port=port_val, proto="TCP", category=event_category)
-
-    # 6. 后台异步解析地理位置并回填
-    def _async_geo():
-        geo = resolve_ip_geo(ip)
-        try:
-            c_geo = get_db()
-            cur = c_geo.cursor()
-            cur.execute("""
-            UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?
-            """, (geo["country"], geo["region"], geo["city"], geo["isp"], event_id))
-            cur.execute("""
-            UPDATE blacklist SET country=? WHERE ip=?
-            """, (geo["country"], ip))
-            c_geo.commit()
-            c_geo.close()
-        except Exception:
-            pass
-
-    _EXECUTOR.submit(_async_geo)
 
 _SYSTEM_PORTS_CACHE = {}
 _SYSTEM_PORTS_CACHE_TIME = 0
@@ -3623,7 +3594,12 @@ class SiteLogCollector:
                                 ftime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                                 ts = int(time.time())
 
-                            new_records.append((client_ip, req_domain, method, path, status, ua, "分析中...", "", "", "", ftime, ts))
+                            geo = _GEO_CACHE.get(client_ip) or resolve_ip_geo_local(client_ip) or {}
+                            country = geo.get("country") or "公网节点"
+                            region = geo.get("region", "")
+                            city = geo.get("city", "")
+                            isp = geo.get("isp", "")
+                            new_records.append((client_ip, req_domain, method, path, status, ua, country, region, city, isp, ftime, ts))
                             try:
                                 if not is_infrastructure_or_cdn_ip(client_ip):
                                     check_http_request_traps(client_ip, req_domain, method, path, status, ua)
@@ -3642,9 +3618,6 @@ class SiteLogCollector:
                         """, new_records)
                         conn.commit()
                         conn.close()
-
-                        for item in new_records:
-                            _EXECUTOR.submit(resolve_ip_geo, item[0])
                     except Exception:
                         pass
 
