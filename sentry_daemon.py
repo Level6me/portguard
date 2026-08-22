@@ -749,8 +749,8 @@ def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=10000;")
+        conn.execute("PRAGMA busy_timeout=15000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     return conn
@@ -762,10 +762,12 @@ def init_db():
             os.makedirs(dir_name, exist_ok=True)
         except Exception:
             pass
-    conn = get_db()
+    conn = sqlite3.connect(DB_PATH, timeout=20)
     cursor = conn.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=15000;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
     except Exception:
         pass
     cursor.execute("""
@@ -2787,9 +2789,6 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
             cur.execute("""
             UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?
             """, (geo["country"], geo["region"], geo["city"], geo["isp"], event_id))
-            cur.execute("""
-            UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
-            """, (geo["country"], geo["region"], geo["city"], geo["isp"], port_log_id))
             cur.execute("""
             UPDATE blacklist SET country=? WHERE ip=?
             """, (geo["country"], ip))
