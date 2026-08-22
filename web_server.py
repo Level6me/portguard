@@ -6916,7 +6916,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             self._send_json({"error": "Not Found"}, status=404)
         except Exception as e:
-            self._send_json({"error": str(e)}, status=500)
+            import traceback
+            traceback.print_exc()
+            try:
+                self._send_json({"error": str(e)}, status=500)
+            except Exception:
+                pass
 
     def do_POST(self):
         try:
@@ -8421,7 +8426,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             self._send_json({"error": "Not Found"}, status=404)
         except Exception as e:
-            self._send_json({"error": str(e)}, status=500)
+            import traceback
+            traceback.print_exc()
+            try:
+                self._send_json({"error": str(e)}, status=500)
+            except Exception:
+                pass
 
     def do_DELETE(self):
         try:
