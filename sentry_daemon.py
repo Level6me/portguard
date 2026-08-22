@@ -1220,7 +1220,7 @@ def broadcast_cluster_ban(ip, reason, level, port=443, proto="TCP", category="we
     if not secret or not nodes:
         return
 
-    geo = resolve_ip_geo(ip) or {}
+    geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
     token = generate_cluster_token(ip, secret)
     payload = json.dumps({
         "ip": ip,

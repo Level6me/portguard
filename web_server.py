@@ -27,7 +27,7 @@ from sentry_daemon import (
     trap_instance, sniffer_instance, site_collector_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
     DEFAULT_HTTP_TRAPS, get_http_traps, check_http_request_traps,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
-    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, _GEO_CACHE, _EXECUTOR,
+    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, resolve_ip_geo_local, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
     ban_ip_firewall, init_firewall_ipset, verify_cluster_token, generate_cluster_token, ban_ip,
@@ -3498,19 +3498,36 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function toggleCurrentDetailIPBan() {
         if (!currentDetailIP) return;
+        const banBtn = document.getElementById('btn-ip-detail-ban');
         const isBanned = allBlacklist && allBlacklist.some(b => b.ip === currentDetailIP);
         if (isBanned) {
+            if (banBtn) { banBtn.disabled = true; banBtn.innerText = '正在解封...'; }
             unbanIP(currentDetailIP);
             closeModals();
         } else {
+            if (banBtn) { banBtn.disabled = true; banBtn.innerText = '正在封禁...'; }
             fetch('/api/ban', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ip: currentDetailIP, reason: '详情卡片快速拉黑' })
             }).then(res => res.json()).then(res => {
                 showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
+                if (!allBlacklist) allBlacklist = [];
+                if (!allBlacklist.some(b => b.ip === currentDetailIP)) {
+                    allBlacklist.unshift({
+                        ip: currentDetailIP,
+                        reason: '详情卡片快速拉黑',
+                        country: currentDetailMeta.country || '手动添加',
+                        level: '极高危',
+                        ban_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
+                        source_node: '本机'
+                    });
+                }
                 closeModals();
                 fetchData(false);
+            }).catch(err => {
+                if (banBtn) { banBtn.disabled = false; banBtn.innerText = '🚫 一键拉黑 IP'; }
+                showToast('封禁请求失败: ' + (err.message || '网络异常'), '⚠️');
             });
         }
     }
@@ -6783,11 +6800,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 for r in rows:
-                    geo = resolve_ip_geo(r["ip"])
-                    r["country"] = geo.get("country", r.get("country", "公网节点"))
-                    r["region"] = geo.get("region", "")
-                    r["city"] = geo.get("city", "")
-                    r["isp"] = geo.get("isp", "")
+                    ip_k = r["ip"]
+                    geo = _GEO_CACHE.get(ip_k) or resolve_ip_geo_local(ip_k) or {}
+                    if geo.get("country") and geo["country"] not in ("未知地域", "公网节点", "", None):
+                        r["country"] = geo["country"]
+                        r["region"] = geo.get("region", "")
+                        r["city"] = geo.get("city", "")
+                        r["isp"] = geo.get("isp", "")
+                    else:
+                        r["country"] = r.get("country") or "公网节点"
+                        r["region"] = r.get("region", "")
+                        r["city"] = r.get("city", "")
+                        r["isp"] = r.get("isp", "")
                 self._send_json(rows)
                 return
 
@@ -7525,31 +7549,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 ip = valid_ip
 
-                ban_ip_firewall(ip)
-                
-                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                now_ts = int(time.time())
-                
-                conn = get_db()
-                c = conn.cursor()
-                node_name = cfg.get("node_name", "本机") or "本机"
-                c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
-                c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (ip,))
-                c.execute("""
-                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-                VALUES (?, ?, '手动添加', '极高危', ?, ?, NULL, ?)
-                """, (ip, reason, now_str, now_ts, f"手动添加 ({node_name})"))
-                c.execute("""
-                INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, 0, 'MANUAL', ?, 'manual', '极高危', '手动添加', '', '', '', ?, ?, 'BANNED')
-                """, (ip, reason, now_str, now_ts))
-                conn.commit()
-                conn.close()
-
-                # 同步广播手动封禁至全网集群节点
-                broadcast_cluster_ban(ip, reason, "极高危")
-                
-                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已同步全网集群协同阻断）"})
+                ban_ip(ip, reason=reason, category="manual", level="极高危")
+                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已下发内核防火墙并同步全网集群阻断）"})
                 return
 
             if path == "/api/defense/toggle_pause":
