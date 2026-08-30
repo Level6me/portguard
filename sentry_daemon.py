@@ -90,18 +90,18 @@ def is_infrastructure_or_cdn_ip(ip):
 
 DEFAULT_CONFIG = {
     "trap_ports": [
-        {"port": 21, "name": "FTP 暴力破解诱饵", "category": "ftp", "enabled": True, "level": "高危"},
-        {"port": 23, "name": "Telnet 弱口令嗅探", "category": "telnet", "enabled": True, "level": "高危"},
+        {"port": 21, "name": "FTP 弱口令防护", "category": "ftp", "enabled": True, "level": "高危"},
+        {"port": 23, "name": "Telnet 弱口令防护", "category": "telnet", "enabled": True, "level": "高危"},
         {"port": 135, "name": "RPC 远程调用映射", "category": "smb", "enabled": True, "level": "高危"},
-        {"port": 139, "name": "NetBIOS 局域网嗅探", "category": "smb", "enabled": True, "level": "中危"},
-        {"port": 445, "name": "SMB / 永恒之蓝漏洞探测", "category": "smb", "enabled": True, "level": "极高危"},
-        {"port": 1433, "name": "MSSQL 数据库暴力嗅探", "category": "db", "enabled": True, "level": "高危"},
-        {"port": 3389, "name": "RDP 远程桌面爆破探测", "category": "rdp", "enabled": True, "level": "极高危"},
-        {"port": 5900, "name": "VNC 屏幕控制漏洞探测", "category": "rdp", "enabled": True, "level": "高危"},
-        {"port": 6379, "name": "Redis 未授权提权探针", "category": "db", "enabled": True, "level": "极高危"},
-        {"port": 8888, "name": "宝塔 / 管理控制台探针", "category": "web", "enabled": True, "level": "中危"},
-        {"port": 9200, "name": "Elasticsearch RCE 探测", "category": "db", "enabled": True, "level": "高危"},
-        {"port": 27017, "name": "MongoDB 默认数据库探针", "category": "db", "enabled": True, "level": "高危"}
+        {"port": 139, "name": "NetBIOS 局域网防护", "category": "smb", "enabled": True, "level": "中危"},
+        {"port": 445, "name": "SMB 共享漏洞探测", "category": "smb", "enabled": True, "level": "极高危"},
+        {"port": 1433, "name": "MSSQL 数据库防护", "category": "db", "enabled": True, "level": "高危"},
+        {"port": 3389, "name": "RDP 远程桌面防护", "category": "rdp", "enabled": True, "level": "极高危"},
+        {"port": 5900, "name": "VNC 远程控制防护", "category": "rdp", "enabled": True, "level": "高危"},
+        {"port": 6379, "name": "Redis 端口防护", "category": "db", "enabled": True, "level": "极高危"},
+        {"port": 8888, "name": "管理控制台端口", "category": "web", "enabled": True, "level": "中危"},
+        {"port": 9200, "name": "Elasticsearch 端口防护", "category": "db", "enabled": True, "level": "高危"},
+        {"port": 27017, "name": "MongoDB 端口防护", "category": "db", "enabled": True, "level": "高危"}
     ],
     "whitelist": [
         {"ip": "127.0.0.1", "remark": "本地回环"},
@@ -151,7 +151,7 @@ DEFAULT_CONFIG = {
 DEFAULT_HTTP_TRAPS = [
     {
         "rule_id": "ht_env_backup",
-        "name": "敏感配置与备份嗅探",
+        "name": "敏感配置与备份探测",
         "match_type": "path_keyword",
         "pattern": r"\.env|\.git|\.svn|\.aws|config\.json|database\.sql|dump\.sql|backup\.zip|www\.rar|web\.zip|\.bak$",
         "threshold": 1,
@@ -163,7 +163,7 @@ DEFAULT_HTTP_TRAPS = [
     },
     {
         "rule_id": "ht_admin_probe",
-        "name": "高危管理后台探针",
+        "name": "管理后台特征探测",
         "match_type": "path_keyword",
         "pattern": r"phpmyadmin|admin\.php|wp-login\.php|actuator|/solr/|/manager/html|/api/v1/debug",
         "threshold": 1,
@@ -171,11 +171,11 @@ DEFAULT_HTTP_TRAPS = [
         "action": "ban",
         "level": "极高危",
         "enabled": 1,
-        "description": "嗅探常见管理控制台、框架调试接口与后台入口"
+        "description": "探测常见管理控制台、框架调试接口与后台入口"
     },
     {
         "rule_id": "ht_traversal_rce",
-        "name": "路径遍历与系统文件嗅探",
+        "name": "路径遍历与文件探测",
         "match_type": "path_keyword",
         "pattern": r"%2e%2e|\.\./\.\.|eval-stdin|/cgi-bin/|/etc/passwd|/proc/self",
         "threshold": 1,
@@ -187,7 +187,7 @@ DEFAULT_HTTP_TRAPS = [
     },
     {
         "rule_id": "ht_scanner_tools",
-        "name": "黑客扫描器工具指纹",
+        "name": "自动化扫描工具特征",
         "match_type": "ua_keyword",
         "pattern": r"sqlmap|nikto|dirsearch|gobuster|wpscan|masscan|hydra|acunetix|nessus|zgrab",
         "threshold": 1,
@@ -195,7 +195,7 @@ DEFAULT_HTTP_TRAPS = [
         "action": "ban",
         "level": "高危",
         "enabled": 1,
-        "description": "拦截携带明确特征扫描工具指纹的自动化探测源"
+        "description": "拦截携带特征扫描工具标识的自动化探测源"
     },
     {
         "rule_id": "ht_survey_scanners",
@@ -207,7 +207,7 @@ DEFAULT_HTTP_TRAPS = [
         "action": "ban",
         "level": "极高危",
         "enabled": 1,
-        "description": "精准拦截 Censys, Shodan, Onyphe 等全球资产测绘引擎的漏洞与端口嗅探"
+        "description": "拦截 Censys, Shodan, Onyphe 等资产测绘引擎的探测请求"
     },
     {
         "rule_id": "ht_direct_ip_probe",
@@ -219,11 +219,11 @@ DEFAULT_HTTP_TRAPS = [
         "action": "ban",
         "level": "中危",
         "enabled": 1,
-        "description": "拦截未携带合法域名 Host、直接通过服务器 IP 地址进行全网地毯式盲扫的 Web 探测"
+        "description": "拦截未携带合法域名 Host、直接通过服务器 IP 地址发起的 Web 探测请求"
     },
     {
         "rule_id": "ht_rate_404",
-        "name": "异常状态码爆破熔断",
+        "name": "异常状态码频次限制",
         "match_type": "status_rate",
         "pattern": "400,403,404",
         "threshold": 6,
@@ -231,7 +231,7 @@ DEFAULT_HTTP_TRAPS = [
         "action": "ban",
         "level": "高危",
         "enabled": 1,
-        "description": "30秒内对不存在路径或受限资源连续产生 6 次以上 400/403/404 异常直接熔断拉黑（可自定义为任意状态码如 302 或 500-599）"
+        "description": "30秒内对不存在路径或受限资源连续产生 6 次以上 400/403/404 异常执行封禁阻断（可自定义为任意状态码如 302 或 500-599）"
     }
 ]
 
@@ -1691,11 +1691,11 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
         elif mtype == "ua_keyword":
             pat = rule.get("pattern", "")
             if pat and ua and re.search(pat, ua, re.IGNORECASE):
-                reason = f"Web诱捕: 扫描工具指纹 {ua[:28]}"
+                reason = f"Web防护: 扫描工具特征 {ua[:28]}"
                 ban_ip(ip, reason=reason, category="web", level=rlevel)
                 return True
 
-        # 3. HTTP 响应状态码 / 频次熔断 (支持任意状态码如 302, 500, 404, 400-499, 500-599 等)
+        # 3. HTTP 响应状态码 / 频次限制 (支持任意状态码如 302, 500, 404, 400-499, 500-599 等)
         elif mtype in ("status_rate", "status_code"):
             pat = rule.get("pattern", "")
             if match_status_code(status_code, pat):
@@ -1712,9 +1712,9 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
                         _IP_404_RATE_CACHE[cache_key] = []
                         target_code_desc = pat if pat else f"{status_code}"
                         if threshold <= 1:
-                            reason = f"Web状态码诱捕: 触发 {status_code} ({path[:24]})"
+                            reason = f"Web状态码限制: 触发 {status_code} ({path[:24]})"
                         else:
-                            reason = f"Web状态码熔断: {window}s内触发 {len(history)}次 [{target_code_desc}] ({path[:20]})"
+                            reason = f"Web状态码超频: {window}s内触发 {len(history)}次 [{target_code_desc}] ({path[:20]})"
                         ban_ip(ip, reason=reason, category="web", level=rlevel)
                         return True
 
@@ -1722,7 +1722,7 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
         elif mtype == "survey_engine":
             pat = rule.get("pattern", "")
             if is_survey_scanner_ip(ip) or (pat and ua and re.search(pat, ua, re.IGNORECASE)):
-                reason = f"测绘拦截: 网络空间测绘引擎嗅探 ({ua[:20] if ua else 'Censys/Onyphe/Shodan'})"
+                reason = f"测绘拦截: 网络空间测绘引擎探测 ({ua[:20] if ua else 'Censys/Onyphe/Shodan'})"
                 ban_ip(ip, reason=reason, category="survey", level=rlevel)
                 return True
 
@@ -3381,7 +3381,7 @@ class GlobalPortSniffer:
             # 1. 优先检测是否为网络空间测绘引擎 (Censys, Shodan, Onyphe 等)
             if block_scanner and is_survey_scanner_ip(src_ip):
                 action = "INTERCEPTED"
-                desc = f"测绘扫描拦截: 嗅探业务端口 {dst_port} ({biz_name})"
+                desc = f"测绘扫描拦截: 探测业务端口 {dst_port} ({biz_name})"
                 port_info = {
                     "name": desc,
                     "category": "survey",
@@ -3394,7 +3394,7 @@ class GlobalPortSniffer:
             # 2. 检查是否为云厂商/IDC机房探针 (仅在该业务端口开启了 block_idc 时生效)
             if block_idc and is_idc_hosting_ip(src_ip):
                 action = "INTERCEPTED"
-                desc = f"机房探针拦截: 云厂商IDC探测业务端口 {dst_port} ({biz_name})"
+                desc = f"扫描拦截: 云厂商机房源探测业务端口 {dst_port} ({biz_name})"
                 port_info = {
                     "name": desc,
                     "category": "idc_probe",
@@ -3405,14 +3405,14 @@ class GlobalPortSniffer:
                 return
 
             action = "BUSINESS"
-            desc = f"正常业务访问: {biz_name} (端口 {dst_port})"
+            desc = f"业务访问: {biz_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 4. 检查是否命中显式配置的蜜罐诱饵规则 (P3 优先级，仅针对非业务端口，如 1-60000 范围或单独未开放端口)
+        # 4. 检查是否命中显式配置的防御端口规则 (P3 优先级，针对非业务端口)
         if trap_meta and trap_meta.get("enabled", True):
             action = "INTERCEPTED"
-            desc = trap_meta.get("name") or trap_meta.get("description") or f"蜜罐诱饵探针 (端口 {dst_port})"
+            desc = trap_meta.get("name") or trap_meta.get("description") or f"端口防御规则 (端口 {dst_port})"
             port_info = {
                 "name": desc,
                 "category": trap_meta.get("category", "honeypot"),
@@ -3422,10 +3422,10 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
-        # 5. 恶意访问行为 ②：恶意多端口扫描与探针攻击感知 (Nmap/Masscan 等扫描器识别)
+        # 5. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
         if check_port_scan_attack(src_ip, dst_port, cfg):
             action = "INTERCEPTED"
-            desc = f"恶意多端口扫描探测 (触碰端口 {dst_port})"
+            desc = f"多端口扫描探测 (目标端口 {dst_port})"
             port_info = {
                 "name": desc,
                 "category": "scan",
@@ -3435,10 +3435,10 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
-        # 6. 其他全端口全量诱捕（仅在显式勾选全端口诱捕时生效，默认关闭）
+        # 6. 其他全端口全量防御（仅在显式勾选全端口防御时生效，默认关闭）
         if bool(cfg.get("trap_all_ports", False)) or bool(cfg.get("trap_all_unopened_ports", False)):
             action = "INTERCEPTED"
-            desc = f"全端口嗅探诱捕 (未开放端口 {dst_port})"
+            desc = f"全端口防御拦截 (未开放端口 {dst_port})"
             port_info = {
                 "name": desc,
                 "category": "scan",
@@ -3448,7 +3448,7 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
-        # 7. 常规单次未开放端口偶发探测（未达到扫描器判定标准，仅记录访问审计日志，不拉黑）
+        # 7. 常规单次未开放端口偶发探测（未达到扫描器判定标准，仅记录访问审计日志，不封禁）
         action = "PROBE"
         desc = f"未开放端口探测 (端口 {dst_port})"
         _EXECUTOR.submit(_async_write, action, desc)

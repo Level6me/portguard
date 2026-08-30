@@ -792,9 +792,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="header-left">
             <div class="date-badge">
                 <span class="status-dot" id="header-status-dot"></span>
-                <span id="header-status-text">PORTGUARD · 内核防护中</span>
+                <span id="header-status-text">PORTGUARD · 防护运行中</span>
             </div>
-            <h1 class="title" id="page-main-title">安全态势分析</h1>
+            <h1 class="title" id="page-main-title">安全态势概览</h1>
         </div>
         <div class="header-actions">
             <button class="pill-btn" onclick="cycleTheme()" id="btn-theme-toggle" title="切换主题: 自动 (跟随系统) / 暗黑 / 明亮">
@@ -803,7 +803,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </button>
             <button class="pill-btn accent" onclick="toggleAutoRefresh()" id="btn-auto-refresh" title="点击开启或暂停 5 秒自动刷新">
                 <span id="refresh-icon">⏱️</span>
-                <span id="refresh-label" class="btn-text-full">5s 实时</span>
+                <span id="refresh-label" class="btn-text-full">实时刷新 (5s)</span>
             </button>
         </div>
     </div>
@@ -814,8 +814,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="analytics-subtab-bar">
             <!-- 模式切换分段按钮 (采用与访问日志一致的胶囊拟态设计) -->
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
-                <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 全局概览</button>
-                <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维度分析</button>
+                <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 态势概览</button>
+                <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维分析</button>
             </div>
             <div id="analytics-toolbar" class="analytics-filter-row" style="display: none;">
                 <div class="segmented-control" style="background: var(--card); border: 1px solid var(--border);">
@@ -837,24 +837,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <!-- 4 核心统计卡 (支持交互点击跳转过滤) -->
             <div class="grid-4">
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看所有拦截记录">
-                    <div class="val-sub" style="color:var(--danger);">🚫 累计阻断 IP</div>
+                    <div class="val-sub" style="color:var(--danger);">🚫 累计拦截 IP</div>
                     <div class="val-big" id="stat-total" style="color: var(--danger);">--</div>
-                    <div class="val-sub">iptables + 路由黑洞</div>
+                    <div class="val-sub">iptables / IPSet 内核阻断</div>
                 </div>
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看今日拦截记录">
-                    <div class="val-sub" style="color:var(--warning);">⚡ 今日捕获扫描</div>
+                    <div class="val-sub" style="color:var(--warning);">⚡ 今日拦截探测</div>
                     <div class="val-big" id="stat-today" style="color: var(--warning);">--</div>
-                    <div class="val-sub">毫秒级自动指纹识别</div>
+                    <div class="val-sub">威胁特征自动识别</div>
                 </div>
-                <div class="card interactive" onclick="switchTab('traps')" title="点击管理蜜罐诱饵端口">
-                    <div class="val-sub" style="color:var(--accent);">🍯 活跃诱捕蜜罐</div>
+                <div class="card interactive" onclick="switchTab('traps')" title="点击管理防护规则">
+                    <div class="val-sub" style="color:var(--accent);">🛡️ 活跃防御端口</div>
                     <div class="val-big" id="stat-traps" style="color: var(--accent);">--</div>
-                    <div class="val-sub">智能避让生产业务端口</div>
+                    <div class="val-sub">生产业务端口自动避让</div>
                 </div>
                 <div class="card interactive" onclick="switchTab('whitelist')" title="点击管理安全白名单">
-                    <div class="val-sub" style="color:var(--success);">🛡️ 安全信任白名单</div>
+                    <div class="val-sub" style="color:var(--success);">🛡️ 信任白名单</div>
                     <div class="val-big" id="stat-white" style="color: var(--success);">--</div>
-                    <div class="val-sub">运维专线防误封保护</div>
+                    <div class="val-sub">管理与信任 IP 放行保护</div>
                 </div>
             </div>
 
@@ -863,8 +863,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">📈 24 小时扫描拦截趋势</div>
-                            <div class="val-sub">触碰诱饵频次分布 (按小时)</div>
+                            <div class="card-title">📈 24 小时安全拦截趋势</div>
+                            <div class="val-sub">拦截频次时序分布 (按小时)</div>
                         </div>
                     </div>
                     <div style="height: 200px;"><canvas id="trendChart"></canvas></div>
@@ -872,8 +872,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🎯 诱饵命中排行 Top 5</div>
-                            <div class="val-sub">高危服务探针类型分布</div>
+                            <div class="card-title">🎯 目标端口拦截排行 Top 5</div>
+                            <div class="val-sub">受探测服务类型分布</div>
                         </div>
                     </div>
                     <div style="height: 200px;"><canvas id="portChart"></canvas></div>
@@ -884,14 +884,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="grid-2">
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">🌍 攻击来源地域排行</div>
+                        <div class="card-title">🌍 威胁来源地域排行</div>
                     </div>
                     <div id="geo-rank-box" style="padding-top: 4px;">正在统计地域流量...</div>
                 </div>
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">⚡ 实时最新拦截快报</div>
-                        <button class="action-btn" onclick="switchTab('logs')">查看全部</button>
+                        <div class="card-title">⚡ 实时拦截事件</div>
+                        <button class="action-btn" onclick="switchTab('logs')">查看全部日志</button>
                     </div>
                     <div id="recent-threats-box">正在加载最新事件...</div>
                 </div>
@@ -903,34 +903,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <!-- 6 维度核心指标概览看板 -->
             <div class="grid-6">
                 <div class="card">
-                    <div class="val-sub" style="color: var(--accent);">🛡️ 捕获探测总量</div>
+                    <div class="val-sub" style="color: var(--accent);">🛡️ 探测捕获总量</div>
                     <div class="val-big" id="akpi-probes" style="color: var(--accent); font-size: 24px;">--</div>
-                    <div class="val-sub">网络层 SYN 嗅探统计</div>
+                    <div class="val-sub">网络连接与扫描探测统计</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: var(--danger);">🚫 核心拦截阻断</div>
+                    <div class="val-sub" style="color: var(--danger);">🚫 安全拦截总量</div>
                     <div class="val-big" id="akpi-intercepted" style="color: var(--danger); font-size: 24px;">--</div>
-                    <div class="val-sub">黑洞路由与防火墙处置</div>
+                    <div class="val-sub">防火墙与路由策略阻断</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: var(--warning);">🌐 独立攻击者 IP</div>
+                    <div class="val-sub" style="color: var(--warning);">🌐 独立威胁源 IP</div>
                     <div class="val-big" id="akpi-attackers" style="color: var(--warning); font-size: 24px;">--</div>
-                    <div class="val-sub">非重叠威胁实体数</div>
+                    <div class="val-sub">去重威胁来源总数</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: var(--success);">🎯 威胁阻断转化率</div>
+                    <div class="val-sub" style="color: var(--success);">🎯 威胁拦截比率</div>
                     <div class="val-big" id="akpi-banrate" style="color: var(--success); font-size: 24px;">--</div>
-                    <div class="val-sub">拦截数 / 探测总数</div>
+                    <div class="val-sub">拦截次数 / 探测总次数</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: #af52de;">🌍 涉及国家/地区</div>
+                    <div class="val-sub" style="color: #af52de;">🌍 来源国家/地区</div>
                     <div class="val-big" id="akpi-countries" style="color: #af52de; font-size: 24px;">--</div>
-                    <div class="val-sub">跨国境威胁来源广度</div>
+                    <div class="val-sub">威胁来源地域覆盖范围</div>
                 </div>
                 <div class="card">
                     <div class="val-sub" style="color: #ff9500;">🚦 Web 异常请求</div>
                     <div class="val-big" id="akpi-webprobes" style="color: #ff9500; font-size: 24px;">--</div>
-                    <div class="val-sub">4xx/5xx 与敏感探针</div>
+                    <div class="val-sub">异常状态码与特征探针</div>
                 </div>
             </div>
 
@@ -939,8 +939,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">📈 多维安全流量时序演进趋势</div>
-                            <div class="val-sub">蜜罐拦截 vs 端口探测 vs Web访问 对比</div>
+                            <div class="card-title">📈 安全流量时序对比趋势</div>
+                            <div class="val-sub">安全拦截 vs 端口探测 vs Web访问 对比</div>
                         </div>
                     </div>
                     <div style="height: 220px;"><canvas id="analyticsTrendChart"></canvas></div>
@@ -948,8 +948,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">⏰ 24 小时全天候攻击活跃时段分布</div>
-                            <div class="val-sub">按每日 00:00~23:00 统计攻击活跃峰值区间</div>
+                            <div class="card-title">⏰ 24 小时攻击活跃时段分布</div>
+                            <div class="val-sub">按每日 00:00~23:00 统计攻击时段分布</div>
                         </div>
                     </div>
                     <div style="height: 220px;"><canvas id="analyticsHourlyChart"></canvas></div>
@@ -961,8 +961,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🌍 攻击来源国家与地区分布</div>
-                            <div class="val-sub">TOP 8 全球威胁发源地理分布</div>
+                            <div class="card-title">🌍 威胁来源国家与地区分布</div>
+                            <div class="val-sub">TOP 8 威胁来源地理分布</div>
                         </div>
                     </div>
                     <div style="height: 220px;"><canvas id="analyticsGeoChart"></canvas></div>
@@ -970,8 +970,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🏢 恶意扫描源网络运营商 (ISP / ASN)</div>
-                            <div class="val-sub">TOP 8 频繁发起探测的云计算或电信运营商</div>
+                            <div class="card-title">🏢 来源网络运营商分布 (ISP / ASN)</div>
+                            <div class="val-sub">TOP 8 频繁发起探测的云厂商或运营商</div>
                         </div>
                     </div>
                     <div style="height: 220px;"><canvas id="analyticsIspChart"></canvas></div>
@@ -983,7 +983,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🔌 高危服务分类构成</div>
+                            <div class="card-title">🔌 目标服务类型分布</div>
                             <div class="val-sub">目标服务类型占比</div>
                         </div>
                     </div>
@@ -992,8 +992,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🛡️ 流量处置动作分布</div>
-                            <div class="val-sub">阻断 / 探测 / 业务 / 放行</div>
+                            <div class="card-title">🛡️ 流量处理动作分布</div>
+                            <div class="val-sub">阻断 / 探测 / 业务 / 白名单</div>
                         </div>
                     </div>
                     <div style="height: 210px;"><canvas id="analyticsActionChart"></canvas></div>
@@ -1001,7 +1001,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🏷️ 威胁危险等级分布</div>
+                            <div class="card-title">🏷️ 威胁等级分布</div>
                             <div class="val-sub">极高危 / 高危 / 中危 / 低危</div>
                         </div>
                     </div>
@@ -1014,8 +1014,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🚦 HTTP 响应状态码与健康度</div>
-                            <div class="val-sub">正常访问 (200) vs 敏感探针/异常 (4xx/5xx)</div>
+                            <div class="card-title">🚦 HTTP 响应状态码分布</div>
+                            <div class="val-sub">正常访问 (2xx/3xx) vs 异常请求 (4xx/5xx)</div>
                         </div>
                     </div>
                     <div style="height: 210px; position: relative;">
@@ -1031,8 +1031,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🔍 敏感文件探针 & 扫描工具指纹</div>
-                            <div class="val-sub">Web 嗅探特征排行 TOP 10</div>
+                            <div class="card-title">🔍 敏感路径与扫描特征排行</div>
+                            <div class="val-sub">Web 探测特征排行 TOP 10</div>
                         </div>
                         <div class="segmented-control" style="padding: 2px;">
                             <button class="segment-btn active" id="btn-webdiag-path" onclick="switchWebDiagTab('path')" style="padding: 4px 10px; font-size: 11px;">📁 敏感路径</button>
@@ -1049,19 +1049,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="card" style="margin-top: 16px;">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">🚨 TOP 10 持续活跃恶意威胁源档案</div>
-                        <div class="val-sub">最高频次探测实体、嗅探端口组合及实时封禁状态</div>
+                        <div class="card-title">🚨 TOP 10 高频攻击来源</div>
+                        <div class="val-sub">高频探测来源、目标端口组合及当前状态</div>
                     </div>
                 </div>
                 <div class="table-wrap">
                     <table>
                         <thead>
                             <tr>
-                                <th>威胁源 IP (及运营商)</th>
-                                <th>嗅探目标端口集</th>
-                                <th>累计触碰频次</th>
-                                <th>危险等级</th>
-                                <th>防护状态</th>
+                                <th>来源 IP (及运营商)</th>
+                                <th>目标端口集</th>
+                                <th>累计探测频次</th>
+                                <th>威胁等级</th>
+                                <th>当前状态</th>
                                 <th>最后活动时间</th>
                             </tr>
                         </thead>
@@ -1081,8 +1081,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title">📋 蜜罐诱捕阻断日志</div>
-                    <div class="val-sub">探测诱饵端口的公网恶意源</div>
+                    <div class="card-title">📋 安全拦截日志</div>
+                    <div class="val-sub">恶意探测与违规访问阻断记录</div>
                 </div>
                 <div class="header-action-wrap">
                     <button class="pill-btn" onclick="exportLogsCSV()">
@@ -1096,9 +1096,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="segmented-control">
                     <button class="segment-btn active" id="seg-all" onclick="filterLogs('all', this)">全部 (<span id="cnt-log-all">0</span>)</button>
                     <button class="segment-btn" id="seg-rdp" onclick="filterLogs('rdp', this)">远程桌面 (3389/5900)</button>
-                    <button class="segment-btn" id="seg-db" onclick="filterLogs('db', this)">数据库 (1433/6379/27017)</button>
-                    <button class="segment-btn" id="seg-smb" onclick="filterLogs('smb', this)">高危共享 (445/135/139)</button>
-                    <button class="segment-btn" id="seg-web" onclick="filterLogs('web', this)">控制台 (8888/9200)</button>
+                    <button class="segment-btn" id="seg-db" onclick="filterLogs('db', this)">数据库服务 (1433/6379/27017)</button>
+                    <button class="segment-btn" id="seg-smb" onclick="filterLogs('smb', this)">文件共享服务 (445/135/139)</button>
+                    <button class="segment-btn" id="seg-web" onclick="filterLogs('web', this)">管理服务 (8888/9200)</button>
                 </div>
                 <div class="search-box">
                     <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
@@ -1110,12 +1110,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <table>
                     <thead>
                         <tr>
-                            <th>攻击拦截时间</th>
-                            <th>攻击者 IP</th>
-                            <th>命中诱饵端口</th>
-                            <th>服务特征分类</th>
-                            <th>威胁评级</th>
-                            <th>防御处置</th>
+                            <th>拦截时间</th>
+                            <th>来源 IP</th>
+                            <th>目标端口</th>
+                            <th>服务类型</th>
+                            <th>威胁等级</th>
+                            <th>处置方式</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -1146,7 +1146,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="subtab-btn-blacklist" onclick="switchIpListSubTab('blacklist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🚫 内核黑名单</button>
-                <button class="pill-btn" id="subtab-btn-whitelist" onclick="switchIpListSubTab('whitelist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🛡️ 信任白名单</button>
+                <button class="pill-btn" id="subtab-btn-whitelist" onclick="switchIpListSubTab('whitelist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🛡️ 安全白名单</button>
             </div>
         </div>
 
@@ -1156,7 +1156,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card-header">
                     <div>
                         <div class="card-title">🚫 内核黑名单</div>
-                        <div class="val-sub">iptables DROP 与路由黑洞阻断目标</div>
+                        <div class="val-sub">防火墙与内核路由阻断列表</div>
                     </div>
                     <div class="header-action-wrap">
                         <!-- 统一弹出式黑名单配置卡片按钮 -->
@@ -1166,9 +1166,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 <span style="font-size: 10px; margin-left: 2px;">▾</span>
                             </button>
                             <div id="blacklist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
-                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🚫 黑名单操作配置</div>
+                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🚫 黑名单管理操作</div>
                                 <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openManualBanModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                    <span>➕</span><span>手动拉黑 IP</span>
+                                    <span>➕</span><span>手动添加黑名单</span>
                                 </a>
                                 <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
                                 <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); openImportModal('blacklist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
@@ -1179,7 +1179,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 </a>
                                 <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
                                 <a href="javascript:void(0)" onclick="closeBlacklistActionMenu(); syncAllMeshState();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                    <span>📡</span><span>全网协同双向全量对齐</span>
+                                    <span>📡</span><span>集群黑名单全量同步</span>
                                 </a>
                             </div>
                         </div>
@@ -1190,12 +1190,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <table>
                         <thead>
                             <tr>
-                                <th>已阻断 IP 地址</th>
-                                <th>来源服务器 / 节点</th>
-                                <th>拉黑原因 / 诱饵端口</th>
-                                <th>处置动作</th>
+                                <th>封禁 IP</th>
+                                <th>来源节点</th>
+                                <th>封禁原因 / 触发端口</th>
+                                <th>处置方式</th>
                                 <th>封禁时间</th>
-                                <th>管理操作</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="blacklist-tbody">
@@ -1223,8 +1223,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="card">
                 <div class="card-header">
                     <div>
-                        <div class="card-title">🛡️ 运维与安全信任白名单</div>
-                        <div class="val-sub">白名单内的 IP 永不触发任何封禁拦截机制</div>
+                        <div class="card-title">🛡️ 安全白名单</div>
+                        <div class="val-sub">白名单中的 IP 豁免所有安全拦截策略</div>
                     </div>
                     <div class="header-action-wrap">
                         <!-- 统一弹出式白名单配置卡片按钮 -->
@@ -1234,9 +1234,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 <span style="font-size: 10px; margin-left: 2px;">▾</span>
                             </button>
                             <div id="whitelist-action-popover" style="display: none; position: absolute; right: 0; top: calc(100% + 8px); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.3); min-width: 190px; z-index: 1000; padding: 6px; backdrop-filter: blur(25px);">
-                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ 白名单操作配置</div>
+                                <div style="font-size: 11px; color: var(--text-sec); font-weight: 700; padding: 4px 8px 6px; text-transform: uppercase; letter-spacing: 0.5px;">🛡️ 白名单管理操作</div>
                                 <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openAddWhiteModal();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                    <span>➕</span><span>添加信任 IP</span>
+                                    <span>➕</span><span>添加白名单 IP</span>
                                 </a>
                                 <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
                                 <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); openImportModal('whitelist');" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
@@ -1247,7 +1247,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 </a>
                                 <div style="height: 1px; background: var(--border-subtle); margin: 4px 0;"></div>
                                 <a href="javascript:void(0)" onclick="closeWhitelistActionMenu(); syncAllWhitelistToCluster();" style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-decoration: none; border-radius: 8px; font-size: 12px; font-weight: 600;" onmouseover="this.style.background='var(--card-sec)'" onmouseout="this.style.background='transparent'">
-                                    <span>📡</span><span>全网协同白名单同步</span>
+                                    <span>📡</span><span>集群白名单同步</span>
                                 </a>
                             </div>
                         </div>
@@ -1258,7 +1258,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <table>
                         <thead>
                             <tr>
-                                <th style="width: 45%;">信任 IP / 网段</th>
+                                <th style="width: 45%;">白名单 IP / 网段</th>
                                 <th style="width: 40%;">备注说明</th>
                                 <th style="width: 15%; text-align: right;">操作</th>
                             </tr>
@@ -1287,20 +1287,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 4: 蜜罐诱饵策略 (Traps) -->
     <div id="tab-traps" style="display: none;">
-        <!-- 顶部子页切换分段控件 (端口策略 / 常规业务 / 行为特征) -->
+        <!-- 顶部子页切换分段控件 (端口策略 / 业务端口 / 行为特征) -->
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
-                <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 常规业务</button>
-                <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 行为特征</button>
+                <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 业务端口</button>
+                <button class="pill-btn" id="btn-trap-tab-req" onclick="switchTrapTab('req')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🎯 Web 特征策略</button>
             </div>
         </div>
 
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title" id="traps-main-title">🛡️ 全局威胁防御策略中心</div>
-                    <div class="val-sub" id="traps-main-sub">精准识别威胁探针，保障正常业务放行</div>
+                    <div class="card-title" id="traps-main-title">🛡️ 防御策略配置</div>
+                    <div class="val-sub" id="traps-main-sub">配置端口防御规则与 Web 行为特征检测</div>
                 </div>
                 <div class="header-action-wrap">
                     <!-- 统一弹出式策略配置卡片按钮 -->
@@ -1316,16 +1316,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- SubTab 1/2/3: 表格区域 (端口策略 / 常规业务 / 行为特征) -->
+            <!-- SubTab 1/2/3: 表格区域 (端口策略 / 业务端口 / 行为特征) -->
             <div id="policy-pane-table-container">
                 <!-- 业务列表顶部的正常业务保护横幅 -->
                 <div id="banner-biz-defense" style="display: none; margin: 14px 18px 0 18px; background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
                     <div style="display: flex; flex-direction: column; gap: 2px;">
                         <div style="display: flex; align-items: center; gap: 6px;">
-                            <span style="font-weight: 700; font-size: 12px; color: var(--text);">🏢 正常生产业务端口与服务保护清单</span>
-                            <span class="tag success">🟢 100% 内核级免封放行</span>
+                            <span style="font-weight: 700; font-size: 12px; color: var(--text);">🏢 生产业务端口保护清单</span>
+                            <span class="tag success">🟢 内核级放行保护</span>
                         </div>
-                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.3;">列表中的所有端口享受内核级绝对放行豁免保护，无论是系统动态侦测到的监听服务还是用户自定义添加的业务端口，外部正常访问 100% 顺畅连通，绝不误杀。</span>
+                        <span style="font-size: 11px; color: var(--text-sec); line-height: 1.3;">已配置业务端口及系统活跃监听端口受底层白名单保护，确保正常业务访问不被阻断。</span>
                     </div>
                 </div>
 
@@ -1333,12 +1333,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <table>
                         <thead id="traps-thead">
                             <tr>
-                                <th>诱饵端口</th>
-                                <th>模拟服务描述</th>
+                                <th>防御端口</th>
+                                <th>服务描述</th>
                                 <th>分类</th>
                                 <th>威胁等级</th>
                                 <th>当前状态</th>
-                                <th>开关操作</th>
+                                <th>启用状态</th>
                             </tr>
                         </thead>
                         <tbody id="traps-tbody">
@@ -1366,11 +1366,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 5: 系统设置 (Settings: 响应参数与审计隐藏) -->
     <div id="tab-settings" style="display: none;">
-        <!-- 顶部子页切换分段控件 (响应与封禁 / 审计隐藏) -->
+        <!-- 顶部子页切换分段控件 (防御响应 / IP过滤) -->
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
-                <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 响应与封禁参数</button>
-                <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 审计隐藏过滤</button>
+                <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 防御与响应参数</button>
+                <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 IP 过滤与隐藏</button>
             </div>
         </div>
 
@@ -1378,7 +1378,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="card-header">
                 <div>
                     <div class="card-title" id="settings-main-title">⚙️ 系统防御与全局设置</div>
-                    <div class="val-sub" id="settings-main-sub">配置防御响应机制、判定灵敏度阈值、自动解封周期与全局审计过滤</div>
+                    <div class="val-sub" id="settings-main-sub">配置威胁检测阈值、阻断响应方式、自动解封周期与审计过滤规则</div>
                 </div>
             </div>
 
@@ -1389,45 +1389,45 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
                         <div style="display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 200px;">
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-weight: 700; font-size: 13px; color: var(--text);">⏸️ 威胁防御与自动拦截服务总开关</span>
-                                <span class="tag success" id="defense-policy-status-tag">🛡️ 拦截运行中</span>
+                                <span style="font-weight: 700; font-size: 13px; color: var(--text);">⏸️ 防御拦截服务总开关</span>
+                                <span class="tag success" id="defense-policy-status-tag">🛡️ 防御运行中</span>
                             </div>
-                            <span style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">一键暂停所有蜜罐诱捕阻断与黑洞封禁，并临时释放当前所有拦截规则，方便排查运维。</span>
+                            <span style="font-size: 11px; color: var(--text-sec); line-height: 1.4;">暂停后将临时放行所有流量并暂停下发阻断规则，便于排查网络与业务问题。</span>
                         </div>
                         <button type="button" id="btn-toggle-defense-policy-pause" onclick="toggleDefenseServicePause()" class="pill-btn danger" style="padding: 7px 16px; font-weight: 700; font-size: 12px; white-space: nowrap; cursor: pointer;">
-                            ⏸️ 暂停所有拦截
+                            ⏸️ 暂停防御服务
                         </button>
                     </div>
                 </div>
 
                 <!-- 0.5 本机服务器节点名称 / 标识 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🏷️ 本机服务器节点标识名称</div>
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🏷️ 本机节点标识名称</div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                        用于在黑名单列表与多机集群联防中标记拦截来源（例如：<code>搬瓦工生产节点</code>、<code>腾讯云韩国测试机</code>、<code>阿里云韩国生产机</code>）。
+                        用于在黑名单列表与多机集群协同中标识节点来源（例如：<code>搬瓦工生产节点</code>、<code>阿里云韩国生产节点</code>）。
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产机" style="flex: 1; padding: 8px 10px; font-size: 12px; font-weight: 600;" onkeydown="if(event.key==='Enter') saveNodeNameOnly()">
+                        <input type="text" id="setting-policy-node-name" class="input-field" placeholder="例如：搬瓦工生产节点" style="flex: 1; padding: 8px 10px; font-size: 12px; font-weight: 600;" onkeydown="if(event.key==='Enter') saveNodeNameOnly()">
                         <button type="button" class="pill-btn primary" onclick="saveNodeNameOnly()" style="font-size: 12px; font-weight: 700; padding: 8px 18px; white-space: nowrap; cursor: pointer;">💾 保存名称</button>
                     </div>
                 </div>
 
-                <!-- 0.8 多机集群威胁情报联防 (Mesh Sync) -->
+                <!-- 0.8 多机集群协同防御 (Mesh Sync) -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
                         <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px;">
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-weight: 700; font-size: 14px; color: var(--text);">🌐 多机集群威胁情报联防 (Mesh Sync)</span>
+                                <span style="font-weight: 700; font-size: 14px; color: var(--text);">🌐 多机集群协同防御 (Mesh Sync)</span>
                                 <span class="tag" id="cluster-sync-status-badge" style="background: rgba(142, 142, 147, 0.15); color: var(--text-sec); font-weight: 700;">未启用</span>
                             </div>
                             <span style="font-size: 11px; color: var(--text-sec); line-height: 1.5;">
-                                采用对等网格广播拓扑：任何一台服务器捕获到黑客扫描时，瞬间向所有协同服务器广播并下发防火墙阻断！
+                                启用对等网格同步：单个节点拦截威胁时，将实时同步至集群内所有协同节点并下发阻断规则。
                             </span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <label style="font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                 <input type="checkbox" id="cluster-sync-enabled-toggle" onchange="toggleClusterSyncEnabled()" style="transform: scale(1.2); cursor: pointer;">
-                                <span>启用网格联防</span>
+                                <span>启用集群协同</span>
                             </label>
                         </div>
                     </div>
@@ -1436,10 +1436,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; margin-bottom: 14px;">
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 12px;">
                             <div>
-                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔌 本机集群通信监听端口 (Cluster Listen Port)</label>
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔌 集群通信监听端口 (Cluster Listen Port)</label>
                                 <input type="number" id="cluster-sync-port-input" class="input-field" placeholder="默认: 9098 (与WebUI分离)" min="1" max="65535" style="width: 100%; font-family: monospace; font-size: 12px; font-weight: 600; padding: 8px 10px;">
                                 <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
-                                    💡 独立于 Web UI 端口（如设置为 <code>9098</code>），仅处理节点加密联防协议，彻底与管理控制台解耦，避免向外暴露 Web 登录界面。
+                                    💡 建议与 Web 控制台端口分离（默认 <code>9098</code>），仅用于节点间安全同步通信。
                                 </div>
                             </div>
                             <div>
@@ -1450,7 +1450,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     <button type="button" class="pill-btn" onclick="copyClusterSecret()" style="font-size: 11px; white-space: nowrap;">📋 复制</button>
                                 </div>
                                 <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
-                                    💡 所有协同节点必须配置完全一致的通信密钥（基于 HMAC-SHA256 签名鉴权）。
+                                    💡 所有协同节点必须配置一致的通信密钥（基于 HMAC-SHA256 签名鉴权）。
                                 </div>
                             </div>
                         </div>
@@ -1462,7 +1462,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <!-- 节点管理栏与表格 -->
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
                         <div style="font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px;">
-                            <span>📡 协同对端服务器节点列表</span>
+                            <span>📡 协同节点列表</span>
                             <span class="tag" id="cluster-nodes-count-badge" style="font-size: 10px; font-weight: 700;">0 个节点</span>
                         </div>
                         <div style="display: flex; gap: 8px;">
@@ -1470,7 +1470,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 ➕ 添加协同节点
                             </button>
                             <button type="button" class="pill-btn" onclick="testAllClusterNodes()" id="btn-test-all-cluster-nodes" style="font-size: 11px; font-weight: 700; padding: 5px 12px; border-color: var(--accent); color: var(--accent); cursor: pointer;">
-                                ⚡ 全节点连接检测
+                                ⚡ 节点连接测试
                             </button>
                         </div>
                     </div>
@@ -1484,7 +1484,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     <th style="padding: 10px 12px; font-size: 11px;">IP 归属地</th>
                                     <th style="padding: 10px 12px; font-size: 11px;">通联状态</th>
                                     <th style="padding: 10px 12px; font-size: 11px;">添加时间</th>
-                                    <th style="padding: 10px 12px; font-size: 11px; text-align: right;">管理操作</th>
+                                    <th style="padding: 10px 12px; font-size: 11px; text-align: right;">操作</th>
                                 </tr>
                             </thead>
                             <tbody id="cluster-nodes-tbody">
@@ -1496,15 +1496,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
                 <!-- 1. 扫描与探测防御开关 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🔍 恶意端口扫描与探测行为识别设置</div>
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🔍 端口扫描行为检测设置</div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                        当单个外部非白名单 IP 在指定时间窗口内连续探测多个未开放端口时，自动判定为恶意扫描工具（如 Nmap/Masscan）并拉黑。
+                        当非白名单 IP 在指定时间窗口内连续探测多个未开放端口时，判定为端口扫描行为并执行封禁。
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                         <div>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">多端口扫描判定阈值</label>
                             <select id="setting-policy-scan-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                                <option value="2">探测 ≥2 个未开放端口 (极速敏感)</option>
+                                <option value="2">探测 ≥2 个未开放端口 (高灵敏度)</option>
                                 <option value="3" selected>探测 ≥3 个未开放端口 (标准推荐)</option>
                                 <option value="5">探测 ≥5 个未开放端口 (宽松模式)</option>
                             </select>
@@ -1513,9 +1513,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">扫描统计时间窗口</label>
                             <select id="setting-policy-scan-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
                                 <option value="10">10 秒</option>
-                                <option value="15" selected>15 秒 (标准感知)</option>
+                                <option value="15" selected>15 秒 (标准推荐)</option>
                                 <option value="30">30 秒</option>
-                                <option value="60">60 秒 (慢速扫描感知)</option>
+                                <option value="60">60 秒 (慢速扫描检测)</option>
                             </select>
                         </div>
                     </div>
@@ -1524,19 +1524,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <!-- 2. 封禁灵敏度与阈值 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                        <span style="font-weight: 700; font-size: 13px; color: var(--text);">🎯 诱捕探测判定与自动拉黑灵敏度</span>
-                        <span class="badge badge-high" id="badge-policy-threshold-status">主动严防</span>
+                        <span style="font-weight: 700; font-size: 13px; color: var(--text);">🎯 威胁判定与自动封禁阈值</span>
+                        <span class="badge badge-high" id="badge-policy-threshold-status">标准防护</span>
                     </div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                        外部 IP 触碰高危蜜罐端口或触发 Web 规则时的频控判定阈值。
+                        外部 IP 触发防护规则或 Web 策略时的频控判定阈值。
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                         <div>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">触发封禁探测次数</label>
                             <select id="setting-policy-trap-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                                <option value="1">1 次 (零容忍立即封禁)</option>
-                                <option value="2" selected>2 次 (严苛防御)</option>
-                                <option value="3">3 次 (标准防误触)</option>
+                                <option value="1">1 次 (首次触发立即封禁)</option>
+                                <option value="2" selected>2 次 (高强度防御)</option>
+                                <option value="3">3 次 (标准模式)</option>
                                 <option value="5">5 次 (宽松模式)</option>
                             </select>
                         </div>
@@ -1544,9 +1544,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">统计判定时间窗口</label>
                             <select id="setting-policy-trap-window" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
                                 <option value="15">15 秒</option>
-                                <option value="30" selected>30 秒 (标准默认)</option>
-                                <option value="60">60 秒 (长窗口感知)</option>
-                                <option value="300">300 秒 (5分钟慢速感知)</option>
+                                <option value="30" selected>30 秒 (标准推荐)</option>
+                                <option value="60">60 秒 (扩展窗口)</option>
+                                <option value="300">300 秒 (长周期检测)</option>
                             </select>
                         </div>
                     </div>
@@ -1554,33 +1554,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
                 <!-- 3. 封禁时长与自动解封周期 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⏳ 黑名单封禁周期与自动解封</div>
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">⏳ 封禁时长与自动解封周期</div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 10px; line-height: 1.4;">
-                        被拉黑攻击 IP 的持续阻断天数。设为永久封禁时永不自动解封。
+                        配置 IP 封禁的有效天数。设为永久封禁时将不会自动过期解除。
                     </div>
                     <div>
                         <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">自动解封周期</label>
                         <select id="setting-policy-auto-clean" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                            <option value="7">7 天 (临时阻断)</option>
-                            <option value="30" selected>30 天 (标准推荐)</option>
-                            <option value="90">90 天 (长期封锁)</option>
-                            <option value="180">180 天 (半年封锁)</option>
-                            <option value="0">永久封禁 (永不自动解封)</option>
+                            <option value="7">7 天</option>
+                            <option value="30" selected>30 天 (默认推荐)</option>
+                            <option value="90">90 天</option>
+                            <option value="180">180 天</option>
+                            <option value="0">永久封禁</option>
                         </select>
                     </div>
                 </div>
 
                 <!-- 4. 内核阻断机制 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ Linux 内核底层阻断联动方式</div>
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ 内核底层阻断方式</div>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
                             <input type="checkbox" id="setting-policy-ban-iptables" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                            <span><b>iptables DROP 规则阻断</b>（在系统 INPUT 链顶层直接丢弃恶意数据包）</span>
+                            <span><b>iptables / IPSet 规则阻断</b>（在系统 INPUT 链丢弃匹配数据包）</span>
                         </label>
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
                             <input type="checkbox" id="setting-policy-ban-blackhole" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                            <span><b>Linux 内核路由黑洞 (blackhole)</b>（在路由选路阶段直接丢弃）</span>
+                            <span><b>Linux 内核路由阻断 (blackhole)</b>（在路由选路阶段丢弃数据包）</span>
                         </label>
                     </div>
                 </div>
@@ -1595,8 +1595,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 全局 IP 隐藏过滤规则</span>
-                            <span style="font-size: 11px; color: var(--text-sec);">生效: 态势大盘 / 拦截日志 / 访问审计</span>
+                            <span style="font-weight: 700; font-size: 13px; color: var(--text);">🚫 IP 过滤与隐藏规则</span>
+                            <span style="font-size: 11px; color: var(--text-sec);">生效范围: 态势概览 / 拦截日志 / 访问审计</span>
                         </div>
                         <div style="display: flex; gap: 6px; align-items: center;">
                             <button type="button" class="pill-btn" onclick="openImportModal('hidden_ips')" style="padding: 4px 10px; font-size: 11px; font-weight: 600;">📥 导入隐藏列表</button>
@@ -1604,10 +1604,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </div>
                     </div>
                     <div style="font-size: 11px; color: var(--text-sec); margin-bottom: 12px; line-height: 1.4;">
-                        被加入隐藏列表的 IP 将在全站控制台中彻底隐藏其所有日志记录与统计数据，不影响系统底层的正常防御与拦截。
+                        加入隐藏列表的 IP 将在控制台各视图中过滤显示，底层防御与拦截逻辑不受影响。
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="text" id="input-policy-hidden-ip" class="input-field" placeholder="输入需隐藏的 IP 地址 (如 1.2.3.4)" style="flex: 1; padding: 8px 12px; font-size: 12px; font-family: monospace;">
+                        <input type="text" id="input-policy-hidden-ip" class="input-field" placeholder="输入需过滤的 IP 地址 (如 1.2.3.4)" style="flex: 1; padding: 8px 12px; font-size: 12px; font-family: monospace;">
                         <button class="pill-btn accent" onclick="addCustomHiddenIPFromPolicy()" style="padding: 8px 16px; font-size: 12px; font-weight: 700; white-space: nowrap;">+ 添加隐藏</button>
                     </div>
                 </div>
@@ -1646,16 +1646,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- 顶部子页切换分段控件 (端口访问 / Web 访问) -->
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
-                <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问日志</button>
-                <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 443/Web 访问日志</button>
+                <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问审计</button>
+                <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 Web 访问日志 (HTTP/HTTPS)</button>
             </div>
         </div>
 
         <div class="card">
             <div class="card-header">
                 <div>
-                    <div class="card-title" id="access-logs-title">🍯 端口访问日志</div>
-                    <div class="val-sub" id="access-logs-sub">实时记录所有外部客户端对本机各诱捕端口与网络端口的连接嗅探</div>
+                    <div class="card-title" id="access-logs-title">🍯 端口访问审计</div>
+                    <div class="val-sub" id="access-logs-sub">记录所有外部客户端对本机各端口的网络连接与探测记录</div>
                 </div>
                 <div class="header-action-wrap">
                     <button class="pill-btn" onclick="exportAccessLogsCSV()">
@@ -1673,9 +1673,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
                 <div class="segmented-control" id="access-action-segments">
                     <button class="segment-btn active" id="seg-acc-all" onclick="filterAccessLogs('all', this)">全部</button>
-                    <button class="segment-btn" id="seg-acc-biz" onclick="filterAccessLogs('BUSINESS', this)">⚡ 正常业务</button>
-                    <button class="segment-btn" id="seg-acc-white" onclick="filterAccessLogs('WHITELIST', this)">🛡️ 信任放行</button>
-                    <button class="segment-btn" id="seg-acc-block" onclick="filterAccessLogs('INTERCEPTED', this)">🚫 诱捕阻断</button>
+                    <button class="segment-btn" id="seg-acc-biz" onclick="filterAccessLogs('BUSINESS', this)">⚡ 业务访问</button>
+                    <button class="segment-btn" id="seg-acc-white" onclick="filterAccessLogs('WHITELIST', this)">🛡️ 白名单放行</button>
+                    <button class="segment-btn" id="seg-acc-block" onclick="filterAccessLogs('INTERCEPTED', this)">🚫 拦截阻断</button>
                     <button class="segment-btn" id="seg-acc-probe" onclick="filterAccessLogs('PROBE', this)">🔍 外部探测</button>
                 </div>
                 <div class="search-box">
@@ -1692,7 +1692,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <th>来源 IP</th>
                             <th>目标端口</th>
                             <th>服务说明</th>
-                            <th>防御处置</th>
+                            <th>处置方式</th>
                         </tr>
                     </thead>
                     <tbody id="access-logs-tbody">
@@ -1721,7 +1721,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="dock">
     <button class="dock-btn active" id="dock-btn-overview" onclick="switchTab('overview', this)">
         <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
-        <span>态势分析</span>
+        <span>态势概览</span>
     </button>
     <button class="dock-btn" id="dock-btn-logs" onclick="switchTab('logs', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
@@ -1729,7 +1729,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
     <button class="dock-btn" id="dock-btn-access-logs" onclick="switchTab('access-logs', this)">
         <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-        <span>访问日志</span>
+        <span>访问审计</span>
     </button>
     <button class="dock-btn" id="dock-btn-iplists" onclick="switchTab('iplists', this)">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1c1.06 1.35 1.69 3.05 1.69 4.9 0 4.42-3.58 8-8 8z"/></svg>
@@ -1750,18 +1750,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 手动拉黑 -->
 <div class="modal-overlay" id="modal-ban">
     <div class="modal-sheet">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🚫 手动添加永久黑名单</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🚫 手动添加黑名单</h3>
         <div class="form-group">
             <label class="form-label">目标 IP 地址 / CIDR 段</label>
             <input type="text" class="form-control" id="ban-ip-val" placeholder="例如 1.2.3.4">
         </div>
         <div class="form-group">
-            <label class="form-label">拉黑原因</label>
-            <input type="text" class="form-control" id="ban-reason-val" value="管理员手动全局拉黑">
+            <label class="form-label">封禁原因</label>
+            <input type="text" class="form-control" id="ban-reason-val" value="管理员手动封禁">
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
-            <button class="pill-btn danger" onclick="submitManualBan()">立即永久阻断</button>
+            <button class="pill-btn danger" onclick="submitManualBan()">确认封禁</button>
         </div>
     </div>
 </div>
@@ -1788,17 +1788,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 添加诱饵 -->
 <div class="modal-overlay" id="modal-trap">
     <div class="modal-sheet">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🍯 添加自定义诱饵端口</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">➕ 添加端口防御规则</h3>
         <div class="form-group">
             <label class="form-label">端口号或端口范围 (例如 8088 或 1000-3000)</label>
             <input type="text" class="form-control" id="trap-port-val" placeholder="单个端口如 8088，或范围如 1000-3000">
         </div>
         <div class="form-group">
-            <label class="form-label">模拟服务说明</label>
+            <label class="form-label">服务说明</label>
             <input type="text" class="form-control" id="trap-name-val" placeholder="例如：测试管理后台">
         </div>
         <div class="form-group">
-            <label class="form-label">分类类型</label>
+            <label class="form-label">服务分类</label>
             <select class="form-control" id="trap-cat-val">
                 <option value="web" selected>管理面板/Web</option>
                 <option value="rdp">远程控制/RDP</option>
@@ -1808,7 +1808,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </select>
         </div>
         <div class="form-group">
-            <label class="form-label">威胁等级评定</label>
+            <label class="form-label">威胁等级</label>
             <select class="form-control" id="trap-level-val">
                 <option value="极高危">极高危</option>
                 <option value="高危" selected>高危</option>
@@ -1818,12 +1818,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="form-group">
             <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);">
                 <input type="checkbox" id="trap-is-business-val" style="width: 16px; height: 16px; accent-color: var(--danger);">
-                <span><b>正常业务端口防护</b>（若该端口为当前运行的真实业务，勾选后将同步诱捕该端口的非白名单访问）</span>
+                <span><b>业务端口安全保护</b>（对该业务端口启用非白名单异常探测检测）</span>
             </label>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
-            <button class="pill-btn accent" onclick="submitAddTrap()">激活诱饵</button>
+            <button class="pill-btn accent" onclick="submitAddTrap()">保存规则</button>
         </div>
     </div>
 </div>
@@ -1831,18 +1831,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 编辑蜜罐诱饵策略 -->
 <div class="modal-overlay" id="modal-trap-edit">
     <div class="modal-sheet">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑蜜罐诱饵策略</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑端口防御策略</h3>
         <input type="hidden" id="edit-trap-orig-port">
         <div class="form-group">
             <label class="form-label">端口号或端口范围 (例如 8088 或 1000-3000)</label>
             <input type="text" class="form-control" id="edit-trap-port-val" placeholder="单个端口如 8088，或范围如 1000-3000">
         </div>
         <div class="form-group">
-            <label class="form-label">模拟服务说明</label>
+            <label class="form-label">服务说明</label>
             <input type="text" class="form-control" id="edit-trap-name-val" placeholder="例如：测试管理后台">
         </div>
         <div class="form-group">
-            <label class="form-label">分类类型</label>
+            <label class="form-label">服务分类</label>
             <select class="form-control" id="edit-trap-cat-val">
                 <option value="web">管理面板/Web</option>
                 <option value="rdp">远程控制/RDP</option>
@@ -1854,7 +1854,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </select>
         </div>
         <div class="form-group">
-            <label class="form-label">威胁等级评定</label>
+            <label class="form-label">威胁等级</label>
             <select class="form-control" id="edit-trap-level-val">
                 <option value="极高危">极高危</option>
                 <option value="高危">高危</option>
@@ -1862,16 +1862,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </select>
         </div>
         <div class="form-group">
-            <label class="form-label">诱捕开关状态</label>
+            <label class="form-label">策略启用状态</label>
             <select class="form-control" id="edit-trap-enabled-val">
-                <option value="true">● 启用监听诱捕 (Accept)</option>
-                <option value="false">○ 停用监听 (Reject/Disabled)</option>
+                <option value="true">● 启用防御检测 (Enabled)</option>
+                <option value="false">○ 停用策略 (Disabled)</option>
             </select>
         </div>
         <div class="form-group">
             <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer; background: var(--card-sec); padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);">
                 <input type="checkbox" id="edit-trap-is-business-val" style="width: 16px; height: 16px; accent-color: var(--danger);">
-                <span><b>正常业务端口防护</b>（若该端口为当前运行的真实业务，勾选后将同步诱捕该端口的非白名单访问）</span>
+                <span><b>业务端口安全保护</b>（对该业务端口启用非白名单异常探测检测）</span>
             </label>
         </div>
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px;">
@@ -1884,7 +1884,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 添加/编辑正常业务端口 -->
 <div class="modal-overlay" id="modal-biz-port">
     <div class="modal-sheet" style="max-width: 500px;">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;" id="modal-biz-title">🏢 添加正常业务端口</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;" id="modal-biz-title">🏢 添加生产业务端口</h3>
         <input type="hidden" id="biz-port-orig-val">
         <div class="form-group">
             <label class="form-label">业务端口号 (1-65535)</label>
@@ -1905,18 +1905,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="form-group">
             <label class="form-label">备注说明</label>
-            <input type="text" class="form-control" id="biz-remark-val" placeholder="例如：生产核心业务，绝对免封">
+            <input type="text" class="form-control" id="biz-remark-val" placeholder="例如：生产核心业务，白名单放行保护">
         </div>
         <div class="form-group" style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 6px;">
             <label class="form-label" style="font-weight: 700; margin-bottom: 8px; color: var(--accent);">🛡️ 业务端口安全防护选项</label>
             <div style="display: flex; flex-direction: column; gap: 8px;">
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                     <input type="checkbox" id="biz-block-scanner-val" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
-                    <span><strong>🌐 拦截全网测绘引擎</strong> <span style="color: var(--text-sec); font-size: 11px;">(Censys/Shodan/Onyphe等探针直接拉黑，推荐)</span></span>
+                    <span><strong>🌐 拦截空间测绘引擎</strong> <span style="color: var(--text-sec); font-size: 11px;">(Censys/Shodan/Onyphe 等探测直接拦截，推荐)</span></span>
                 </label>
                 <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                     <input type="checkbox" id="biz-block-idc-val" style="width: 16px; height: 16px; accent-color: var(--accent);">
-                    <span><strong>🛡️ 阻断云厂商/IDC机房探针</strong> <span style="color: var(--text-sec); font-size: 11px;">(仅允许民用宽带与移动网络，秒封机房肉鸡)</span></span>
+                    <span><strong>🛡️ 拦截云厂商/机房扫描源</strong> <span style="color: var(--text-sec); font-size: 11px;">(仅允许民用宽带与移动网络，拦截数据中心扫描)</span></span>
                 </label>
             </div>
         </div>
@@ -1930,19 +1930,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 添加请求特征策略 -->
 <div class="modal-overlay" id="modal-http-trap">
     <div class="modal-sheet" style="max-width: 540px;">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🎯 添加请求特征与防扫描策略</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">🎯 添加 Web 请求特征策略</h3>
         <div class="form-group">
             <label class="form-label">策略名称</label>
-            <input type="text" class="form-control" id="http-trap-name-val" placeholder="例如：敏感配置与密钥嗅探">
+            <input type="text" class="form-control" id="http-trap-name-val" placeholder="例如：敏感配置与密钥探测">
         </div>
         <div class="form-group">
             <label class="form-label">匹配类型</label>
             <select class="form-control" id="http-trap-type-val" onchange="onHttpTrapTypeChange('add')">
                 <option value="path_keyword" selected>URL 路径特征 (关键词 / 正则)</option>
-                <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="ua_keyword">扫描工具 User-Agent 特征</option>
                 <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
                 <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
-                <option value="status_rate">HTTP 响应状态码诱捕 / 频次熔断 (支持 302/404/500 等任意状态码)</option>
+                <option value="status_rate">HTTP 状态码异常频次限制 (支持 404/403/500 等状态码)</option>
             </select>
         </div>
         <div class="form-group" id="http-trap-pattern-group">
@@ -1956,13 +1956,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <input type="number" class="form-control" id="http-trap-window-val" value="30" min="1" max="3600">
                 </div>
                 <div style="flex: 1;">
-                    <label class="form-label">触发阈值 (设为 1 即刻秒封)</label>
+                    <label class="form-label">触发阈值 (达到阈值即刻封禁)</label>
                     <input type="number" class="form-control" id="http-trap-threshold-val" value="6" min="1" max="1000">
                 </div>
             </div>
         </div>
         <div class="form-group">
-            <label class="form-label">威胁等级评定</label>
+            <label class="form-label">威胁等级</label>
             <select class="form-control" id="http-trap-level-val">
                 <option value="极高危" selected>极高危</option>
                 <option value="高危">高危</option>
@@ -1983,7 +1983,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- Modal: 编辑请求特征策略 -->
 <div class="modal-overlay" id="modal-http-trap-edit">
     <div class="modal-sheet" style="max-width: 540px;">
-        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑请求特征与防扫描策略</h3>
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 14px;">✏️ 编辑 Web 请求特征策略</h3>
         <input type="hidden" id="edit-http-trap-id">
         <div class="form-group">
             <label class="form-label">策略名称</label>
@@ -1993,10 +1993,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <label class="form-label">匹配类型</label>
             <select class="form-control" id="edit-http-trap-type-val" onchange="onHttpTrapTypeChange('edit')">
                 <option value="path_keyword">URL 路径特征 (关键词 / 正则)</option>
-                <option value="ua_keyword">扫描工具 User-Agent 指纹</option>
+                <option value="ua_keyword">扫描工具 User-Agent 特征</option>
                 <option value="survey_engine">网络空间测绘引擎 (Censys/Shodan/Onyphe)</option>
                 <option value="direct_ip">禁止纯 IP 直连 Web 探测</option>
-                <option value="status_rate">HTTP 响应状态码诱捕 / 频次熔断 (支持 302/404/500 等任意状态码)</option>
+                <option value="status_rate">HTTP 状态码异常频次限制 (支持 404/403/500 等状态码)</option>
             </select>
         </div>
         <div class="form-group" id="edit-http-trap-pattern-group">
@@ -2010,13 +2010,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <input type="number" class="form-control" id="edit-http-trap-window-val" min="1" max="3600">
                 </div>
                 <div style="flex: 1;">
-                    <label class="form-label">触发阈值 (设为 1 即刻秒封)</label>
+                    <label class="form-label">触发阈值 (达到阈值即刻封禁)</label>
                     <input type="number" class="form-control" id="edit-http-trap-threshold-val" min="1" max="1000">
                 </div>
             </div>
         </div>
         <div class="form-group">
-            <label class="form-label">威胁等级评定</label>
+            <label class="form-label">威胁等级</label>
             <select class="form-control" id="edit-http-trap-level-val">
                 <option value="极高危">极高危</option>
                 <option value="高危">高危</option>
@@ -2068,11 +2068,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div style="font-weight: 600; color: var(--text); margin-top: 3px; word-break: break-all;" id="ip-detail-isp">--</div>
                 </div>
                 <div>
-                    <span style="color: var(--text-sec); font-size: 12px;">威胁等级评定:</span>
+                    <span style="color: var(--text-sec); font-size: 12px;">威胁等级:</span>
                     <div style="margin-top: 4px;" id="ip-detail-level">--</div>
                 </div>
                 <div>
-                    <span style="color: var(--text-sec); font-size: 12px;">当前防御处置:</span>
+                    <span style="color: var(--text-sec); font-size: 12px;">当前处置状态:</span>
                     <div style="margin-top: 4px;" id="ip-detail-status">--</div>
                 </div>
             </div>
@@ -2081,8 +2081,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
             <button class="pill-btn" onclick="closeModals()">关闭</button>
             <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
-            <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 一键拉黑</button>
-            <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在全站控制台中全局隐藏此 IP 的所有日志记录与态势统计">🙈 隐藏此 IP 日志</button>
+            <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 封禁此 IP</button>
+            <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在控制台各视图中过滤此 IP 的所有日志记录与统计">🙈 过滤此 IP 日志</button>
         </div>
     </div>
 </div>
@@ -2092,13 +2092,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="modal-sheet" style="max-width: 500px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
             <h3 style="font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
-                <span>➕ 添加协同服务器节点</span>
+                <span>➕ 添加协同节点</span>
             </h3>
             <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
         </div>
 
         <div style="background: var(--card-sec); border-radius: 8px; padding: 10px 12px; font-size: 11px; color: var(--text-sec); margin-bottom: 14px; border: 1px solid var(--border-subtle); line-height: 1.4;">
-            💡 只需要输入目标服务器的 IP 地址或域名，保存后系统将自动进行 IP 归属地识别与网络健康握手。
+            💡 输入协同服务器的 IP 地址或域名，保存后系统将自动进行 IP 归属地识别与节点健康握手。
         </div>
 
         <div class="form-group">
@@ -2113,12 +2113,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         <div class="form-group">
             <label class="form-label" style="font-weight: 700;">节点备注名称</label>
-            <input type="text" id="cluster-node-add-remark" class="form-control" placeholder="例如：腾讯云韩国测试机 或 阿里云生产节点" style="font-size: 12px; font-weight: 600;">
+            <input type="text" id="cluster-node-add-remark" class="form-control" placeholder="例如：阿里云生产节点 或 搬瓦工节点" style="font-size: 12px; font-weight: 600;">
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
             <button class="pill-btn" onclick="closeModals()">取消</button>
-            <button class="pill-btn primary" onclick="submitAddClusterNode()" id="btn-submit-add-cluster-node">➕ 确认添加并检测</button>
+            <button class="pill-btn primary" onclick="submitAddClusterNode()" id="btn-submit-add-cluster-node">➕ 确认添加并测试</button>
         </div>
     </div>
 </div>
@@ -3469,7 +3469,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 banBtn.innerText = '🔓 从黑名单解封';
                 banBtn.className = 'pill-btn success';
             } else {
-                banBtn.innerText = '🚫 一键拉黑 IP';
+                banBtn.innerText = '🚫 封禁此 IP';
                 banBtn.className = 'pill-btn danger';
             }
         }
@@ -3482,7 +3482,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 hideBtn.style.color = '';
                 hideBtn.style.borderColor = '';
             } else {
-                hideBtn.innerText = '🙈 隐藏此 IP 日志';
+                hideBtn.innerText = '🙈 过滤此 IP 日志';
                 hideBtn.className = 'pill-btn';
                 hideBtn.style.color = 'var(--warning)';
                 hideBtn.style.borderColor = 'rgba(255, 149, 0, 0.4)';
@@ -3518,14 +3518,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             fetch('/api/ban', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ip: currentDetailIP, reason: '详情卡片快速拉黑' })
+                body: JSON.stringify({ ip: currentDetailIP, reason: '控制台快速封禁' })
             }).then(res => res.json()).then(res => {
                 showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
                 if (!allBlacklist) allBlacklist = [];
                 if (!allBlacklist.some(b => b.ip === currentDetailIP)) {
                     allBlacklist.unshift({
                         ip: currentDetailIP,
-                        reason: '详情卡片快速拉黑',
+                        reason: '控制台快速封禁',
                         country: currentDetailMeta.country || '手动添加',
                         level: '极高危',
                         ban_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
@@ -3535,7 +3535,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 closeModals();
                 fetchData(false);
             }).catch(err => {
-                if (banBtn) { banBtn.disabled = false; banBtn.innerText = '🚫 一键拉黑 IP'; }
+                if (banBtn) { banBtn.disabled = false; banBtn.innerText = '🚫 封禁此 IP'; }
                 showToast('封禁请求失败: ' + (err.message || '网络异常'), '⚠️');
             });
         }
@@ -5037,46 +5037,46 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 • <code>port/prot</code>: 单个端口号 (如 <code>"80"</code>) 或端口范围 (如 <code>"1000-3000"</code>)<br>
                 • <code>protocol</code>: 协议 (tcp/udp)<br>
                 • <code>strategy</code>: 开关状态 (accept/enabled/启用 ➔ 启用; reject/disabled/停用 ➔ 停用)<br>
-                • <code>description/desc</code>: 模拟服务说明描述 (如 "网页", "高危探针段")<br>
+                • <code>description/desc</code>: 服务说明描述 (如 "网页", "常用端口")<br>
                 <i>系统会自动容错清洗末尾多余逗号 (<code>, ]</code>) 与宽松语法！</i>
             `;
-            textVal.placeholder = `粘贴蜜罐策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "1000-3000",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "自定义高危端口段"\n  }\n]`;
+            textVal.placeholder = `粘贴防御策略 JSON 数组，例如：\n[\n  {\n    "family": "ipv4",\n    "address": "",\n    "port": "1000-3000",\n    "protocol": "tcp",\n    "strategy": "accept",\n    "description": "自定义端口段"\n  }\n]`;
         } else if (type === 'http_traps') {
-            titleEl.innerText = '🎯 智能导入请求特征策略';
+            titleEl.innerText = '🎯 批量导入 Web 特征策略';
             tipEl.innerHTML = `
                 支持导入 <b>JSON 格式策略数组</b>：<br>
-                <code>[{"name":"敏感配置嗅探","match_type":"path_keyword","pattern":"\\\\.env|\\\\.git","level":"极高危","description":"探测关键敏感配置"}]</code><br>
-                • <code>match_type</code>: 匹配类型 (<code>path_keyword</code>: URL路径特征 / <code>ua_keyword</code>: 工具指纹 / <code>status_rate</code>: 404频次熔断)<br>
+                <code>[{"name":"敏感配置探测","match_type":"path_keyword","pattern":"\\\\.env|\\\\.git","level":"极高危","description":"探测关键敏感配置"}]</code><br>
+                • <code>match_type</code>: 匹配类型 (<code>path_keyword</code>: URL路径特征 / <code>ua_keyword</code>: 工具特征 / <code>status_rate</code>: 404频次限制)<br>
                 • <code>pattern</code>: 特征正则表达式或关键词 (支持 | 分隔)<br>
-                • <code>threshold / window</code>: 熔断频次与时间窗口(秒)<br>
+                • <code>threshold / window</code>: 限制频次与时间窗口(秒)<br>
                 • <code>level</code>: 威胁等级 (极高危 / 高危 / 中危)
             `;
-            textVal.placeholder = `粘贴特征策略 JSON 数组，例如：\n[\n  {\n    "name": "敏感配置嗅探",\n    "match_type": "path_keyword",\n    "pattern": "\\\\.env|\\\\.git",\n    "level": "极高危",\n    "description": "探测配置文件"\n  }\n]`;
+            textVal.placeholder = `粘贴特征策略 JSON 数组，例如：\n[\n  {\n    "name": "敏感配置探测",\n    "match_type": "path_keyword",\n    "pattern": "\\\\.env|\\\\.git",\n    "level": "极高危",\n    "description": "探测配置文件"\n  }\n]`;
         } else if (type === 'blacklist') {
             titleEl.innerText = '🚫 批量导入内核黑名单';
             tipEl.innerHTML = `
                 支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
-                • JSON 格式: <code>[{"ip": "1.2.3.4", "reason": "嗅探扫描", "level": "极高危"}]</code><br>
+                • JSON 格式: <code>[{"ip": "1.2.3.4", "reason": "端口扫描", "level": "极高危"}]</code><br>
                 • 文本格式: 每行一个 IP 地址（例如 <code>1.2.3.4 恶意扫描</code> 或纯 <code>1.2.3.4</code>）<br>
-                导入后系统将自动下发内核 iptables DROP 规则与路由黑洞！
+                导入后系统将自动同步下发内核防火墙阻断规则！
             `;
-            textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 恶意暴力破解\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "reason": "嗅探扫描"}]`;
+            textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 恶意弱口令探测\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "reason": "端口扫描"}]`;
         } else if (type === 'business_ports') {
-            titleEl.innerText = '🏢 批量导入正常业务端口';
+            titleEl.innerText = '🏢 批量导入生产业务端口';
             tipEl.innerHTML = `
                 支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行端口列表</b>：<br>
                 • JSON 格式: <code>[{"port": 8080, "name": "Keycloak", "category": "web", "remark": "认证服务"}]</code><br>
                 • 文本格式: 每行一个端口（例如 <code>8080 Keycloak认证中心</code> 或纯 <code>8080</code>）<br>
-                业务列表中的端口受内核级豁免保护，100% 免封绝对放行！
+                业务列表中的端口受底层白名单保护，确保正常业务访问不被阻断。
             `;
             textVal.placeholder = `粘贴业务端口列表或 JSON 数组，例如：\n8080 Keycloak认证\n3000 Node前端API\n\n或 JSON 格式：\n[{"port": 8080, "name": "Keycloak", "category": "web"}]`;
         } else if (type === 'hidden_ips') {
-            titleEl.innerText = '🚫 批量导入审计隐藏 IP';
+            titleEl.innerText = '🚫 批量导入过滤隐藏 IP';
             tipEl.innerHTML = `
                 支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
                 • JSON 格式: <code>[{"ip": "1.2.3.4", "remark": "测试节点"}]</code><br>
                 • 文本格式: 每行一个 IP 地址（例如 <code>1.2.3.4 内部测试</code> 或纯 <code>1.2.3.4</code>）<br>
-                隐藏列表中的 IP 在全站控制台日志中将被彻底隐藏，不影响底层正常防御！
+                加入隐藏列表的 IP 将在控制台各视图中过滤显示，底层防御与拦截逻辑不受影响。
             `;
             textVal.placeholder = `粘贴 IP 列表或 JSON 数组，例如：\n1.2.3.4 内部调试节点\n5.6.7.8\n\n或 JSON 格式：\n[{"ip": "1.2.3.4", "remark": "测试节点"}]`;
         } else if (type === 'whitelist') {
@@ -5085,7 +5085,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 支持导入 <b>JSON 数组</b> 或 <b>纯文本逐行 IP 列表</b>：<br>
                 • JSON 格式: <code>[{"ip": "111.183.103.75", "remark": "办公室运维"}]</code><br>
                 • 文本格式: 每行一个 IP / 网段（例如 <code>192.168.1.0/24 局域网</code> 或 <code>111.183.103.75</code>）<br>
-                白名单内的 IP 永不触发任何诱捕封禁机制！
+                白名单中的 IP 豁免所有安全拦截策略。
             `;
             textVal.placeholder = `粘贴白名单 IP 列表或 JSON 数组，例如：\n111.183.103.75 办公室固定IP\n192.168.1.0/24 局域网网段\n\n或 JSON 格式：\n[{"ip": "111.183.103.75", "remark": "办公室运维"}]`;
         }
@@ -5111,7 +5111,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     "port": "21",
                     "protocol": "tcp",
                     "strategy": "accept",
-                    "description": "FTP 暴力破解诱饵"
+                    "description": "FTP 弱口令防护"
                 },
                 {
                     "family": "ipv4",
@@ -5119,7 +5119,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     "port": "3389",
                     "protocol": "tcp",
                     "strategy": "accept",
-                    "description": "RDP 远程桌面探针"
+                    "description": "RDP 远程桌面防护"
                 },
                 {
                     "family": "ipv4",
@@ -5127,38 +5127,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     "port": "8888",
                     "protocol": "tcp",
                     "strategy": "reject",
-                    "description": "宝塔控制台探针(已停用)"
+                    "description": "管理控制台端口(已停用)"
                 }
             ], null, 2);
         } else if (currentImportType === 'http_traps') {
             textVal.value = JSON.stringify([
                 {
-                    "name": "敏感配置与备份嗅探",
+                    "name": "敏感配置与备份探测",
                     "match_type": "path_keyword",
                     "pattern": "\\.env|\\.git|\\.svn|config\\.json|backup\\.zip|database\\.sql",
                     "level": "极高危",
                     "description": "探测系统关键配置文件与数据库备份"
                 },
                 {
-                    "name": "黑客扫描器工具指纹",
+                    "name": "自动化扫描工具特征",
                     "match_type": "ua_keyword",
                     "pattern": "sqlmap|nikto|dirsearch|gobuster|wpscan",
                     "level": "高危",
                     "description": "拦截自动化扫描工具探测"
                 },
                 {
-                    "name": "高频 404 爆破熔断",
+                    "name": "高频 404 异常请求限制",
                     "match_type": "status_rate",
                     "threshold": 6,
                     "window": 30,
                     "level": "高危",
-                    "description": "30秒内连续 6 次 404 熔断"
+                    "description": "30秒内连续 6 次 404 限制"
                 }
             ], null, 2);
         } else if (currentImportType === 'blacklist') {
             textVal.value = JSON.stringify([
-                { "ip": "198.51.100.1", "reason": "SSH 暴力破解源", "level": "极高危" },
-                { "ip": "203.0.113.5", "reason": "全端口自动化扫描器", "level": "高危" }
+                { "ip": "198.51.100.1", "reason": "SSH 弱口令扫描源", "level": "极高危" },
+                { "ip": "203.0.113.5", "reason": "自动化端口扫描器", "level": "高危" }
             ], null, 2);
         } else if (currentImportType === 'business_ports') {
             textVal.value = JSON.stringify([
@@ -6187,11 +6187,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     async function batchBanAllProbes() {
-        if (!confirm('确定要分析访问日志，将所有非白名单的历史扫描探测 IP 一键批量拉黑并下发防火墙阻断吗？')) {
+        if (!confirm('确定要分析访问日志，将所有非白名单的异常探测 IP 批量加入黑名单并下发防火墙阻断吗？')) {
             return;
         }
         try {
-            showToast('正在批量分析与拉黑探测 IP...', '⏳');
+            showToast('正在分析并下发防火墙阻断...', '⏳');
             const res = await fetch('/api/blacklist/batch_ban_all', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -6199,7 +6199,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
             const data = await res.json();
             if (data.success) {
-                showToast(data.msg || `批量拉黑完成！共拉黑 ${data.count || 0} 个恶意 IP`, '🎉');
+                showToast(data.msg || `批量处理完成，共封禁 ${data.count || 0} 个探测 IP`, '🎉');
                 fetchData(false);
             } else {
                 showToast(data.msg || '操作失败', '⚠️');
@@ -6377,7 +6377,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path in CANARY_PATHS:
                 client_ip = self.client_address[0]
                 canary_desc = CANARY_PATHS[path]
-                ban_ip(client_ip, reason=f"Web金丝雀蜜标命中: 爬虫嗅探隐藏诱饵 ({canary_desc})", category="canary", level="极高危")
+                ban_ip(client_ip, reason=f"Web蜜标触发: 访问隐藏诱饵路径 ({canary_desc})", category="canary", level="极高危")
                 self.send_response(404)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.end_headers()
@@ -7579,7 +7579,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 ip = valid_ip
 
                 ban_ip(ip, reason=reason, category="manual", level="极高危")
-                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已下发内核防火墙并同步全网集群阻断）"})
+                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已下发内核防火墙并同步集群协同阻断）"})
                 return
 
             if path == "/api/defense/toggle_pause":
@@ -7596,7 +7596,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 save_config(cfg)
 
                 if is_paused:
-                    # 仅释放 PortGuard 自身添加的黑洞路由与黑名单拦截规则，绝不触碰系统全局防火墙与 Docker/宝塔规则！
                     run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
                     try:
                         conn = get_db()
@@ -7609,9 +7608,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                         conn.close()
                     except Exception:
                         pass
-                    msg = "PortGuard 防御拦截已成功暂停！系统进入纯观察模式（Web控制台正常运行，系统iptables不受影响）。"
+                    msg = "PortGuard 防御拦截已暂停（系统进入观察模式，Web控制台正常运行）。"
                 else:
-                    msg = "PortGuard 防御拦截已成功恢复！蜜罐嗅探与实时阻断已重新激活。"
+                    msg = "PortGuard 防御拦截已恢复（安全防护与实时阻断已重新生效）。"
 
                 self._send_json({"success": True, "paused": is_paused, "msg": msg})
                 return
@@ -7683,11 +7682,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     c.execute("""
                     INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
                     VALUES (?, ?, ?, '高危', ?, ?, ?)
-                    """, (v, f"未开放端口全网扫描 (端口 {port})", country, now_str, now_ts, ban_expire))
+                    """, (v, f"未开放端口扫描探测 (端口 {port})", country, now_str, now_ts, ban_expire))
                     
                     c.execute("""
                     INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                    VALUES (?, ?, 'TCP', '全网端口嗅探扫描', 'scan', '高危', ?, '', '', '', ?, ?, 'BANNED')
+                    VALUES (?, ?, 'TCP', '多端口扫描探测', 'scan', '高危', ?, '', '', '', ?, ?, 'BANNED')
                     """, (v, port, country, now_str, now_ts))
                     
                     if not cached_geo:
@@ -7698,7 +7697,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 conn.close()
                 if cfg.get("ban_action_iptables", True):
                     run_firewall_cmd("iptables-save")
-                self._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个历史探测 IP 批量拉黑并下发防火墙！"})
+                self._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个恶意探测 IP 批量加入黑名单并下发防火墙阻断。"})
                 return
 
             if path == "/api/blacklist/import":
@@ -7737,14 +7736,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 for item in parsed_items:
                     if isinstance(item, dict):
                         ip = str(item.get("ip", "")).strip()
-                        reason = str(item.get("reason", "批量导入拉黑")).strip()
+                        reason = str(item.get("reason", "批量导入封禁")).strip()
                         country = str(item.get("country", "手动导入")).strip()
                         level = str(item.get("level", "极高危")).strip()
                         ban_time = str(item.get("ban_time", now_str)).strip()
                     elif isinstance(item, str):
                         parts = item.strip().split(maxsplit=1)
                         ip = parts[0].strip() if parts else ""
-                        reason = parts[1].strip() if len(parts) > 1 else "批量导入拉黑"
+                        reason = parts[1].strip() if len(parts) > 1 else "批量导入封禁"
                         country = "手动导入"
                         level = "极高危"
                         ban_time = now_str
