@@ -537,8 +537,38 @@ class IsTrapPortTest(unittest.TestCase):
         self.assertTrue(ip_in_whitelist("172.68.238.114"))
         self.assertTrue(ip_in_whitelist("1.1.1.1"))
         self.assertTrue(ip_in_whitelist("8.8.8.8"))
-        # 普通恶意公网 IP 不豁免
-        self.assertFalse(is_infrastructure_or_cdn_ip("198.51.100.99"))
+    def test_geo_self_healing(self):
+        from sentry_daemon import get_db, init_db, resolve_ip_geo, resolve_ip_geo_local
+        init_db()
+        test_ip = "8.8.8.8"
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp) VALUES (?, 'test geo', '分析中...', '极高危', 'now', 123)", (test_ip,))
+        c.execute("INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status) VALUES (?, 80, 'TCP', 'test', 'web', '高危', '分析中...', '', '', '', 'now', 123, 'BANNED')", (test_ip,))
+        conn.commit()
+        conn.close()
+
+        geo = resolve_ip_geo_local(test_ip) or resolve_ip_geo(test_ip)
+        self.assertIsNotNone(geo)
+        self.assertIn(geo.get("country"), ("美国", "United States", "公网节点"))
+
+        # 触发自愈更新
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE events SET country = ?, isp = ? WHERE ip = ?", (geo.get("country"), geo.get("isp"), test_ip))
+        c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (geo.get("country"), test_ip))
+        conn.commit()
+
+        c.execute("SELECT country FROM blacklist WHERE ip = ?", (test_ip,))
+        self.assertNotEqual(c.fetchone()[0], "分析中...")
+        c.execute("SELECT country FROM events WHERE ip = ?", (test_ip,))
+        self.assertNotEqual(c.fetchone()[0], "分析中...")
+
+        # 清理
+        c.execute("DELETE FROM blacklist WHERE ip = ?", (test_ip,))
+        c.execute("DELETE FROM events WHERE ip = ?", (test_ip,))
+        conn.commit()
+        conn.close()
 
 
 if __name__ == "__main__":

@@ -940,40 +940,65 @@ def init_db():
 
 
 def heal_cluster_geo_history():
-    """后台自愈：将历史上因集群同步被占位标记为 '集群联防' 的 IP 归属地，重新解析为真实国家/省市地理位置，并修复历史记录中遗留的 0 端口"""
+    """后台自愈：将历史上所有未解析或标记为 '分析中...'/‘集群联防’/‘未知地域’ 的 IP 归属地，重新解析为真实国家/省市地理位置，并修复历史记录中遗留的 0 端口"""
     def _worker():
         try:
-            time.sleep(2.0)
+            time.sleep(1.0)
             conn = get_db()
             c = conn.cursor()
             # 修复历史 0 端口
             c.execute("UPDATE events SET port = 443, proto = 'TCP' WHERE port = 0 AND (port_name LIKE '%Web%' OR port_name LIKE '%HTTP%' OR port_name LIKE '%IP直连%' OR port_name LIKE '%诱捕%')")
             c.execute("UPDATE events SET proto = 'TCP' WHERE proto = 'MESH'")
-            # 获取需要修复归属地的 IP 列表并立即关闭连接
-            c.execute("SELECT DISTINCT ip FROM events WHERE country = '集群联防' OR country = '' OR country IS NULL LIMIT 100")
-            rows = [r[0] for r in c.fetchall()]
             conn.commit()
             conn.close()
 
-            # 在不持有数据库连接的情况下执行地理位置解析
-            for ip in rows:
-                geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip)
-                if not geo or not geo.get("country") or geo.get("country") in ("集群联防", "公网节点", "未知地域", "", None):
-                    geo = resolve_ip_geo(ip)
-                if geo and geo.get("country") not in ("集群联防", "公网节点", "未知地域", "", None):
-                    try:
-                        u_conn = get_db()
-                        u_c = u_conn.cursor()
-                        u_c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
-                                  (geo.get("country"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), ip))
-                        u_c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (geo.get("country"), ip))
-                        u_conn.commit()
-                        u_conn.close()
-                    except Exception:
-                        pass
+            while True:
+                try:
+                    conn = get_db()
+                    c = conn.cursor()
+                    # 1. 扫描 events 表中待自愈归属地或运营商记录
+                    c.execute("SELECT DISTINCT ip FROM events WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL OR isp IN ('分析中...', '', '0', 'None', 'null') OR isp IS NULL LIMIT 200")
+                    event_ips = [r[0] for r in c.fetchall() if r[0]]
+
+                    # 2. 扫描 blacklist 表中待自愈归属地记录
+                    c.execute("SELECT DISTINCT ip FROM blacklist WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
+                    bl_ips = [r[0] for r in c.fetchall() if r[0]]
+
+                    # 3. 扫描 port_access_logs 表待自愈记录
+                    c.execute("SELECT DISTINCT ip FROM port_access_logs WHERE country IN ('分析中...', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
+                    pal_ips = [r[0] for r in c.fetchall() if r[0]]
+
+                    conn.close()
+
+                    target_ips = list(set(event_ips + bl_ips + pal_ips))
+                    if not target_ips:
+                        # 当前无待修复记录，休眠 30 秒后进行下一轮轻量巡检
+                        time.sleep(30.0)
+                        continue
+
+                    for ip in target_ips:
+                        geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip)
+                        if not geo or not geo.get("country") or geo.get("country") in ("集群联防", "未知地域", "分析中...", "", None):
+                            geo = resolve_ip_geo(ip)
+                        if geo and geo.get("country") and geo.get("country") not in ("分析中...", "集群联防", "", None):
+                            u_conn = get_db()
+                            u_c = u_conn.cursor()
+                            c_val = geo.get("country") or "公网节点"
+                            r_val = geo.get("region", "")
+                            ci_val = geo.get("city", "")
+                            isp_val = geo.get("isp", "")
+                            u_c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                                      (c_val, r_val, ci_val, isp_val, ip))
+                            u_c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (c_val, ip))
+                            u_c.execute("UPDATE port_access_logs SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                                      (c_val, r_val, ci_val, isp_val, ip))
+                            u_conn.commit()
+                            u_conn.close()
+                except Exception:
+                    time.sleep(10.0)
         except Exception:
             pass
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, daemon=True, name="GeoHealWorker").start()
 
 def get_hidden_ips_set():
     """获取所有隐藏 IP 的集合"""
@@ -2332,17 +2357,20 @@ class MMDBReader:
 _GLOBAL_MMDB_CITY = None
 _GLOBAL_MMDB_ASN = None
 _MMDB_LOCK = threading.Lock()
-_MMDB_TRIED_INIT = False
+_MMDB_LAST_TRY = 0
 
 def get_mmdb_readers():
     """获取全局常驻内存的 MaxMind GeoLite2 (City + ASN) 离线引擎实例"""
-    global _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN, _MMDB_TRIED_INIT
-    if _MMDB_TRIED_INIT:
+    global _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN, _MMDB_LAST_TRY
+    if _GLOBAL_MMDB_CITY is not None and _GLOBAL_MMDB_ASN is not None:
+        return _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN
+    now = time.time()
+    if now - _MMDB_LAST_TRY < 10.0 and (_GLOBAL_MMDB_CITY is not None or _GLOBAL_MMDB_ASN is not None):
         return _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN
     with _MMDB_LOCK:
-        if _MMDB_TRIED_INIT:
+        if _GLOBAL_MMDB_CITY is not None and _GLOBAL_MMDB_ASN is not None:
             return _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN
-        _MMDB_TRIED_INIT = True
+        _MMDB_LAST_TRY = now
 
         city_candidates = [
             "/opt/portguard/GeoLite2-City.mmdb",
@@ -2359,41 +2387,44 @@ def get_mmdb_readers():
             "/tmp/GeoLite2-ASN.mmdb"
         ]
 
-        for p in city_candidates:
-            if os.path.isfile(p) and os.path.getsize(p) > 1024 * 1024:
-                try:
-                    _GLOBAL_MMDB_CITY = MMDBReader(p)
-                    print(f"[PortGuard GeoIP] ⚡ 成功载入 MaxMind GeoLite2-City 全球离线城市库: {p}")
-                    break
-                except Exception as e:
-                    print(f"[PortGuard GeoIP] MaxMind City 库载入异常 ({p}): {e}")
+        if _GLOBAL_MMDB_CITY is None:
+            for p in city_candidates:
+                if os.path.isfile(p) and os.path.getsize(p) > 1024 * 1024:
+                    try:
+                        _GLOBAL_MMDB_CITY = MMDBReader(p)
+                        print(f"[PortGuard GeoIP] ⚡ 成功载入 MaxMind GeoLite2-City 全球离线城市库: {p}")
+                        break
+                    except Exception as e:
+                        print(f"[PortGuard GeoIP] MaxMind City 库载入异常 ({p}): {e}")
 
-        for p in asn_candidates:
-            if os.path.isfile(p) and os.path.getsize(p) > 1024 * 1024:
-                try:
-                    _GLOBAL_MMDB_ASN = MMDBReader(p)
-                    print(f"[PortGuard GeoIP] ⚡ 成功载入 MaxMind GeoLite2-ASN 全球离线运营商库: {p}")
-                    break
-                except Exception as e:
-                    print(f"[PortGuard GeoIP] MaxMind ASN 库载入异常 ({p}): {e}")
+        if _GLOBAL_MMDB_ASN is None:
+            for p in asn_candidates:
+                if os.path.isfile(p) and os.path.getsize(p) > 1024 * 1024:
+                    try:
+                        _GLOBAL_MMDB_ASN = MMDBReader(p)
+                        print(f"[PortGuard GeoIP] ⚡ 成功载入 MaxMind GeoLite2-ASN 全球离线运营商库: {p}")
+                        break
+                    except Exception as e:
+                        print(f"[PortGuard GeoIP] MaxMind ASN 库载入异常 ({p}): {e}")
 
         return _GLOBAL_MMDB_CITY, _GLOBAL_MMDB_ASN
 
 _GLOBAL_XDB_SEARCHER = None
 _GLOBAL_XDB_LOCK = threading.Lock()
-_XDB_TRIED_INIT = False
+_XDB_LAST_TRY = 0
 
 def get_xdb_searcher():
     """获取全局常驻内存的 IP2Region 本地离线引擎实例"""
-    global _GLOBAL_XDB_SEARCHER, _XDB_TRIED_INIT
+    global _GLOBAL_XDB_SEARCHER, _XDB_LAST_TRY
     if _GLOBAL_XDB_SEARCHER is not None:
+        return _GLOBAL_XDB_SEARCHER
+    now = time.time()
+    if now - _XDB_LAST_TRY < 10.0:
         return _GLOBAL_XDB_SEARCHER
     with _GLOBAL_XDB_LOCK:
         if _GLOBAL_XDB_SEARCHER is not None:
             return _GLOBAL_XDB_SEARCHER
-        if _XDB_TRIED_INIT:
-            return None
-        _XDB_TRIED_INIT = True
+        _XDB_LAST_TRY = now
 
         candidate_paths = [
             "/opt/portguard/ip2region.xdb",

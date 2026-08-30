@@ -2235,17 +2235,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     };
 
     function formatGeoCN(item) {
-        if (!item) return '未知节点';
-        let country = item.country || '';
-        if (country === '分析中...' || !country) return '分析中...';
+        if (!item) return '🌐 公网节点';
+        let country = (item.country || '').trim();
+        if (country === '分析中...' || !country || country === 'None' || country === 'null') {
+            country = '';
+        }
         country = COUNTRY_CN_MAP[country] || country;
-        let region = item.region || item.city || '';
-        let isp = item.isp || '';
+        let region = (item.region || item.city || '').trim();
+        let isp = (item.isp || '').trim();
         let parts = [];
-        if (country && country !== '未知地域') parts.push(country);
-        if (region && !country.includes(region)) parts.push(region);
-        if (isp && isp !== '0' && !country.includes(isp) && !region.includes(isp)) parts.push(isp);
-        if (parts.length === 0) return '🌐 公网节点';
+        if (country && country !== '未知地域' && country !== '公网节点') parts.push(country);
+        if (region && !country.includes(region) && region !== '0') parts.push(region);
+        if (isp && isp !== '0' && isp !== '未知' && !country.includes(isp) && !region.includes(isp)) parts.push(isp);
+        if (parts.length === 0) {
+            return (country && country !== '未知地域') ? `🌐 ${country}` : '🌐 公网节点';
+        }
         return '🌐 ' + parts.join(' · ');
     }
 
@@ -3084,8 +3088,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const banStatusBadge = att.is_banned ?
                 '<span class="badge badge-danger">🚫 已下发封禁</span>' :
                 '<span class="badge badge-warning">👀 监控中</span>';
-            const portsBadge = (att.ports || '').split(',').slice(0, 8).map(p => `<span style="display: inline-block; background: var(--card-sec); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: monospace; margin: 1px;">${p}</span>`).join(' ');
-            const geoSub = (att.country || att.isp) ? `🌐 ${(att.country || '公网节点')}${(att.isp && att.isp !== '0') ? ` · ${att.isp}` : ''}` : '🌐 公网节点';
+            const rawCountry = (att.country || '').trim();
+            const cleanCountry = (rawCountry === '分析中...' || rawCountry === 'None' || rawCountry === 'null') ? '' : rawCountry;
+            const cleanIsp = (att.isp && att.isp !== '0' && att.isp !== '未知' && att.isp !== '分析中...') ? att.isp.trim() : '';
+            let geoSubParts = [];
+            if (cleanCountry && cleanCountry !== '未知地域' && cleanCountry !== '公网节点') geoSubParts.push(cleanCountry);
+            if (cleanIsp && !cleanCountry.includes(cleanIsp)) geoSubParts.push(cleanIsp);
+            const geoSub = geoSubParts.length > 0 ? `🌐 ${geoSubParts.join(' · ')}` : '🌐 公网节点';
 
             html += `
                 <tr>
@@ -6663,15 +6672,23 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 top_attackers = []
                 for row in attacker_rows:
+                    att_ip = row[0]
+                    geo = _GEO_CACHE.get(att_ip) or resolve_ip_geo_local(att_ip) or {}
+                    raw_country = (row[1] or "").strip()
+                    raw_isp = (row[2] or "").strip()
+
+                    final_country = (geo.get("country") if geo and geo.get("country") not in ("分析中...", "未知地域", "公网节点", "", "None", None) else None) or (raw_country if raw_country not in ("分析中...", "未知地域", "公网节点", "", "None", None) else None) or (geo.get("country") if geo else None) or "公网节点"
+                    final_isp = (geo.get("isp") if geo and geo.get("isp") not in ("分析中...", "", "0", "None", "未知", None) else None) or (raw_isp if raw_isp not in ("分析中...", "", "0", "None", "未知", None) else None) or ""
+
                     top_attackers.append({
-                        "ip": row[0],
-                        "country": row[1] or "未知",
-                        "isp": row[2] or "未知",
+                        "ip": att_ip,
+                        "country": final_country,
+                        "isp": final_isp,
                         "level": row[3] or "极高危",
                         "hit_count": row[4],
                         "last_seen": row[5] or "--",
                         "ports": row[6] or "--",
-                        "is_banned": row[0] in banned_ips_set
+                        "is_banned": att_ip in banned_ips_set
                     })
 
                 conn.close()
@@ -6771,14 +6788,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 rows = [dict(r) for r in c.fetchall()]
                 conn.close()
                 for r in rows:
-                    if r.get("country") in ("分析中...", "", None):
-                        cached = _GEO_CACHE.get(r["ip"])
-                        if cached:
-                            r["country"] = cached.get("country", "公网节点")
-                            r["region"] = cached.get("region", "")
-                            r["city"] = cached.get("city", "")
-                            r["isp"] = cached.get("isp", "")
+                    raw_c = (r.get("country") or "").strip()
+                    if not raw_c or raw_c in ("分析中...", "未知地域", "None", "null"):
+                        geo = _GEO_CACHE.get(r["ip"]) or resolve_ip_geo_local(r["ip"])
+                        if geo and geo.get("country") and geo.get("country") not in ("分析中...", "未知地域", "", None):
+                            r["country"] = geo.get("country")
+                            r["region"] = geo.get("region", "")
+                            r["city"] = geo.get("city", "")
+                            r["isp"] = geo.get("isp", "")
                         else:
+                            r["country"] = "公网节点"
                             _EXECUTOR.submit(resolve_ip_geo, r["ip"])
                 self._send_json(rows)
                 return
@@ -6802,16 +6821,21 @@ class RequestHandler(BaseHTTPRequestHandler):
                 for r in rows:
                     ip_k = r["ip"]
                     geo = _GEO_CACHE.get(ip_k) or resolve_ip_geo_local(ip_k) or {}
-                    if geo.get("country") and geo["country"] not in ("未知地域", "公网节点", "", None):
+                    raw_country = (r.get("country") or "").strip()
+                    if geo.get("country") and geo["country"] not in ("未知地域", "公网节点", "分析中...", "", "None", None):
                         r["country"] = geo["country"]
                         r["region"] = geo.get("region", "")
                         r["city"] = geo.get("city", "")
                         r["isp"] = geo.get("isp", "")
                     else:
-                        r["country"] = r.get("country") or "公网节点"
-                        r["region"] = r.get("region", "")
-                        r["city"] = r.get("city", "")
-                        r["isp"] = r.get("isp", "")
+                        if not raw_country or raw_country in ("分析中...", "未知地域", "公网节点", "", "None"):
+                            r["country"] = geo.get("country") or "公网节点"
+                            _EXECUTOR.submit(resolve_ip_geo, ip_k)
+                        else:
+                            r["country"] = raw_country
+                        r["region"] = geo.get("region") or r.get("region", "")
+                        r["city"] = geo.get("city") or r.get("city", "")
+                        r["isp"] = geo.get("isp") or r.get("isp", "")
                 self._send_json(rows)
                 return
 
