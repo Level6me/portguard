@@ -2440,7 +2440,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         </g>
 
                         <!-- 高拟真精细化全球各大洲陆地板块与主要群岛底图 -->
-                        <g fill="rgba(255,255,255,0.085)" stroke="rgba(255,255,255,0.24)" stroke-width="0.85" stroke-linejoin="round">
+                        <g fill="rgba(255,255,255,0.085)" stroke="rgba(255,255,255,0.25)" stroke-width="0.85" stroke-linejoin="round">
                             <!-- 北美大陆 (含阿拉斯加、加拿大、美国本土) -->
                             <path d="M 60,65 L 85,50 L 115,48 L 140,40 L 175,32 L 210,25 L 245,22 L 285,20 L 310,32 L 305,52 L 275,58 L 255,75 L 285,90 L 300,120 L 280,145 L 265,180 L 235,215 L 215,235 L 195,248 L 180,215 L 165,225 L 145,190 L 132,175 L 115,155 L 90,125 L 75,95 Z"/>
                             <!-- 格陵兰岛 -->
@@ -2469,9 +2469,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <!-- 日本列岛 (本州、北海道、九州、四国) -->
                             <path d="M 865,128 L 882,138 L 872,178 L 856,165 Z"/>
                             <path d="M 872,118 L 888,124 L 882,135 L 868,128 Z"/>
+                            <path d="M 852,175 L 860,182 L 852,185 Z"/>
                             <!-- 中国台湾岛与海南岛 -->
                             <path d="M 764,208 L 768,214 L 763,222 L 759,215 Z"/>
-                            <circle cx="738" cy="225" r="2.8" fill="rgba(255,255,255,0.25)"/>
+                            <path d="M 735,222 L 742,224 L 739,228 L 734,226 Z"/>
                             <!-- 东南亚半岛与马来群岛、印度尼西亚、菲律宾 -->
                             <path d="M 725,230 L 738,255 L 728,275 L 720,265 Z"/>
                             <path d="M 738,285 L 788,280 L 838,295 L 832,315 L 772,310 Z"/>
@@ -2480,6 +2481,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             <path d="M 778,332 L 858,328 L 888,372 L 872,428 L 812,432 L 768,392 Z"/>
                             <!-- 新西兰南北岛 -->
                             <path d="M 908,418 L 922,428 L 902,468 L 892,452 Z"/>
+                        </g>
+
+                        <!-- 高放大层级下的各大区/省份细分地理脉络与边界虚线 (放大后呈现高保真细节) -->
+                        <g stroke="rgba(255,255,255,0.12)" stroke-width="0.5" stroke-dasharray="2,2" fill="none">
+                            <!-- 中国华北/东北/华东/华南/西南内部行政地理脉络 -->
+                            <path d="M 715,145 L 740,165 L 760,155 L 770,135"/>
+                            <path d="M 710,175 L 735,178 L 755,188 L 760,205"/>
+                            <path d="M 700,205 L 725,208 L 745,214 L 758,212"/>
+                            <path d="M 670,155 L 710,190 L 718,208 L 735,216"/>
+                            <path d="M 742,168 L 748,188 L 752,200"/>
+                            <!-- 美国东西海岸与内陆分区脉络 -->
+                            <path d="M 175,135 L 215,140 L 255,148 L 275,155"/>
+                            <path d="M 185,175 L 220,185 L 250,195 L 270,190"/>
+                            <path d="M 215,115 L 218,165 L 220,215"/>
+                            <!-- 欧洲主要国境与大区分隔脉络 -->
+                            <path d="M 455,95 L 485,100 L 515,105 L 545,110"/>
+                            <path d="M 470,125 L 500,128 L 530,132"/>
+                            <path d="M 485,65 L 488,110 L 492,150"/>
+                            <!-- 韩国三八线与首尔/釜山走廊脉络 -->
+                            <path d="M 788,170 L 794,171 L 795,182"/>
                         </g>
 
                         <!-- 动态威胁飞线与光晕层 (Modal) -->
@@ -7271,37 +7292,80 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let threatMapDragStartY = 0;
     let threatMapInitTouchDist = 0;
     let threatMapInitScale = 1;
+    let threatMapTouchCenterSvgX = 500;
+    let threatMapTouchCenterSvgY = 250;
+
+    // 将屏幕坐标 (clientX, clientY) 准确转换成 SVG 内部逻辑世界坐标 (0~1000, 0~500)
+    function getSvgWorldPoint(clientX, clientY) {
+        const svg = document.getElementById('modal-threat-world-map-svg');
+        if (!svg) return { x: 500, y: 250 };
+        const pt = svg.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const ctm = svg.getScreenCTM();
+        if (ctm) {
+            const svgP = pt.matrixTransform(ctm.inverse());
+            return { x: svgP.x, y: svgP.y };
+        }
+        const rect = svg.getBoundingClientRect();
+        return {
+            x: ((clientX - rect.left) / rect.width) * 1000,
+            y: ((clientY - rect.top) / rect.height) * 500
+        };
+    }
 
     function applyThreatMapTransform(smooth = true) {
         const vp = document.getElementById('modal-map-viewport');
         const svg = document.getElementById('modal-threat-world-map-svg');
         if (!vp) return;
-        // 限制缩放区间 [0.9x ~ 6.0x]
-        threatMapScale = Math.max(0.9, Math.min(6.0, threatMapScale));
-        // 限制平移范围
-        const maxTx = (threatMapScale - 1) * 500 + 150;
-        const maxTy = (threatMapScale - 1) * 250 + 100;
+        // 限制缩放区间 [0.9x ~ 7.0x]
+        threatMapScale = Math.max(0.9, Math.min(7.0, threatMapScale));
+        
+        // 动态约束平移边界，防止将地图完全移出视野
+        const maxTx = (threatMapScale - 1) * 600 + 200;
+        const maxTy = (threatMapScale - 1) * 300 + 150;
         threatMapTx = Math.max(-maxTx, Math.min(maxTx, threatMapTx));
         threatMapTy = Math.max(-maxTy, Math.min(maxTy, threatMapTy));
 
-        vp.style.transition = smooth ? 'transform 0.35s cubic-bezier(0.25, 1, 0.5, 1)' : 'none';
+        vp.style.transition = smooth ? 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)' : 'none';
         vp.setAttribute('transform', `matrix(${threatMapScale} 0 0 ${threatMapScale} ${threatMapTx} ${threatMapTy})`);
         if (svg) svg.style.cursor = threatMapScale > 1.05 ? 'grab' : 'default';
 
+        // 细节保真：文字与飞线节点随着地图放大按比例动态反向微调，防止粗糙遮挡，展现细腻地理脉络
+        const invScale = 1 / Math.sqrt(threatMapScale);
+        document.querySelectorAll('#modal-svg-attack-trajectories text').forEach(t => {
+            t.style.fontSize = `${(9.5 * invScale).toFixed(1)}px`;
+        });
+        document.querySelectorAll('#modal-svg-attack-trajectories path').forEach(p => {
+            const baseW = parseFloat(p.getAttribute('data-base-width') || p.getAttribute('stroke-width') || '1.8');
+            p.setAttribute('data-base-width', baseW);
+            p.setAttribute('stroke-width', (baseW * invScale).toFixed(2));
+        });
+
         const tip = document.getElementById('modal-map-zoom-tip');
         if (tip) {
-            tip.innerText = `🔍 缩放: ${(threatMapScale * 100).toFixed(0)}% · 拖拽平移`;
+            tip.innerText = `🔍 缩放: ${(threatMapScale * 100).toFixed(0)}% · 支持双指/拖拽`;
         }
     }
 
-    function zoomThreatMap(factor) {
+    // 以指定锚点 (anchorSvgX, anchorSvgY) 为中心进行等比几何缩放
+    function zoomThreatMapAtPoint(factor, anchorSvgX = 500, anchorSvgY = 250) {
         const prevScale = threatMapScale;
-        threatMapScale *= factor;
-        threatMapScale = Math.max(0.9, Math.min(6.0, threatMapScale));
-        // 围绕视口中心 (500, 250) 进行等比缩放
-        threatMapTx = 500 - (500 - threatMapTx) * (threatMapScale / prevScale);
-        threatMapTy = 250 - (250 - threatMapTy) * (threatMapScale / prevScale);
+        const newScale = Math.max(0.9, Math.min(7.0, threatMapScale * factor));
+        if (Math.abs(newScale - prevScale) < 0.001) return;
+
+        // 核心数学推导：保证锚点世界坐标在屏幕上的显示位置严格不动
+        // screenPos = anchorSvg * scale + tx  =>  tx = screenPos - anchorSvg * scale
+        // screenPos = anchorSvg * prevScale + prevTx
+        // => newTx = prevTx + anchorSvg * (prevScale - newScale)
+        threatMapTx = threatMapTx + anchorSvgX * (prevScale - newScale);
+        threatMapTy = threatMapTy + anchorSvgY * (prevScale - newScale);
+        threatMapScale = newScale;
         applyThreatMapTransform(true);
+    }
+
+    function zoomThreatMap(factor) {
+        zoomThreatMapAtPoint(factor, 500, 250);
     }
 
     function resetThreatMapView() {
@@ -7321,13 +7385,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         // 根据两点跨度计算合适缩放倍率
         const spanX = Math.abs(sourceX - targetX);
         const spanY = Math.abs(sourceY - targetY);
-        let fitScale = 2.2;
+        let fitScale = 2.4;
         if (spanX > 550 || spanY > 260) {
             fitScale = 1.45;
         } else if (spanX > 350 || spanY > 180) {
-            fitScale = 1.85;
+            fitScale = 1.95;
         } else if (spanX < 150 && spanY < 100) {
-            fitScale = 2.8;
+            fitScale = 3.2;
         }
 
         threatMapScale = fitScale;
@@ -7336,17 +7400,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         applyThreatMapTransform(true);
     }
 
-    // 初始化地图鼠标拖拽、滚轮与双指捏合事件
+    // 初始化地图鼠标拖拽、滚轮与双指精准捏合事件
     function initThreatMapInteractiveGestures() {
         const wrap = document.getElementById('modal-map-wrap-box');
         if (!wrap || wrap._gesturesBound) return;
         wrap._gesturesBound = true;
 
-        // 1. 鼠标滚轮缩放
+        // 1. 鼠标滚轮在鼠标悬停的具体坐标点上放大
         wrap.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const factor = e.deltaY < 0 ? 1.15 : 0.87;
-            zoomThreatMap(factor);
+            const pt = getSvgWorldPoint(e.clientX, e.clientY);
+            const factor = e.deltaY < 0 ? 1.18 : 0.85;
+            zoomThreatMapAtPoint(factor, pt.x, pt.y);
         }, { passive: false });
 
         // 2. 鼠标拖拽平移
@@ -7374,7 +7439,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         });
 
-        // 3. 移动端 / iPad 双指捏合缩放 (Pinch-to-zoom) 与单指拖拽平移
+        // 3. 移动端 / iPad 双指捏合缩放 (准确以双指两点中心作为缩放锚点，而非左上角！)
+        let touchStartMidX = 0;
+        let touchStartMidY = 0;
+        let touchStartTx = 0;
+        let touchStartTy = 0;
+
         wrap.addEventListener('touchstart', (e) => {
             if (e.target.closest('button') || e.target.closest('a')) return;
             if (e.touches.length === 1) {
@@ -7383,11 +7453,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 threatMapDragStartY = e.touches[0].clientY - threatMapTy;
             } else if (e.touches.length === 2) {
                 isThreatMapDragging = false;
-                threatMapInitTouchDist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
+                const t1 = e.touches[0];
+                const t2 = e.touches[1];
+                threatMapInitTouchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
                 threatMapInitScale = threatMapScale;
+                touchStartTx = threatMapTx;
+                touchStartTy = threatMapTy;
+
+                // 记录双指的物理屏幕中心点
+                touchStartMidX = (t1.clientX + t2.clientX) / 2;
+                touchStartMidY = (t1.clientY + t2.clientY) / 2;
+
+                // 计算双指中心在 SVG 内的几何坐标 (此为绝对缩放中心)
+                const pt = getSvgWorldPoint(touchStartMidX, touchStartMidY);
+                threatMapTouchCenterSvgX = pt.x;
+                threatMapTouchCenterSvgY = pt.y;
             }
         }, { passive: false });
 
@@ -7399,12 +7479,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 applyThreatMapTransform(false);
             } else if (e.touches.length === 2 && threatMapInitTouchDist > 0) {
                 e.preventDefault();
-                const dist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
+                const t1 = e.touches[0];
+                const t2 = e.touches[1];
+                const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                const currentMidX = (t1.clientX + t2.clientX) / 2;
+                const currentMidY = (t1.clientY + t2.clientY) / 2;
+
                 const factor = dist / threatMapInitTouchDist;
-                threatMapScale = Math.max(0.9, Math.min(6.0, threatMapInitScale * factor));
+                const newScale = Math.max(0.9, Math.min(7.0, threatMapInitScale * factor));
+
+                // 保持双指中心点对应的 SVG 坐标不变，同时融合双指整体拖拽偏移
+                threatMapScale = newScale;
+                threatMapTx = touchStartTx + threatMapTouchCenterSvgX * (threatMapInitScale - newScale) + (currentMidX - touchStartMidX);
+                threatMapTy = touchStartTy + threatMapTouchCenterSvgY * (threatMapInitScale - newScale) + (currentMidY - touchStartMidY);
+
                 applyThreatMapTransform(false);
             }
         }, { passive: false });
