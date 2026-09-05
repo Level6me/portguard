@@ -738,6 +738,69 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             from { opacity: 0; transform: scale(0.96) translateY(8px); }
             to { opacity: 1; transform: scale(1) translateY(0); }
         }
+
+        /* Threat Map Fullscreen Modal Layout */
+        .threat-map-modal-content {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            flex: 1;
+            min-height: 0;
+        }
+        .threat-map-modal-map-wrap {
+            position: relative;
+            width: 100%;
+            height: 380px;
+            background: radial-gradient(circle at 50% 50%, #151d2f 0%, #070a12 100%);
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+        }
+        .threat-map-modal-aside {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+        .threat-map-modal-table-wrap {
+            flex: 1;
+            max-height: 220px;
+            overflow-y: auto;
+            background: var(--bg);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+        }
+
+        @media (min-width: 860px) {
+            .modal-sheet.threat-map-sheet {
+                max-width: 1240px !important;
+                width: 95% !important;
+                height: 86vh !important;
+                max-height: 820px !important;
+            }
+            .threat-map-modal-content {
+                flex-direction: row;
+                align-items: stretch;
+                gap: 16px;
+                height: calc(100% - 90px);
+            }
+            .threat-map-modal-map-wrap {
+                flex: 1.55;
+                height: 100% !important;
+                min-height: 440px;
+            }
+            .threat-map-modal-aside {
+                flex: 1.05;
+                height: 100% !important;
+                min-width: 0;
+            }
+            .threat-map-modal-table-wrap {
+                max-height: none !important;
+                height: 100%;
+            }
+        }
+
         .form-group { margin-bottom: 12px; }
         .form-label {
             display: block;
@@ -2297,7 +2360,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <!-- Modal: 全球威胁态势巨幕全景交互地图 (Full Interactive Threat Map Modal) -->
 <div class="modal-overlay" id="modal-map-detail">
-    <div class="modal-sheet" style="max-width: 1100px; width: 96%; max-height: 90vh; display: flex; flex-direction: column; padding: 18px 20px; border-radius: 20px;">
+    <div class="modal-sheet threat-map-sheet" style="max-width: 1100px; width: 96%; max-height: 90vh; display: flex; flex-direction: column; padding: 18px 20px; border-radius: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; flex-shrink: 0;">
             <div style="display: flex; align-items: center; gap: 10px;">
                 <span style="font-size: 24px;">🌐</span>
@@ -2312,90 +2375,93 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- 巨幕地图核心渲染区 -->
-        <div style="position: relative; width: 100%; height: 440px; background: radial-gradient(circle at 50% 50%, #151d2f 0%, #070a12 100%); border-radius: 14px; overflow: hidden; border: 1px solid var(--border-subtle); flex-shrink: 0;">
-            <svg id="modal-threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
-                <defs>
-                    <radialGradient id="modal-target-pulse-glow" cx="50%" cy="50%" r="50%">
-                        <stop offset="0%" stop-color="#007aff" stop-opacity="0.9"/>
-                        <stop offset="60%" stop-color="#5856d6" stop-opacity="0.4"/>
-                        <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
-                    </radialGradient>
-                    <linearGradient id="modal-attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.95"/>
-                        <stop offset="70%" stop-color="#ff9500" stop-opacity="0.7"/>
-                        <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.3"/>
-                    </linearGradient>
-                </defs>
-                <!-- 经纬度网格线 -->
-                <g stroke="rgba(255,255,255,0.05)" stroke-width="0.7" stroke-dasharray="3,3">
-                    <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
-                    <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
-                </g>
-                <!-- 精细化全球各大洲陆地底图 -->
-                <g fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="0.8">
-                    <!-- 北美大陆 -->
-                    <path d="M 100,45 L 130,40 L 165,30 L 220,25 L 290,20 L 310,35 L 300,55 L 275,60 L 260,80 L 295,95 L 305,130 L 275,150 L 260,190 L 225,225 L 205,245 L 180,215 L 165,225 L 145,190 L 130,175 L 105,145 L 85,120 L 80,85 Z"/>
-                    <!-- 格陵兰 -->
-                    <path d="M 320,15 L 375,10 L 400,25 L 380,65 L 335,60 L 315,35 Z"/>
-                    <!-- 南美大陆 -->
-                    <path d="M 215,250 L 245,245 L 285,255 L 335,280 L 350,315 L 330,370 L 290,440 L 265,475 L 245,470 L 250,420 L 230,360 L 210,300 L 205,270 Z"/>
-                    <!-- 欧陆 -->
-                    <path d="M 455,60 L 490,45 L 530,45 L 555,65 L 545,85 L 575,100 L 550,135 L 525,145 L 505,135 L 485,155 L 450,155 L 435,135 L 440,105 L 420,95 L 430,75 Z"/>
-                    <!-- 不列颠群岛 -->
-                    <path d="M 430,80 L 445,75 L 440,95 L 425,100 Z"/>
-                    <!-- 非洲大陆 -->
-                    <path d="M 445,165 L 525,160 L 565,185 L 590,240 L 565,285 L 535,370 L 495,430 L 465,375 L 430,310 L 405,245 L 415,195 Z"/>
-                    <!-- 马达加斯加 -->
-                    <path d="M 575,340 L 590,345 L 580,390 L 565,380 Z"/>
-                    <!-- 亚欧大陆与中亚/东亚 -->
-                    <path d="M 565,60 L 635,50 L 715,40 L 795,45 L 870,65 L 905,95 L 885,135 L 845,150 L 815,180 L 830,225 L 800,255 L 755,270 L 730,250 L 710,215 L 675,235 L 635,225 L 605,185 L 585,155 L 565,120 Z"/>
-                    <!-- 日本列岛 -->
-                    <path d="M 865,130 L 880,140 L 870,180 L 855,165 Z"/>
-                    <!-- 东南亚/印尼群岛 -->
-                    <path d="M 740,285 L 790,280 L 840,295 L 835,315 L 775,310 Z"/>
-                    <!-- 澳洲大陆 -->
-                    <path d="M 780,335 L 860,330 L 890,375 L 875,430 L 815,435 L 770,395 Z"/>
-                    <!-- 新西兰 -->
-                    <path d="M 910,420 L 925,430 L 905,470 L 895,455 Z"/>
-                </g>
-                <!-- 动态威胁飞线与光晕层 (Modal) -->
-                <g id="modal-svg-attack-trajectories"></g>
-                <!-- 靶点中心守护核心 (x=770, y=165) -->
-                <g transform="translate(770, 165)">
-                    <circle r="24" fill="url(#modal-target-pulse-glow)">
-                        <animate attributeName="r" values="14;30;14" dur="2.4s" repeatCount="indefinite"/>
-                        <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.4s" repeatCount="indefinite"/>
-                    </circle>
-                    <circle r="5.5" fill="#007aff" stroke="#ffffff" stroke-width="2"/>
-                    <text x="12" y="5" fill="#64d2ff" font-size="11" font-weight="800" font-family="sans-serif">🛡️ 本机防御节点</text>
-                </g>
-            </svg>
-            <!-- 弹窗悬浮气泡 -->
-            <div id="modal-map-tooltip" style="position: absolute; display: none; background: rgba(15,18,26,0.95); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); pointer-events: none; z-index: 20; box-shadow: 0 12px 32px rgba(0,0,0,0.5);"></div>
-        </div>
-
-        <!-- 底部威胁来源国家与实体联动明细卡 -->
-        <div style="margin-top: 14px; flex: 1; min-height: 0; display: flex; flex-direction: column;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-weight: 700; font-size: 12px; color: var(--text);">🎯 活跃威胁发起源与国家分布明细（点击任意国家行可高亮联动定位）</span>
-                <span style="font-size: 11px; color: var(--text-sec);">共 <b id="modal-map-total-countries" style="color: var(--accent);">0</b> 个攻击来源地区</span>
+        <!-- 响应式主内容区: iPad/桌面端左右并排分栏，手机端垂直堆叠 -->
+        <div class="threat-map-modal-content">
+            <!-- 左侧 (小屏上方): 巨幕地图核心渲染区 -->
+            <div class="threat-map-modal-map-wrap">
+                <svg id="modal-threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
+                    <defs>
+                        <radialGradient id="modal-target-pulse-glow" cx="50%" cy="50%" r="50%">
+                            <stop offset="0%" stop-color="#007aff" stop-opacity="0.9"/>
+                            <stop offset="60%" stop-color="#5856d6" stop-opacity="0.4"/>
+                            <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
+                        </radialGradient>
+                        <linearGradient id="modal-attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.95"/>
+                            <stop offset="70%" stop-color="#ff9500" stop-opacity="0.7"/>
+                            <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.3"/>
+                        </linearGradient>
+                    </defs>
+                    <!-- 经纬度网格线 -->
+                    <g stroke="rgba(255,255,255,0.05)" stroke-width="0.7" stroke-dasharray="3,3">
+                        <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
+                        <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
+                    </g>
+                    <!-- 精细化全球各大洲陆地底图 -->
+                    <g fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="0.8">
+                        <!-- 北美大陆 -->
+                        <path d="M 100,45 L 130,40 L 165,30 L 220,25 L 290,20 L 310,35 L 300,55 L 275,60 L 260,80 L 295,95 L 305,130 L 275,150 L 260,190 L 225,225 L 205,245 L 180,215 L 165,225 L 145,190 L 130,175 L 105,145 L 85,120 L 80,85 Z"/>
+                        <!-- 格陵兰 -->
+                        <path d="M 320,15 L 375,10 L 400,25 L 380,65 L 335,60 L 315,35 Z"/>
+                        <!-- 南美大陆 -->
+                        <path d="M 215,250 L 245,245 L 285,255 L 335,280 L 350,315 L 330,370 L 290,440 L 265,475 L 245,470 L 250,420 L 230,360 L 210,300 L 205,270 Z"/>
+                        <!-- 欧陆 -->
+                        <path d="M 455,60 L 490,45 L 530,45 L 555,65 L 545,85 L 575,100 L 550,135 L 525,145 L 505,135 L 485,155 L 450,155 L 435,135 L 440,105 L 420,95 L 430,75 Z"/>
+                        <!-- 不列颠群岛 -->
+                        <path d="M 430,80 L 445,75 L 440,95 L 425,100 Z"/>
+                        <!-- 非洲大陆 -->
+                        <path d="M 445,165 L 525,160 L 565,185 L 590,240 L 565,285 L 535,370 L 495,430 L 465,375 L 430,310 L 405,245 L 415,195 Z"/>
+                        <!-- 马达加斯加 -->
+                        <path d="M 575,340 L 590,345 L 580,390 L 565,380 Z"/>
+                        <!-- 亚欧大陆与中亚/东亚 -->
+                        <path d="M 565,60 L 635,50 L 715,40 L 795,45 L 870,65 L 905,95 L 885,135 L 845,150 L 815,180 L 830,225 L 800,255 L 755,270 L 730,250 L 710,215 L 675,235 L 635,225 L 605,185 L 585,155 L 565,120 Z"/>
+                        <!-- 日本列岛 -->
+                        <path d="M 865,130 L 880,140 L 870,180 L 855,165 Z"/>
+                        <!-- 东南亚/印尼群岛 -->
+                        <path d="M 740,285 L 790,280 L 840,295 L 835,315 L 775,310 Z"/>
+                        <!-- 澳洲大陆 -->
+                        <path d="M 780,335 L 860,330 L 890,375 L 875,430 L 815,435 L 770,395 Z"/>
+                        <!-- 新西兰 -->
+                        <path d="M 910,420 L 925,430 L 905,470 L 895,455 Z"/>
+                    </g>
+                    <!-- 动态威胁飞线与光晕层 (Modal) -->
+                    <g id="modal-svg-attack-trajectories"></g>
+                    <!-- 靶点中心守护核心 (x=770, y=165) -->
+                    <g transform="translate(770, 165)">
+                        <circle r="24" fill="url(#modal-target-pulse-glow)">
+                            <animate attributeName="r" values="14;30;14" dur="2.4s" repeatCount="indefinite"/>
+                            <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.4s" repeatCount="indefinite"/>
+                        </circle>
+                        <circle r="5.5" fill="#007aff" stroke="#ffffff" stroke-width="2"/>
+                        <text x="12" y="5" fill="#64d2ff" font-size="11" font-weight="800" font-family="sans-serif">🛡️ 本机防御节点</text>
+                    </g>
+                </svg>
+                <!-- 弹窗悬浮气泡 -->
+                <div id="modal-map-tooltip" style="position: absolute; display: none; background: rgba(15,18,26,0.95); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); pointer-events: none; z-index: 20; box-shadow: 0 12px 32px rgba(0,0,0,0.5);"></div>
             </div>
-            <div style="flex: 1; max-height: 180px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px;">
-                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec); position: sticky; top: 0; z-index: 2;">
-                            <th style="padding: 8px 12px;">来源国家/地区</th>
-                            <th style="padding: 8px 12px;">探测拦截频次</th>
-                            <th style="padding: 8px 12px;">代表性探测源 IP</th>
-                            <th style="padding: 8px 12px;">主要命中服务</th>
-                            <th style="padding: 8px 12px; text-align: right;">快捷联动</th>
-                        </tr>
-                    </thead>
-                    <tbody id="modal-map-country-tbody">
-                        <tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">正在加载威胁来源数据...</td></tr>
-                    </tbody>
-                </table>
+
+            <!-- 右侧 (小屏下方): 威胁来源国家与实体联动明细卡 -->
+            <div class="threat-map-modal-aside">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-shrink: 0;">
+                    <span style="font-weight: 700; font-size: 12px; color: var(--text);">🎯 活跃威胁发起源与国家分布明细（点击可高亮联动）</span>
+                    <span style="font-size: 11px; color: var(--text-sec);">共 <b id="modal-map-total-countries" style="color: var(--accent);">0</b> 个攻击来源地区</span>
+                </div>
+                <div class="threat-map-modal-table-wrap">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec); position: sticky; top: 0; z-index: 2;">
+                                <th style="padding: 8px 12px;">来源国家/地区</th>
+                                <th style="padding: 8px 12px;">探测拦截频次</th>
+                                <th style="padding: 8px 12px;">代表性探测源 IP</th>
+                                <th style="padding: 8px 12px;">主要命中服务</th>
+                                <th style="padding: 8px 12px; text-align: right;">快捷联动</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modal-map-country-tbody">
+                            <tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">正在加载威胁来源数据...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
