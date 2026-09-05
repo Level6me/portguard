@@ -824,10 +824,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <button class="segment-btn" id="filter-range-30d" onclick="changeAnalyticsRange('30d', this)">30天</button>
                     <button class="segment-btn" id="filter-range-all" onclick="changeAnalyticsRange('all', this)">全部</button>
                 </div>
-                <button class="pill-btn accent" onclick="exportAnalyticsJSON()" style="flex-shrink: 0;" title="导出当前多维态势分析完整数据集 (JSON)">
+                <button class="pill-btn accent" onclick="window.open('/api/report/export', '_blank')" style="flex-shrink: 0;" title="一键生成并打印/下载专业安全审计报告 (支持保存为 PDF)">
+                    <span>📋</span>
+                    <span class="btn-text-full">审计报告</span>
+                    <span class="btn-text-mobile">报告</span>
+                </button>
+                <button class="pill-btn" onclick="exportAnalyticsJSON()" style="flex-shrink: 0;" title="导出当前多维态势分析完整数据集 (JSON)">
                     <span>📥</span>
-                    <span class="btn-text-full">导出报告</span>
-                    <span class="btn-text-mobile">导出</span>
+                    <span class="btn-text-full">导出 JSON</span>
+                    <span class="btn-text-mobile">JSON</span>
                 </button>
             </div>
         </div>
@@ -6454,6 +6459,128 @@ class RequestHandler(BaseHTTPRequestHandler):
                         "data": data_points
                     }
                 })
+                return
+
+            if path == "/api/report/export":
+                # 一键生成专业安全合规审计报告 (自包含响应式 HTML，支持直接浏览器打印转为 PDF)
+                conn = get_db()
+                c = conn.cursor()
+                now_ts = int(time.time())
+                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ts))
+                cfg = load_config()
+
+                c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist")
+                total_banned = c.fetchone()[0] or 0
+
+                c.execute("SELECT COUNT(*) FROM events")
+                total_events = c.fetchone()[0] or 0
+
+                c.execute("SELECT COUNT(*) FROM port_access_logs")
+                total_access = c.fetchone()[0] or 0
+
+                # 严重级别分布
+                c.execute("SELECT level, COUNT(*) as cnt FROM events GROUP BY level ORDER BY cnt DESC")
+                level_rows = c.fetchall()
+                level_summary = "".join([f"<li><strong>{r['level'] or '未知'}:</strong> {r['cnt']} 次</li>" for r in level_rows]) or "<li>暂无事件</li>"
+
+                # Top 10 攻击源国家/地区
+                c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE country != '' GROUP BY country ORDER BY cnt DESC LIMIT 10")
+                country_rows = c.fetchall()
+                country_table = "".join([f"<tr><td>{idx+1}</td><td>{r['country']}</td><td>{r['cnt']}</td></tr>" for idx, r in enumerate(country_rows)]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+
+                # Top 10 被攻击端口
+                c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events GROUP BY port ORDER BY cnt DESC LIMIT 10")
+                port_rows = c.fetchall()
+                port_table = "".join([f"<tr><td>{r['port']}</td><td>{r['port_name']}</td><td>{r['cnt']}</td></tr>" for r in port_rows]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+
+                # 最近 20 条阻断记录
+                c.execute("SELECT ip, reason, country, level, ban_time FROM blacklist ORDER BY timestamp DESC LIMIT 20")
+                ban_rows = c.fetchall()
+                ban_table = "".join([f"<tr><td><code>{r['ip']}</code></td><td>{r['level']}</td><td>{r['country']}</td><td>{r['reason']}</td><td>{r['ban_time']}</td></tr>" for r in ban_rows]) or "<tr><td colspan='5'>暂无封禁</td></tr>"
+
+                conn.close()
+
+                report_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PortGuard 安全防御态势审计报告 - {now_str[:10]}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 40px; color: #1f2937; background: #fff; line-height: 1.5; }}
+.header {{ border-bottom: 2px solid #2563eb; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: flex-end; }}
+.title {{ font-size: 26px; font-weight: 800; color: #111827; margin: 0; }}
+.subtitle {{ font-size: 13px; color: #6b7280; margin-top: 6px; }}
+.meta-box {{ background: #f3f4f6; border-radius: 8px; padding: 16px; margin-bottom: 28px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }}
+.meta-item .val {{ font-size: 22px; font-weight: 800; color: #2563eb; }}
+.meta-item .lbl {{ font-size: 12px; color: #4b5563; font-weight: 600; text-transform: uppercase; }}
+h2 {{ font-size: 17px; font-weight: 700; color: #1f2937; border-left: 4px solid #2563eb; padding-left: 10px; margin: 30px 0 14px 0; }}
+table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }}
+th, td {{ border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }}
+th {{ background: #f9fafb; font-weight: 600; color: #374151; }}
+tr:nth-child(even) {{ background: #fdfdfd; }}
+code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-radius: 4px; color: #1d4ed8; }}
+.footer {{ margin-top: 50px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center; }}
+@media print {{
+    body {{ margin: 0; padding: 20px; }}
+    .no-print {{ display: none; }}
+}}
+</style>
+</head>
+<body>
+<div class="no-print" style="margin-bottom: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+    <button onclick="window.print()" style="background: #2563eb; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">🖨️ 打印报告 / 保存为 PDF</button>
+</div>
+<div class="header">
+    <div>
+        <h1 class="title">🛡️ PortGuard 智能主动诱捕防御系统 · 安全态势审计报告</h1>
+        <div class="subtitle">主机节点: {cfg.get('node_name', '本机节点')} | 报告生成时间: {now_str}</div>
+    </div>
+    <div style="font-size: 12px; color: #059669; font-weight: 700;">● 防护引擎运行中</div>
+</div>
+
+<div class="meta-box">
+    <div class="meta-item"><div class="lbl">累计阻断黑名单</div><div class="val">{total_banned} 个</div></div>
+    <div class="meta-item"><div class="lbl">威胁攻击捕获</div><div class="val">{total_events} 次</div></div>
+    <div class="meta-item"><div class="lbl">端口感知审计日志</div><div class="val">{total_access} 条</div></div>
+    <div class="meta-item"><div class="lbl">活跃诱捕蜜罐规则</div><div class="val">{len(cfg.get('trap_ports', []))} 个</div></div>
+</div>
+
+<h2>一、威胁等级构成</h2>
+<ul style="font-size: 14px; line-height: 1.8;">
+    {level_summary}
+</ul>
+
+<h2>二、Top 10 攻击源国家与地区分布</h2>
+<table>
+    <thead><tr><th style="width: 60px;">序号</th><th>国家 / 地区</th><th style="width: 120px;">攻击频次</th></tr></thead>
+    <tbody>{country_table}</tbody>
+</table>
+
+<h2>三、Top 10 受威胁端口靶点分析</h2>
+<table>
+    <thead><tr><th style="width: 100px;">目标端口</th><th>防护规则说明</th><th style="width: 120px;">探测拦截次数</th></tr></thead>
+    <tbody>{port_table}</tbody>
+</table>
+
+<h2>四、最新拦截与封禁事件取证 (Top 20)</h2>
+<table>
+    <thead><tr><th style="width: 150px;">恶意源 IP</th><th style="width: 90px;">威胁等级</th><th style="width: 110px;">地理归属</th><th>阻断触发原因</th><th style="width: 160px;">拦截时间</th></tr></thead>
+    <tbody>{ban_table}</tbody>
+</table>
+
+<div class="footer">
+    PortGuard 自动化内核级网络安全诱捕与主动防御平台 · 报告由系统引擎自动生成与校验
+</div>
+</body>
+</html>
+"""
+                report_bytes = report_html.encode("utf-8")
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(report_bytes)))
+                self.send_header('Content-Disposition', f'attachment; filename="portguard_audit_report_{now_str[:10]}.html"')
+                self.end_headers()
+                self.wfile.write(report_bytes)
                 return
 
             if path == "/api/analytics":

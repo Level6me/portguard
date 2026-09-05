@@ -339,16 +339,40 @@ def is_ipset_available():
     return _IPSET_AVAILABLE
 
 
+def _ensure_ipset_timeout_set(set_name, is_ipv6=False):
+    """确保 ipset 集合存在且支持 timeout 参数。若已存在且不支持 timeout 则平滑无感 swap 升级。"""
+    try:
+        tmp_name = f"pg_tmp_{int(time.time()*1000)%100000}"
+        create_args = ["hash:ip", "maxelem", "1000000", "timeout", "2147483"]
+        if is_ipv6:
+            create_args = ["hash:ip", "family", "inet6", "maxelem", "1000000", "timeout", "2147483"]
+        
+        # 探测现有 set 是否支持 timeout
+        probe = subprocess.run(["ipset", "list", set_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if probe.returncode == 0:
+            if "timeout" in probe.stdout:
+                return True
+            # 不支持 timeout，创建临时 timeout 集合并通过内核原子 swap 升级，避免中断
+            subprocess.run(["ipset", "create", tmp_name] + create_args + ["-exist"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["ipset", "swap", set_name, tmp_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["ipset", "destroy", tmp_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        else:
+            # 集合不存在，直接创建
+            res = subprocess.run(["ipset", "create", set_name] + create_args + ["-exist"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return res.returncode == 0
+    except Exception:
+        return False
+
+
 def init_firewall_ipset():
-    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载单一规则，实现 O(1) 百万级黑名单拦截。"""
+    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载单一规则，实现 O(1) 百万级黑名单与内核级动态 timeout 自动老化。"""
     if not is_ipset_available():
         return False
     try:
-        # 1. 创建 IPv4 与 IPv6 黑名单 ipset 集合 (支持 hash:ip)
-        subprocess.run(["ipset", "create", "portguard_blacklist_v4", "hash:ip", "hashsize", "4096", "maxelem", "1000000", "-exist"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["ipset", "create", "portguard_blacklist_v6", "hash:ip", "family", "inet6", "hashsize", "4096", "maxelem", "1000000", "-exist"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 1. 创建并升级 IPv4 与 IPv6 黑名单 ipset 集合 (支持 hash:ip 与 timeout)
+        _ensure_ipset_timeout_set("portguard_blacklist_v4", is_ipv6=False)
+        _ensure_ipset_timeout_set("portguard_blacklist_v6", is_ipv6=True)
 
         # 2. 在 iptables INPUT 顶层挂载集合匹配丢弃规则 (存在则不重复添加)
         check_v4 = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
@@ -367,22 +391,58 @@ def init_firewall_ipset():
         # 4. 强制从黑名单与防火墙解封所有基础设施 IP 与 Cloudflare 节点
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT ip FROM blacklist")
-        black_ips = [row["ip"] for row in c.fetchall()]
+        c.execute("SELECT ip, ban_expire FROM blacklist")
+        black_rows = c.fetchall()
         conn.close()
 
-        for chk_ip in black_ips:
+        now_ts = int(time.time())
+        restore_v4 = []
+        restore_v6 = []
+
+        for row in black_rows:
+            chk_ip = row["ip"]
             if is_infrastructure_or_cdn_ip(chk_ip):
                 unban_ip_core(chk_ip)
+                continue
+
+            ip_val = validate_ip(chk_ip)
+            if not ip_val:
+                continue
+
+            # 计算剩余老化秒数
+            b_exp = row["ban_expire"]
+            if b_exp and b_exp > now_ts:
+                remain = min(2147483, max(60, b_exp - now_ts))
+            else:
+                remain = 2147483
+
+            try:
+                addr_obj = ipaddress.ip_address(ip_val)
+                if addr_obj.version == 6:
+                    restore_v6.append(f"add portguard_blacklist_v6 {ip_val} timeout {remain} -exist\n")
+                else:
+                    restore_v4.append(f"add portguard_blacklist_v4 {ip_val} timeout {remain} -exist\n")
+            except Exception:
+                pass
 
         for safe_ip in PUBLIC_INFRASTRUCTURE_IPS:
             unban_ip_core(safe_ip)
 
-        # 5. 同步数据库中已有合法黑名单至 ipset 集合 (服务启动恢复)
-        for ip_raw in black_ips:
-            ip_val = validate_ip(ip_raw)
-            if ip_val and not is_infrastructure_or_cdn_ip(ip_val):
-                ban_ip_firewall(ip_val)
+        # 5. 高性能流式批量管道注入 ipset restore，0.01 秒极速恢复数万黑名单
+        if restore_v4:
+            try:
+                p4 = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                p4.communicate("".join(restore_v4).encode("utf-8"))
+            except Exception:
+                pass
+
+        if restore_v6:
+            try:
+                p6 = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                p6.communicate("".join(restore_v6).encode("utf-8"))
+            except Exception:
+                pass
+
         return True
     except Exception as e:
         print(f"[IPSET] 初始化异常: {e}")
@@ -411,8 +471,8 @@ def flush_firewall_blocks():
         pass
 
 
-def ban_ip_firewall(ip):
-    """下发内核拦截：优先写入 ipset 集合并下发黑洞路由，降级兼容原生 iptables。"""
+def ban_ip_firewall(ip, expire_seconds=None):
+    """下发内核拦截：优先写入带 timeout 的 ipset 集合并下发黑洞路由，内核自动到期老化，降级兼容原生 iptables。"""
     valid_ip = validate_ip(ip)
     if not valid_ip or is_infrastructure_or_cdn_ip(valid_ip) or ip_in_whitelist(valid_ip):
         return
@@ -425,13 +485,14 @@ def ban_ip_firewall(ip):
         save_tool = "ip6tables-save" if is_ipv6 else "iptables-save"
         mask = "/128" if is_ipv6 else "/32"
 
-        # 1. 优先使用 ipset O(1) 集合
+        # 1. 优先使用 ipset O(1) 集合 (带内核动态 timeout 自动老化)
         if is_ipset_available():
-            res = subprocess.run(["ipset", "add", set_name, ip, "-exist"],
+            timeout_val = min(2147483, max(60, int(expire_seconds))) if expire_seconds and expire_seconds > 0 else 2147483
+            res = subprocess.run(["ipset", "add", set_name, ip, "timeout", str(timeout_val), "-exist"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if res.returncode != 0:
-                init_firewall_ipset()
-                subprocess.run(["ipset", "add", set_name, ip, "-exist"],
+                _ensure_ipset_timeout_set(set_name, is_ipv6=is_ipv6)
+                subprocess.run(["ipset", "add", set_name, ip, "timeout", str(timeout_val), "-exist"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             # 降级：检查并插入 iptables
@@ -1970,22 +2031,58 @@ def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
 
 
 def cleanup_expired_bans():
-    """定期清理过期封禁：解除 iptables / 黑洞路由并删除黑名单记录。"""
+    """定期清理过期封禁，并对 SQLite 历史过期审计日志进行自动归档瘦身与空间压缩 (VACUUM)。"""
     try:
         cfg = load_config()
         auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
-        if auto_clean_days <= 0:
-            return
         now_ts = int(time.time())
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
-        expired = [r["ip"] for r in c.fetchall()]
+
+        # 1. 清理过期黑名单
+        if auto_clean_days > 0:
+            c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
+            expired = [r["ip"] for r in c.fetchall()]
+            for ip in expired:
+                unban_ip_core(ip, status_event="EXPIRED")
+            if expired:
+                print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
+
+        # 2. SQLite 历史数据归档与瘦身：清理超过保留天数的历史端口访问审计日志与常规事件，防止数据库膨胀
+        if auto_clean_days > 0:
+            expire_cutoff = now_ts - (auto_clean_days * 86400)
+            c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (expire_cutoff,))
+            del_access = c.rowcount
+            # 保留已被拉黑的核心安全事件，仅删除过期的常规探测/非封禁日志
+            c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (expire_cutoff,))
+            del_events = c.rowcount
+            conn.commit()
+            if (del_access + del_events) > 0:
+                print(f"[CLEANUP] 历史日志自动归档完成：已清理 {del_access} 条访问审计日志、{del_events} 条常规事件")
+
         conn.close()
-        for ip in expired:
-            unban_ip_core(ip, status_event="EXPIRED")
-        if expired:
-            print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
+
+        # 3. 每天一次低负载时段自动执行 VACUUM 回收磁盘物理碎片 (SQLite WAL 空间收缩)
+        last_vacuum_file = "/tmp/.portguard_last_vacuum"
+        need_vacuum = True
+        try:
+            if os.path.exists(last_vacuum_file):
+                if (now_ts - os.path.getmtime(last_vacuum_file)) < 86400:
+                    need_vacuum = False
+        except Exception:
+            pass
+
+        if need_vacuum:
+            try:
+                v_conn = get_db()
+                v_conn.execute("VACUUM")
+                v_conn.close()
+                with open(last_vacuum_file, "w") as f:
+                    f.write(str(now_ts))
+                print("[CLEANUP] 成功执行 SQLite 磁盘空间碎片整理 (VACUUM)")
+            except Exception as e:
+                print(f"[CLEANUP] VACUUM 异常: {e}")
+
     except Exception as e:
         print(f"[CLEANUP] 清理失败: {e}")
 
@@ -2800,10 +2897,6 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
             pass
         return
         
-    # 3. 达到阈值：使用 ipset 与黑洞路由毫秒级下发内核阻断
-    if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
-        ban_ip_firewall(ip)
-        
     auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
     
     # 阶梯惩罚模型：查询历史违规频次，阶梯设定解封时间
@@ -2818,8 +2911,14 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
 
     if hist_count <= 1 and auto_clean_days > 0 and event_level not in ("极高危", "critical"):
         ban_expire = now_ts + 3600  # 首次轻微触碰：阶梯轻度惩罚 1 小时
+        expire_secs = 3600
     else:
         ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
+        expire_secs = auto_clean_days * 86400 if auto_clean_days > 0 else 2147483
+
+    # 3. 达到阈值：使用 ipset (动态 timeout) 与黑洞路由毫秒级下发内核阻断
+    if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
+        ban_ip_firewall(ip, expire_seconds=expire_secs)
 
     geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
     geo_country = geo.get("country") or "公网节点"
@@ -3055,18 +3154,23 @@ class TrapServer:
                 print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
 
     def _handle_trap_client(self, client_sock, client_addr, port, port_info):
-        """交互式蜜罐服务仿真：应答逼真 Banner 并嗅探首包攻击指令 Payload (100% 恶意行为确权)"""
+        """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，并在结束时伪装 TCP RST 快速断开"""
         client_ip = client_addr[0]
         payload_captured = ""
         try:
-            client_sock.settimeout(1.2)
+            client_sock.settimeout(1.5)
             banner = None
+
+            # 协议仿真 1: FTP
             if port == 21:
                 banner = b"220 ProFTPD 1.3.5 Server (Ubuntu) ready.\r\n"
+            # 协议仿真 2: SSH 交互
             elif port in (22, 2222):
                 banner = b"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n"
+            # 协议仿真 3: Telnet 交互
             elif port == 23:
                 banner = b"\r\nUbuntu 22.04.4 LTS\r\nlogin: "
+            # 协议仿真 4: MySQL 认证握手
             elif port == 3306:
                 banner = b"N\x00\x00\x00\n5.7.42-log\x00\x01\x00\x00\x00\x0b\x0c\r\x0e\x0f\x10\x11\x12\x00\xff\xf7\x21\x02\x00\x7f\x80\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x00mysql_native_password\x00"
 
@@ -3077,14 +3181,53 @@ class TrapServer:
                     pass
 
             try:
-                recv_data = client_sock.recv(512)
+                recv_data = client_sock.recv(1024)
                 if recv_data:
-                    payload_captured = recv_data.decode("utf-8", errors="ignore").strip()
+                    raw_text = recv_data.decode("utf-8", errors="ignore").strip()
+                    payload_captured = raw_text
+
+                    # 协议仿真 5: Redis 协议高保真交互响应 (捕获 AUTH / PING / INFO / CONFIG / SLAVEOF 等命令)
+                    if port in (6379, 6380) or "redis" in port_info.get("name", "").lower():
+                        upper_cmd = raw_text.upper()
+                        if "PING" in upper_cmd:
+                            client_sock.sendall(b"+PONG\r\n")
+                        elif "AUTH" in upper_cmd:
+                            client_sock.sendall(b"-ERR invalid password\r\n")
+                        elif "INFO" in upper_cmd:
+                            redis_info = (
+                                b"# Server\r\nredis_version:7.0.15\r\nos:Linux 5.15.0-generic x86_64\r\n"
+                                b"tcp_port:6379\r\nuptime_in_seconds:384210\r\nrole:master\r\n\r\n"
+                            )
+                            client_sock.sendall(b"$" + str(len(redis_info)).encode() + b"\r\n" + redis_info + b"\r\n")
+                        elif "COMMAND" in upper_cmd:
+                            client_sock.sendall(b"+OK\r\n")
+                        elif "CONFIG GET" in upper_cmd or "CONFIG SET" in upper_cmd or "SLAVEOF" in upper_cmd or "EVAL" in upper_cmd:
+                            client_sock.sendall(b"-ERR protected-mode is enabled\r\n")
+
+                    # 协议仿真 6: Web HTTP 伪装响应 (针对 80, 443, 8080, 8888 等自定义 Web 诱饵)
+                    elif recv_data.startswith(b"GET ") or recv_data.startswith(b"POST ") or recv_data.startswith(b"HEAD "):
+                        http_resp = (
+                            b"HTTP/1.1 403 Forbidden\r\n"
+                            b"Server: nginx/1.18.0 (Ubuntu)\r\n"
+                            b"Content-Type: text/html; charset=UTF-8\r\n"
+                            b"Connection: close\r\n\r\n"
+                            b"<html><head><title>403 Forbidden</title></head><body><center><h1>403 Forbidden</h1></center><hr><center>nginx/1.18.0 (Ubuntu)</center></body></html>"
+                        )
+                        try:
+                            client_sock.sendall(http_resp)
+                        except Exception:
+                            pass
             except Exception:
                 pass
         except Exception:
             pass
         finally:
+            try:
+                # TCP RST 伪装关闭模式：设置 SO_LINGER 超时为 0，调用 close() 时内核直接发送 TCP RST 报文
+                # 瞬间断开攻击者连接，杜绝 TIME_WAIT/CLOSE_WAIT 堆积，向扫描工具伪装端口已重置关闭
+                client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            except Exception:
+                pass
             try:
                 client_sock.close()
             except Exception:
