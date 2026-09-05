@@ -724,6 +724,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .modal-overlay.active {
             display: flex !important;
         }
+        /* 子弹窗置于全屏态势地图之上，确保顺畅点击交互 */
+        #modal-ip-detail, #modal-attacker-timeline, #modal-ban {
+            z-index: 2200 !important;
+        }
         .modal-sheet {
             background: var(--modal-bg);
             border: 1px solid var(--border);
@@ -756,6 +760,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             overflow: hidden;
             border: 1px solid var(--border-subtle);
             flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
         }
         .threat-map-modal-aside {
             display: flex;
@@ -2378,64 +2385,122 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- 响应式主内容区: iPad/桌面端左右并排分栏，手机端垂直堆叠 -->
         <div class="threat-map-modal-content">
             <!-- 左侧 (小屏上方): 巨幕地图核心渲染区 -->
-            <div class="threat-map-modal-map-wrap">
-                <svg id="modal-threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
+            <div class="threat-map-modal-map-wrap" id="modal-map-wrap-box">
+                <!-- 浮动多功能手势与视角缩放控制工具栏 -->
+                <div style="position: absolute; left: 12px; top: 12px; z-index: 15; display: flex; flex-direction: column; gap: 6px;">
+                    <div style="display: flex; background: rgba(15, 23, 42, 0.82); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 2px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);">
+                        <button onclick="zoomThreatMap(1.35)" style="background:none; border:none; color:var(--text); font-size:14px; font-weight:700; width:28px; height:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:6px;" title="放大地图 (支持鼠标滚轮/双指捏合)">➕</button>
+                        <button onclick="zoomThreatMap(0.74)" style="background:none; border:none; color:var(--text); font-size:14px; font-weight:700; width:28px; height:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:6px;" title="缩小地图">➖</button>
+                        <button onclick="resetThreatMapView()" style="background:none; border:none; color:var(--text); font-size:12px; font-weight:700; width:30px; height:28px; cursor:pointer; display:flex; align-items:center; justify-content:center; border-radius:6px;" title="复位全球视角">🔄</button>
+                    </div>
+                    <div id="modal-map-zoom-tip" style="background: rgba(0,0,0,0.65); backdrop-filter: blur(8px); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 3px 8px; font-size: 10px; color: var(--text-sec); pointer-events: none;">
+                        🖱️ 滚轮/双指缩放 · 拖拽平移
+                    </div>
+                </div>
+
+                <svg id="modal-threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block; cursor: grab;" preserveAspectRatio="xMidYMid meet">
                     <defs>
+                        <!-- 靶点中心守护核心脉冲光晕 -->
                         <radialGradient id="modal-target-pulse-glow" cx="50%" cy="50%" r="50%">
-                            <stop offset="0%" stop-color="#007aff" stop-opacity="0.9"/>
-                            <stop offset="60%" stop-color="#5856d6" stop-opacity="0.4"/>
+                            <stop offset="0%" stop-color="#007aff" stop-opacity="0.95"/>
+                            <stop offset="50%" stop-color="#5856d6" stop-opacity="0.5"/>
                             <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
                         </radialGradient>
+                        <!-- 贝塞尔高亮攻击光束渐变 -->
                         <linearGradient id="modal-attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                            <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.95"/>
-                            <stop offset="70%" stop-color="#ff9500" stop-opacity="0.7"/>
-                            <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.3"/>
+                            <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.98"/>
+                            <stop offset="65%" stop-color="#ff9500" stop-opacity="0.8"/>
+                            <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.35"/>
                         </linearGradient>
+                        <!-- 雷达全息网格光波 -->
+                        <radialGradient id="modal-radar-sweep-glow" cx="770" cy="165" r="460" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stop-color="rgba(0, 122, 255, 0.16)"/>
+                            <stop offset="45%" stop-color="rgba(88, 86, 214, 0.06)"/>
+                            <stop offset="100%" stop-color="rgba(0, 0, 0, 0)"/>
+                        </radialGradient>
                     </defs>
-                    <!-- 经纬度网格线 -->
-                    <g stroke="rgba(255,255,255,0.05)" stroke-width="0.7" stroke-dasharray="3,3">
-                        <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
-                        <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
-                    </g>
-                    <!-- 精细化全球各大洲陆地底图 -->
-                    <g fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="0.8">
-                        <!-- 北美大陆 -->
-                        <path d="M 100,45 L 130,40 L 165,30 L 220,25 L 290,20 L 310,35 L 300,55 L 275,60 L 260,80 L 295,95 L 305,130 L 275,150 L 260,190 L 225,225 L 205,245 L 180,215 L 165,225 L 145,190 L 130,175 L 105,145 L 85,120 L 80,85 Z"/>
-                        <!-- 格陵兰 -->
-                        <path d="M 320,15 L 375,10 L 400,25 L 380,65 L 335,60 L 315,35 Z"/>
-                        <!-- 南美大陆 -->
-                        <path d="M 215,250 L 245,245 L 285,255 L 335,280 L 350,315 L 330,370 L 290,440 L 265,475 L 245,470 L 250,420 L 230,360 L 210,300 L 205,270 Z"/>
-                        <!-- 欧陆 -->
-                        <path d="M 455,60 L 490,45 L 530,45 L 555,65 L 545,85 L 575,100 L 550,135 L 525,145 L 505,135 L 485,155 L 450,155 L 435,135 L 440,105 L 420,95 L 430,75 Z"/>
-                        <!-- 不列颠群岛 -->
-                        <path d="M 430,80 L 445,75 L 440,95 L 425,100 Z"/>
-                        <!-- 非洲大陆 -->
-                        <path d="M 445,165 L 525,160 L 565,185 L 590,240 L 565,285 L 535,370 L 495,430 L 465,375 L 430,310 L 405,245 L 415,195 Z"/>
-                        <!-- 马达加斯加 -->
-                        <path d="M 575,340 L 590,345 L 580,390 L 565,380 Z"/>
-                        <!-- 亚欧大陆与中亚/东亚 -->
-                        <path d="M 565,60 L 635,50 L 715,40 L 795,45 L 870,65 L 905,95 L 885,135 L 845,150 L 815,180 L 830,225 L 800,255 L 755,270 L 730,250 L 710,215 L 675,235 L 635,225 L 605,185 L 585,155 L 565,120 Z"/>
-                        <!-- 日本列岛 -->
-                        <path d="M 865,130 L 880,140 L 870,180 L 855,165 Z"/>
-                        <!-- 东南亚/印尼群岛 -->
-                        <path d="M 740,285 L 790,280 L 840,295 L 835,315 L 775,310 Z"/>
-                        <!-- 澳洲大陆 -->
-                        <path d="M 780,335 L 860,330 L 890,375 L 875,430 L 815,435 L 770,395 Z"/>
-                        <!-- 新西兰 -->
-                        <path d="M 910,420 L 925,430 L 905,470 L 895,455 Z"/>
-                    </g>
-                    <!-- 动态威胁飞线与光晕层 (Modal) -->
-                    <g id="modal-svg-attack-trajectories"></g>
-                    <!-- 靶点中心守护核心 (x=770, y=165) -->
-                    <g transform="translate(770, 165)">
-                        <circle r="24" fill="url(#modal-target-pulse-glow)">
-                            <animate attributeName="r" values="14;30;14" dur="2.4s" repeatCount="indefinite"/>
-                            <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.4s" repeatCount="indefinite"/>
-                        </circle>
-                        <circle r="5.5" fill="#007aff" stroke="#ffffff" stroke-width="2"/>
-                        <text x="12" y="5" fill="#64d2ff" font-size="11" font-weight="800" font-family="sans-serif">🛡️ 本机防御节点</text>
+
+                    <!-- 全息雷达扩散光背景 -->
+                    <rect x="0" y="0" width="1000" height="500" fill="url(#modal-radar-sweep-glow)"/>
+
+                    <!-- 可缩放/平移的动态矢量图层 (ViewPort Group) -->
+                    <g id="modal-map-viewport" transform="matrix(1 0 0 1 0 0)">
+                        <!-- 经纬度全景雷达同心圆与网格参考线 -->
+                        <g stroke="rgba(255,255,255,0.04)" stroke-width="0.7" stroke-dasharray="3,3">
+                            <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
+                            <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
+                        </g>
+
+                        <!-- 本机靶心多重同心防御感知圈 -->
+                        <g stroke="rgba(0, 122, 255, 0.12)" fill="none" stroke-width="0.8" stroke-dasharray="4,4">
+                            <circle cx="770" cy="165" r="70"/>
+                            <circle cx="770" cy="165" r="160"/>
+                            <circle cx="770" cy="165" r="280"/>
+                            <circle cx="770" cy="165" r="420"/>
+                        </g>
+
+                        <!-- 高拟真精细化全球各大洲陆地板块与主要群岛底图 -->
+                        <g fill="rgba(255,255,255,0.085)" stroke="rgba(255,255,255,0.24)" stroke-width="0.85" stroke-linejoin="round">
+                            <!-- 北美大陆 (含阿拉斯加、加拿大、美国本土) -->
+                            <path d="M 60,65 L 85,50 L 115,48 L 140,40 L 175,32 L 210,25 L 245,22 L 285,20 L 310,32 L 305,52 L 275,58 L 255,75 L 285,90 L 300,120 L 280,145 L 265,180 L 235,215 L 215,235 L 195,248 L 180,215 L 165,225 L 145,190 L 132,175 L 115,155 L 90,125 L 75,95 Z"/>
+                            <!-- 格陵兰岛 -->
+                            <path d="M 315,16 L 365,10 L 398,22 L 382,62 L 340,58 L 320,38 Z"/>
+                            <!-- 中美洲地峡与加勒比群岛 -->
+                            <path d="M 195,248 L 220,260 L 235,268 L 225,275 L 210,265 Z"/>
+                            <circle cx="260" cy="225" r="3.5" fill="rgba(255,255,255,0.2)"/>
+                            <circle cx="275" cy="235" r="2.8" fill="rgba(255,255,255,0.2)"/>
+                            <!-- 南美大陆 (巴西、阿根廷、智利、哥伦比亚) -->
+                            <path d="M 215,270 L 240,260 L 275,260 L 320,280 L 348,310 L 342,345 L 325,385 L 295,435 L 270,475 L 250,470 L 252,430 L 235,370 L 215,315 L 205,285 Z"/>
+                            <!-- 欧陆 (西欧、中欧、北欧斯堪的纳维亚) -->
+                            <path d="M 455,58 L 485,42 L 515,42 L 545,62 L 538,82 L 565,95 L 545,130 L 522,142 L 502,132 L 485,152 L 452,152 L 438,135 L 442,105 L 422,95 L 432,72 Z"/>
+                            <!-- 不列颠群岛与爱尔兰 -->
+                            <path d="M 430,78 L 445,74 L 442,94 L 426,98 Z"/>
+                            <path d="M 416,84 L 424,82 L 422,94 L 415,92 Z"/>
+                            <!-- 地中海主要岛屿与亚平宁半岛 -->
+                            <path d="M 488,145 L 498,155 L 508,172 L 500,175 L 492,160 Z"/>
+                            <!-- 非洲大陆 (北非、撒哈拉、东非、西非、南非) -->
+                            <path d="M 445,165 L 520,160 L 555,182 L 585,235 L 562,285 L 535,365 L 498,425 L 468,375 L 435,310 L 405,245 L 415,195 Z"/>
+                            <!-- 马达加斯加岛 -->
+                            <path d="M 572,338 L 588,342 L 578,388 L 564,378 Z"/>
+                            <!-- 亚欧大陆核心板块 (中国、俄罗斯、中亚、南亚次大陆、东亚) -->
+                            <path d="M 565,58 L 635,48 L 715,38 L 795,42 L 870,62 L 910,92 L 890,132 L 850,148 L 818,178 L 832,222 L 802,252 L 758,268 L 732,248 L 712,212 L 678,232 L 638,222 L 608,182 L 588,152 L 568,118 Z"/>
+                            <!-- 印度半岛 -->
+                            <path d="M 648,222 L 675,225 L 665,275 L 642,255 Z"/>
+                            <!-- 日本列岛 (本州、北海道、九州、四国) -->
+                            <path d="M 865,128 L 882,138 L 872,178 L 856,165 Z"/>
+                            <path d="M 872,118 L 888,124 L 882,135 L 868,128 Z"/>
+                            <!-- 中国台湾岛与海南岛 -->
+                            <path d="M 764,208 L 768,214 L 763,222 L 759,215 Z"/>
+                            <circle cx="738" cy="225" r="2.8" fill="rgba(255,255,255,0.25)"/>
+                            <!-- 东南亚半岛与马来群岛、印度尼西亚、菲律宾 -->
+                            <path d="M 725,230 L 738,255 L 728,275 L 720,265 Z"/>
+                            <path d="M 738,285 L 788,280 L 838,295 L 832,315 L 772,310 Z"/>
+                            <path d="M 782,238 L 792,245 L 786,265 L 778,255 Z"/>
+                            <!-- 澳大利亚大陆 -->
+                            <path d="M 778,332 L 858,328 L 888,372 L 872,428 L 812,432 L 768,392 Z"/>
+                            <!-- 新西兰南北岛 -->
+                            <path d="M 908,418 L 922,428 L 902,468 L 892,452 Z"/>
+                        </g>
+
+                        <!-- 动态威胁飞线与光晕层 (Modal) -->
+                        <g id="modal-svg-attack-trajectories"></g>
+
+                        <!-- 靶点中心守护核心 (x=770, y=165) -->
+                        <g transform="translate(770, 165)" id="modal-target-node">
+                            <circle r="26" fill="url(#modal-target-pulse-glow)">
+                                <animate attributeName="r" values="16;32;16" dur="2.4s" repeatCount="indefinite"/>
+                                <animate attributeName="opacity" values="0.95;0.15;0.95" dur="2.4s" repeatCount="indefinite"/>
+                            </circle>
+                            <circle r="5.5" fill="#007aff" stroke="#ffffff" stroke-width="2"/>
+                            <!-- 拟真雷达扫描针 -->
+                            <line x1="0" y1="0" x2="48" y2="-18" stroke="#64d2ff" stroke-width="1.2" opacity="0.65">
+                                <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="4s" repeatCount="indefinite"/>
+                            </line>
+                            <text x="14" y="5" fill="#64d2ff" font-size="11" font-weight="800" font-family="sans-serif" style="text-shadow: 0 2px 6px rgba(0,0,0,0.9);">🛡️ 本机防御节点</text>
+                        </g>
                     </g>
                 </svg>
+
                 <!-- 弹窗悬浮气泡 -->
                 <div id="modal-map-tooltip" style="position: absolute; display: none; background: rgba(15,18,26,0.95); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); pointer-events: none; z-index: 20; box-shadow: 0 12px 32px rgba(0,0,0,0.5);"></div>
             </div>
@@ -7179,6 +7244,177 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         svgContainer.innerHTML = svgHtml;
     }
 
+    // 全局日志关键词智能跳转 (支持按国家/地区、城市或 IP 精准联动过滤)
+    function jumpToSearchLogs(query) {
+        if (!query) return;
+        closeModals();
+        switchTab('logs');
+        const input = document.getElementById('search-input');
+        if (input) {
+            input.value = query;
+            currentCategory = 'all';
+            document.querySelectorAll('.segment-btn').forEach(b => b.classList.remove('active'));
+            const segAll = document.getElementById('seg-all');
+            if (segAll) segAll.classList.add('active');
+            logsPage = 1;
+            renderLogsTable();
+        }
+        showToast(`已为您筛选日志: ${query}`, '📜');
+    }
+
+    // ================== 地图多指手势、滚轮缩放与平移状态机 ==================
+    let threatMapScale = 1;
+    let threatMapTx = 0;
+    let threatMapTy = 0;
+    let isThreatMapDragging = false;
+    let threatMapDragStartX = 0;
+    let threatMapDragStartY = 0;
+    let threatMapInitTouchDist = 0;
+    let threatMapInitScale = 1;
+
+    function applyThreatMapTransform(smooth = true) {
+        const vp = document.getElementById('modal-map-viewport');
+        const svg = document.getElementById('modal-threat-world-map-svg');
+        if (!vp) return;
+        // 限制缩放区间 [0.9x ~ 6.0x]
+        threatMapScale = Math.max(0.9, Math.min(6.0, threatMapScale));
+        // 限制平移范围
+        const maxTx = (threatMapScale - 1) * 500 + 150;
+        const maxTy = (threatMapScale - 1) * 250 + 100;
+        threatMapTx = Math.max(-maxTx, Math.min(maxTx, threatMapTx));
+        threatMapTy = Math.max(-maxTy, Math.min(maxTy, threatMapTy));
+
+        vp.style.transition = smooth ? 'transform 0.35s cubic-bezier(0.25, 1, 0.5, 1)' : 'none';
+        vp.setAttribute('transform', `matrix(${threatMapScale} 0 0 ${threatMapScale} ${threatMapTx} ${threatMapTy})`);
+        if (svg) svg.style.cursor = threatMapScale > 1.05 ? 'grab' : 'default';
+
+        const tip = document.getElementById('modal-map-zoom-tip');
+        if (tip) {
+            tip.innerText = `🔍 缩放: ${(threatMapScale * 100).toFixed(0)}% · 拖拽平移`;
+        }
+    }
+
+    function zoomThreatMap(factor) {
+        const prevScale = threatMapScale;
+        threatMapScale *= factor;
+        threatMapScale = Math.max(0.9, Math.min(6.0, threatMapScale));
+        // 围绕视口中心 (500, 250) 进行等比缩放
+        threatMapTx = 500 - (500 - threatMapTx) * (threatMapScale / prevScale);
+        threatMapTy = 250 - (250 - threatMapTy) * (threatMapScale / prevScale);
+        applyThreatMapTransform(true);
+    }
+
+    function resetThreatMapView() {
+        threatMapScale = 1;
+        threatMapTx = 0;
+        threatMapTy = 0;
+        applyThreatMapTransform(true);
+    }
+
+    // 自动聚焦并平滑缩放至指定目标 (源国家与本机防御节点) 构成的热区
+    function zoomToThreatRegion(sourceX, sourceY) {
+        const targetX = 770;
+        const targetY = 165;
+        // 计算两点中点
+        const midX = (sourceX + targetX) / 2;
+        const midY = (sourceY + targetY) / 2;
+        // 根据两点跨度计算合适缩放倍率
+        const spanX = Math.abs(sourceX - targetX);
+        const spanY = Math.abs(sourceY - targetY);
+        let fitScale = 2.2;
+        if (spanX > 550 || spanY > 260) {
+            fitScale = 1.45;
+        } else if (spanX > 350 || spanY > 180) {
+            fitScale = 1.85;
+        } else if (spanX < 150 && spanY < 100) {
+            fitScale = 2.8;
+        }
+
+        threatMapScale = fitScale;
+        threatMapTx = 500 - midX * threatMapScale;
+        threatMapTy = 250 - midY * threatMapScale;
+        applyThreatMapTransform(true);
+    }
+
+    // 初始化地图鼠标拖拽、滚轮与双指捏合事件
+    function initThreatMapInteractiveGestures() {
+        const wrap = document.getElementById('modal-map-wrap-box');
+        if (!wrap || wrap._gesturesBound) return;
+        wrap._gesturesBound = true;
+
+        // 1. 鼠标滚轮缩放
+        wrap.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.15 : 0.87;
+            zoomThreatMap(factor);
+        }, { passive: false });
+
+        // 2. 鼠标拖拽平移
+        wrap.addEventListener('mousedown', (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            isThreatMapDragging = true;
+            threatMapDragStartX = e.clientX - threatMapTx;
+            threatMapDragStartY = e.clientY - threatMapTy;
+            const svg = document.getElementById('modal-threat-world-map-svg');
+            if (svg) svg.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isThreatMapDragging) return;
+            threatMapTx = e.clientX - threatMapDragStartX;
+            threatMapTy = e.clientY - threatMapDragStartY;
+            applyThreatMapTransform(false);
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isThreatMapDragging) {
+                isThreatMapDragging = false;
+                const svg = document.getElementById('modal-threat-world-map-svg');
+                if (svg) svg.style.cursor = threatMapScale > 1.05 ? 'grab' : 'default';
+            }
+        });
+
+        // 3. 移动端 / iPad 双指捏合缩放 (Pinch-to-zoom) 与单指拖拽平移
+        wrap.addEventListener('touchstart', (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            if (e.touches.length === 1) {
+                isThreatMapDragging = true;
+                threatMapDragStartX = e.touches[0].clientX - threatMapTx;
+                threatMapDragStartY = e.touches[0].clientY - threatMapTy;
+            } else if (e.touches.length === 2) {
+                isThreatMapDragging = false;
+                threatMapInitTouchDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                threatMapInitScale = threatMapScale;
+            }
+        }, { passive: false });
+
+        wrap.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 1 && isThreatMapDragging) {
+                e.preventDefault();
+                threatMapTx = e.touches[0].clientX - threatMapDragStartX;
+                threatMapTy = e.touches[0].clientY - threatMapDragStartY;
+                applyThreatMapTransform(false);
+            } else if (e.touches.length === 2 && threatMapInitTouchDist > 0) {
+                e.preventDefault();
+                const dist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const factor = dist / threatMapInitTouchDist;
+                threatMapScale = Math.max(0.9, Math.min(6.0, threatMapInitScale * factor));
+                applyThreatMapTransform(false);
+            }
+        }, { passive: false });
+
+        wrap.addEventListener('touchend', (e) => {
+            if (e.touches.length < 2) threatMapInitTouchDist = 0;
+            if (e.touches.length === 0) isThreatMapDragging = false;
+        });
+    }
+
     // 切换聚合细分维度：国家、省市、独立 IP
     function setThreatMapGranularity(gran) {
         currentThreatMapGranularity = gran;
@@ -7202,6 +7438,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         currentThreatMapCountryFilter = null;
         const filterInd = document.getElementById('modal-map-filter-indicator');
         if (filterInd) filterInd.style.display = 'none';
+        resetThreatMapView();
         renderThreatMapModalCore();
     }
 
@@ -7210,6 +7447,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const modal = document.getElementById('modal-map-detail');
         if (!modal) return;
         modal.style.display = 'flex';
+        initThreatMapInteractiveGestures();
+
         if (initialCountryFilter) {
             currentThreatMapCountryFilter = initialCountryFilter;
             currentThreatMapGranularity = 'city'; // 聚焦国家时自动展开至城市细分
@@ -7220,6 +7459,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     btn.style.color = (g === 'city') ? '#fff' : 'var(--text-sec)';
                 }
             });
+            const cCoord = findCountryCoordinate(initialCountryFilter);
+            zoomToThreatRegion(cCoord.x, cCoord.y);
+        } else {
+            resetThreatMapView();
         }
         renderThreatMapModalCore();
     }
@@ -7376,8 +7619,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
                 `;
                 actionBtnHtml = `
-                    <button class="pill-btn accent" onclick="focusCountryInThreatMap('${escapeHtml(entry.country)}')" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="细分下钻到该国的城市分布">🏙️ 下钻城市</button>
-                    <button class="pill-btn" onclick="closeModals(); filterLogs('${escapeHtml(entry.country)}');" style="padding: 3px 6px; font-size: 11px;" title="查看该国所有日志">📜 日志</button>
+                    <button class="pill-btn accent" onclick="focusCountryInThreatMap('${escapeHtml(entry.country)}')" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="细分下钻到该国的城市分布并自动放大聚焦">🏙️ 下钻城市</button>
+                    <button class="pill-btn" onclick="jumpToSearchLogs('${escapeHtml(entry.country)}')" style="padding: 3px 6px; font-size: 11px;" title="查看该国所有相关日志">📜 日志</button>
                 `;
             } else if (currentThreatMapGranularity === 'city') {
                 entityColHtml = `
@@ -7392,12 +7635,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
                 `;
                 actionBtnHtml = `
-                    <button class="pill-btn accent" onclick="closeModals(); filterLogs('${escapeHtml(entry.label)}');" style="padding: 3px 8px; font-size: 11px;">🔍 查看日志</button>
+                    <button class="pill-btn accent" onclick="jumpToSearchLogs('${escapeHtml(entry.label)}')" style="padding: 3px 8px; font-size: 11px;" title="查看此城市/省份相关日志">🔍 查看日志</button>
                 `;
             } else { // 'ip'
                 entityColHtml = `
                     <div style="font-family: monospace; font-size: 12px; font-weight: 700; color: var(--text);">
-                        <span class="ip-text" onclick="showIPDetail('${escapeHtml(entry.sample_ip)}')">${escapeHtml(entry.sample_ip)}</span>
+                        <span class="ip-text" onclick="showIPDetail('${escapeHtml(entry.sample_ip)}')" style="cursor: pointer; text-decoration: underline; color: var(--accent);" title="点击查看 IP 详情与全景画像">${escapeHtml(entry.sample_ip)}</span>
                     </div>
                     <div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(entry.subText || entry.country)}</div>
                 `;
@@ -7406,6 +7649,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
                 `;
                 actionBtnHtml = `
+                    <button class="pill-btn" onclick="showIPDetail('${escapeHtml(entry.sample_ip)}')" style="padding: 3px 7px; font-size: 11px; margin-right: 4px;" title="查看画像与归属情报">🔍 详情</button>
                     <button class="pill-btn danger" onclick="showBanModal('${escapeHtml(entry.sample_ip)}')" style="padding: 3px 8px; font-size: 11px;">🚫 封禁</button>
                 `;
             }
@@ -7430,7 +7674,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = tableHtml;
     }
 
-    // 点击国家一键聚焦并下钻到城市
+    // 点击国家一键聚焦并下钻到城市 (自动放大聚焦攻击国家与防御靶点)
     function focusCountryInThreatMap(cName) {
         currentThreatMapCountryFilter = cName;
         currentThreatMapGranularity = 'city';
@@ -7441,7 +7685,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 btn.style.color = (g === 'city') ? '#fff' : 'var(--text-sec)';
             }
         });
-        showToast(`已聚焦并展开 [${cName}] 城市分布`, '🏙️');
+        // 自动计算源国家坐标并平滑聚焦放大
+        const coord = findCountryCoordinate(cName);
+        zoomToThreatRegion(coord.x, coord.y);
+        showToast(`已聚焦并自动放大至 [${cName}] 城市分布`, '🏙️');
         renderThreatMapModalCore();
     }
 
@@ -7483,14 +7730,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // 全局禁止手势双指缩放、多指触控拖动及双击放大
-    document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
-    document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
-    document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+    // 全局禁止多指手势缩放与意外双击放大（地图容器已通过 touch-action: none 与专用手势捕获）
+    document.addEventListener('gesturestart', function(e) {
+        if (!e.target.closest('#modal-map-wrap-box')) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('gesturechange', function(e) {
+        if (!e.target.closest('#modal-map-wrap-box')) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('gestureend', function(e) {
+        if (!e.target.closest('#modal-map-wrap-box')) e.preventDefault();
+    }, { passive: false });
 
     document.addEventListener('touchmove', function(e) {
         if (e.touches && e.touches.length > 1) {
-            e.preventDefault();
+            if (!e.target.closest('#modal-map-wrap-box')) {
+                e.preventDefault();
+            }
         }
     }, { passive: false });
 
@@ -7498,7 +7753,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     document.addEventListener('touchend', function(e) {
         const now = Date.now();
         if (now - _lastTouchEnd <= 300) {
-            e.preventDefault();
+            if (!e.target.closest('#modal-map-wrap-box')) {
+                e.preventDefault();
+            }
         }
         _lastTouchEnd = now;
     }, { passive: false });
