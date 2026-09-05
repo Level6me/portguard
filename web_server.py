@@ -3238,10 +3238,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (cleanIsp && !cleanCountry.includes(cleanIsp)) geoSubParts.push(cleanIsp);
             const geoSub = geoSubParts.length > 0 ? `🌐 ${geoSubParts.join(' · ')}` : '🌐 公网节点';
 
+            const portsList = (att.ports || '--').split(',').map(p => p.trim()).filter(Boolean);
+            const portsBadge = portsList.slice(0, 6).map(p => `<span class="tag neutral" style="font-size: 11px; padding: 1px 5px; margin: 1px;">${escapeHtml(p)}</span>`).join('') + (portsList.length > 6 ? `<span style="font-size: 10px; color: var(--text-sec);"> +${portsList.length - 6}</span>` : '');
+
             html += `
                 <tr>
                     <td>
-                        <div style="font-weight: 700; font-family: monospace; color: var(--text);">${escapeHtml(att.ip)}</div>
+                        <div style="font-weight: 700; font-family: monospace; color: var(--text);">
+                            <span class="ip-text" onclick="showIPDetail('${escapeHtml(att.ip)}')" style="cursor: pointer; text-decoration: underline; color: var(--accent);" title="点击查看 IP 详情与全景画像">${escapeHtml(att.ip)}</span>
+                        </div>
                         <div class="geo-subline" title="${escapeHtml(geoSub)}">${escapeHtml(geoSub)}</div>
                     </td>
                     <td>
