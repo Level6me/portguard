@@ -20,6 +20,7 @@ import time
 import urllib.request
 import queue
 import hmac
+import shutil
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
@@ -268,6 +269,12 @@ _SURVEY_CIDR_NETWORKS = [
     ipaddress.ip_network("104.236.198.48/32", strict=False),   # Shodan
     ipaddress.ip_network("185.180.143.0/24", strict=False),    # LeakIX
     ipaddress.ip_network("185.220.101.0/24", strict=False),    # Tor Exit
+    ipaddress.ip_network("185.220.100.0/24", strict=False),    # Tor Exit
+    ipaddress.ip_network("185.220.102.0/24", strict=False),    # Tor Exit
+    ipaddress.ip_network("185.220.103.0/24", strict=False),    # Tor Exit
+    ipaddress.ip_network("171.25.193.0/24", strict=False),     # Tor Exit
+    ipaddress.ip_network("199.249.230.0/24", strict=False),    # Tor Exit
+    ipaddress.ip_network("23.129.64.0/24", strict=False),      # Tor Exit
 ]
 
 def is_survey_scanner_ip(ip_str, geo_dict=None):
@@ -299,6 +306,48 @@ def is_idc_hosting_ip(ip_str, geo_dict=None):
         if kw in isp_text:
             return True
     return False
+
+def get_ip_threat_tags(ip_str, geo_dict=None):
+    """威胁情报标签与信誉综合研判：返回 IP 的多维信誉指纹标签列表（如 Tor匿名节点、空间测绘、云机房IDC等）"""
+    tags = []
+    if not ip_str or ip_str in ("127.0.0.1", "::1", "localhost") or ip_str.startswith("127."):
+        return tags
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+        # 1. 检查 Tor 出口节点
+        for net in _SURVEY_CIDR_NETWORKS:
+            if "Tor Exit" in str(net) and ip_obj in net:
+                tags.append("🧅 Tor 匿名网络")
+                break
+        if not tags:
+            # 兼容 CIDR 检查 Tor
+            if ip_str.startswith("185.220.10") or ip_str.startswith("171.25.193."):
+                tags.append("🧅 Tor 匿名网络")
+    except Exception:
+        pass
+
+    geo = geo_dict or _GEO_CACHE.get(ip_str) or {}
+    isp_text = (str(geo.get("isp", "")) + " " + str(geo.get("region", "")) + " " + str(geo.get("country", ""))).lower()
+
+    # 2. 检查空间测绘指纹
+    if is_survey_scanner_ip(ip_str, geo):
+        for kw in SURVEY_ENGINE_KEYWORDS:
+            if kw in isp_text or kw in ip_str:
+                tags.append(f"📡 测绘引擎 ({kw.title()})")
+                break
+        if not any("测绘" in t for t in tags):
+            tags.append("📡 空间测绘爬虫")
+
+    # 3. 检查 IDC / Hosting 机房特征
+    if is_idc_hosting_ip(ip_str, geo):
+        for kw in IDC_HOSTING_KEYWORDS[:12]:
+            if kw in isp_text:
+                tags.append(f"☁️ 云机房 ({kw.title()})")
+                break
+        if not any("云机房" in t for t in tags):
+            tags.append("☁️ 数据中心/IDC")
+
+    return tags
 
 DEFAULT_CONFIG["http_traps"] = DEFAULT_HTTP_TRAPS
 PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
@@ -2092,16 +2141,122 @@ def cleanup_loop():
         time.sleep(3600)
         cleanup_expired_bans()
 
+CONFIG_SNAPSHOTS_DIR = os.path.join(os.path.dirname(CONFIG_PATH), "snapshots")
+
 def save_config(cfg):
     try:
+        dir_name = os.path.dirname(CONFIG_PATH)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name, exist_ok=True)
+            
+        # 自动配置版本快照备份：若原配置已存在，备份到 snapshots/
+        if os.path.exists(CONFIG_PATH):
+            try:
+                if not os.path.exists(CONFIG_SNAPSHOTS_DIR):
+                    os.makedirs(CONFIG_SNAPSHOTS_DIR, exist_ok=True)
+                snap_time = time.strftime("%Y%m%d_%H%M%S")
+                snap_path = os.path.join(CONFIG_SNAPSHOTS_DIR, f"config_{snap_time}.json")
+                shutil.copy2(CONFIG_PATH, snap_path)
+                
+                # 仅保留最近 15 份快照
+                snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime)
+                if len(snaps) > 15:
+                    for old_snap in snaps[:-15]:
+                        try:
+                            os.remove(old_snap)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
         return True
     except Exception:
         return False
 
-_DYNAMIC_SSH_IPS_CACHE = set()
-_DYNAMIC_SSH_IPS_LAST_CHECK = 0
+def get_config_snapshots():
+    """获取所有历史配置版本快照列表"""
+    results = []
+    try:
+        if not os.path.exists(CONFIG_SNAPSHOTS_DIR):
+            return results
+        snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime, reverse=True)
+        for s in snaps:
+            fname = os.path.basename(s)
+            results.append({
+                "filename": fname,
+                "timestamp": int(os.path.getmtime(s)),
+                "datetime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(s))),
+                "size": os.path.getsize(s)
+            })
+    except Exception:
+        pass
+    return results
+
+def rollback_config_snapshot(filename):
+    """一键回滚恢复指定的历史配置版本快照"""
+    try:
+        clean_fn = os.path.basename(filename)
+        target = os.path.join(CONFIG_SNAPSHOTS_DIR, clean_fn)
+        if not os.path.exists(target):
+            return False, "指定的快照文件不存在"
+        with open(target, 'r', encoding='utf-8') as f:
+            snap_cfg = json.load(f)
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(snap_cfg, f, indent=2, ensure_ascii=False)
+        return True, "配置已成功从快照回滚还原！"
+    except Exception as e:
+        return False, f"回滚失败: {e}"
+
+def check_c2_compromise_connections():
+    """反向连线检测 (Compromise Assessment)：定时审计本机向外发起的所有出站连接，检测是否存在内网主机失陷或木马反弹连接 C2 威胁"""
+    alerts = []
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT ip, reason FROM blacklist")
+        black_dict = {row["ip"]: row["reason"] for row in c.fetchall()}
+        conn.close()
+
+        if not black_dict:
+            return alerts
+
+        # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的出站 ESTABLISHED 连接 (状态 01)
+        for proc_file, is_v6 in [("/proc/net/tcp", False), ("/proc/net/tcp6", True)]:
+            if not os.path.exists(proc_file):
+                continue
+            with open(proc_file, "r") as f:
+                lines = f.readlines()[1:]
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) < 4:
+                    continue
+                state = parts[3]
+                if state != "01": # 仅检查处于已建立连线状态的 TCP 活跃连接
+                    continue
+                rem_address = parts[2]
+                try:
+                    if not is_v6:
+                        ip_hex, port_hex = rem_address.split(":")
+                        remote_ip = socket.inet_ntoa(struct.pack("<L", int(ip_hex, 16)))
+                        remote_port = int(port_hex, 16)
+                    else:
+                        continue # 重点监控 IPv4 外连
+                    
+                    if remote_ip in black_dict:
+                        alerts.append({
+                            "remote_ip": remote_ip,
+                            "remote_port": remote_port,
+                            "reason": black_dict[remote_ip],
+                            "time": time.strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        print(f"[SECURITY ALERT] 发现可疑内网外联或失陷信标！本机正在与恶意 C2 节点通信: {remote_ip}:{remote_port}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return alerts
 
 def get_system_ssh_ports():
     """动态获取系统中 SSH 服务监听的所有端口 (包括 22 以及 sshd_config 中自定义的高位端口)"""
@@ -3153,12 +3308,53 @@ class TrapServer:
             if bound_count_for_item > 0:
                 print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
 
+        # 移动目标防御 (MTD) 动态高位蜜罐诱饵：若配置启用，随机在未开放高位端口激活 3 个浮动蜜罐靶点
+        if bool(cfg.get("dynamic_honeypot_ports", True)) and total_bound < MAX_TOTAL_TRAP_SOCKETS:
+            try:
+                import random
+                seed_ports = [random.randint(20000, 60000) for _ in range(8)]
+                dynamic_count = 0
+                for dp in seed_ports:
+                    if dp in active_ports or dp in self.trap_map or dp == web_port or dp == cluster_port:
+                        continue
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        s.bind(("0.0.0.0", dp))
+                        s.listen(32)
+                        s.setblocking(False)
+                        fd = s.fileno()
+                        if self.epoll:
+                            self.epoll.register(fd, select.EPOLLIN)
+                        self.sockets[fd] = (s, dp)
+                        self.trap_map[dp] = {
+                            "port": dp,
+                            "name": f"动态随机诱饵 (MTD-{dp})",
+                            "category": "honeypot",
+                            "level": "极高危",
+                            "enabled": True
+                        }
+                        total_bound += 1
+                        dynamic_count += 1
+                        if dynamic_count >= 3:
+                            break
+                    except Exception:
+                        pass
+                if dynamic_count > 0:
+                    print(f"[Trap] 移动目标防御 MTD 成功随机激活 {dynamic_count} 个动态浮动诱捕靶点")
+            except Exception:
+                pass
+
     def _handle_trap_client(self, client_sock, client_addr, port, port_info):
-        """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，并在结束时伪装 TCP RST 快速断开"""
+        """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，提取恶意样本 URL，并在结束时伪装 TCP RST 或实施 Tarpit 粘滞减速"""
         client_ip = client_addr[0]
         payload_captured = ""
+        sample_urls_found = []
+        cfg = load_config()
+        use_tarpit = bool(cfg.get("enable_tarpit_delay", False))
+        
         try:
-            client_sock.settimeout(1.5)
+            client_sock.settimeout(2.0)
             banner = None
 
             # 协议仿真 1: FTP
@@ -3173,6 +3369,17 @@ class TrapServer:
             # 协议仿真 4: MySQL 认证握手
             elif port == 3306:
                 banner = b"N\x00\x00\x00\n5.7.42-log\x00\x01\x00\x00\x00\x0b\x0c\r\x0e\x0f\x10\x11\x12\x00\xff\xf7\x21\x02\x00\x7f\x80\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x00mysql_native_password\x00"
+            # 协议仿真 5: PostgreSQL 认证请求协商响应
+            elif port == 5432:
+                # 若客户端发送 SSLRequest 或 StartupMessage，先响应 AuthenticationCleartextPassword
+                banner = b"R\x00\x00\x00\x08\x00\x00\x00\x03"
+            # 协议仿真 6: RDP 3389 / VNC 5900 虚拟桌面特征协商
+            elif port == 3389:
+                # 标准 TPKT + X.224 Connection Confirm 握手
+                banner = b"\x03\x00\x00\x0b\x06\xd0\x00\x00\x124\x00"
+            elif port == 5900:
+                # RFB 003.008 协议版本应答
+                banner = b"RFB 003.008\n"
 
             if banner:
                 try:
@@ -3186,7 +3393,14 @@ class TrapServer:
                     raw_text = recv_data.decode("utf-8", errors="ignore").strip()
                     payload_captured = raw_text
 
-                    # 协议仿真 5: Redis 协议高保真交互响应 (捕获 AUTH / PING / INFO / CONFIG / SLAVEOF 等命令)
+                    # 自动提取常见恶意木马投放下发 Payload (curl http://, wget, base64 样本 URL)
+                    url_matches = re.findall(r'(?:https?|ftp)://[^\s"\'<>`$()]+', raw_text)
+                    for u in url_matches:
+                        clean_u = u.strip().rstrip(';')
+                        if clean_u and clean_u not in sample_urls_found:
+                            sample_urls_found.append(clean_u[:100])
+
+                    # 协议仿真 7: Redis 协议高保真交互响应 (捕获 AUTH / PING / INFO / CONFIG / SLAVEOF 等命令)
                     if port in (6379, 6380) or "redis" in port_info.get("name", "").lower():
                         upper_cmd = raw_text.upper()
                         if "PING" in upper_cmd:
@@ -3204,7 +3418,17 @@ class TrapServer:
                         elif "CONFIG GET" in upper_cmd or "CONFIG SET" in upper_cmd or "SLAVEOF" in upper_cmd or "EVAL" in upper_cmd:
                             client_sock.sendall(b"-ERR protected-mode is enabled\r\n")
 
-                    # 协议仿真 6: Web HTTP 伪装响应 (针对 80, 443, 8080, 8888 等自定义 Web 诱饵)
+                    # 协议仿真 8: MongoDB 27017 探针应答 (isMaster / ping 模拟应答)
+                    elif port in (27017, 27018) or "mongo" in port_info.get("name", "").lower():
+                        if b"isMaster" in recv_data or b"ismaster" in recv_data or b"ping" in recv_data:
+                            # 模拟 bson isMaster 应答报文结构
+                            mongo_resp = b"\x37\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xd4\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x15\x00\x00\x00\x10ismaster\x00\x01\x00\x00\x00\x01ok\x00\x00\x00\x00\x00\x00\x00\xf0?\x00"
+                            try:
+                                client_sock.sendall(mongo_resp)
+                            except Exception:
+                                pass
+
+                    # 协议仿真 9: Web HTTP 伪装响应 (针对 80, 443, 8080, 8888 等自定义 Web 诱饵)
                     elif recv_data.startswith(b"GET ") or recv_data.startswith(b"POST ") or recv_data.startswith(b"HEAD "):
                         http_resp = (
                             b"HTTP/1.1 403 Forbidden\r\n"
@@ -3223,6 +3447,13 @@ class TrapServer:
             pass
         finally:
             try:
+                # 焦油坑 (Tarpit) 粘滞减速模式：若开启，故意保持连接睡眠 3 秒消耗攻击方扫描线程并发
+                if use_tarpit:
+                    time.sleep(3.0)
+            except Exception:
+                pass
+
+            try:
                 # TCP RST 伪装关闭模式：设置 SO_LINGER 超时为 0，调用 close() 时内核直接发送 TCP RST 报文
                 # 瞬间断开攻击者连接，杜绝 TIME_WAIT/CLOSE_WAIT 堆积，向扫描工具伪装端口已重置关闭
                 client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
@@ -3234,7 +3465,9 @@ class TrapServer:
                 pass
 
         reason_text = f"探测蜜罐端口 {port} ({port_info.get('name')})"
-        if payload_captured:
+        if sample_urls_found:
+            reason_text += f" [提取木马下载源: {', '.join(sample_urls_found[:2])}]"
+        elif payload_captured:
             clean_p = " ".join(payload_captured.split())[:70]
             reason_text += f" [捕获载荷: {clean_p}]"
 

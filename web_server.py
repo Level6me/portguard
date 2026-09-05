@@ -32,7 +32,8 @@ from sentry_daemon import (
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
     ban_ip_firewall, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
     normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
-    broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker
+    broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
+    get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections
 )
 
 def parse_loose_json_or_lines(text):
@@ -885,6 +886,76 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
+            <!-- 全球威胁态势地图与 C2 失陷反向检测状态 -->
+            <div class="card" style="margin-bottom: 16px;">
+                <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
+                    <div>
+                        <div class="card-title">🗺️ 全球威胁态势地图 · 实时溯源</div>
+                        <div class="val-sub">实时呈现攻击来源地理位置与对本机防御靶点的探测航线</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div id="c2-health-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3);">
+                            <span class="status-dot" style="width: 6px; height: 6px; background: var(--success);"></span>
+                            <span id="c2-status-text">C2 远控信标: 未失陷 (安全)</span>
+                        </div>
+                        <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="padding: 4px 10px; font-size: 11px;">🔍 检测出站</button>
+                    </div>
+                </div>
+                <!-- 轻量矢量 SVG 态势地图容器 -->
+                <div style="position: relative; width: 100%; height: 260px; background: radial-gradient(circle at center, #182030 0%, #0c101a 100%); border-radius: 12px; overflow: hidden; border: 1px solid var(--border-subtle);">
+                    <svg id="threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                            <radialGradient id="target-pulse-glow" cx="50%" cy="50%" r="50%">
+                                <stop offset="0%" stop-color="#007aff" stop-opacity="0.8"/>
+                                <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
+                            </radialGradient>
+                            <linearGradient id="attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.9"/>
+                                <stop offset="100%" stop-color="#ff9500" stop-opacity="0.4"/>
+                            </linearGradient>
+                        </defs>
+                        <!-- 经纬网格线 -->
+                        <g stroke="rgba(255,255,255,0.04)" stroke-width="0.8" stroke-dasharray="3,3">
+                            <line x1="0" y1="125" x2="1000" y2="125"/>
+                            <line x1="0" y1="250" x2="1000" y2="250"/>
+                            <line x1="0" y1="375" x2="1000" y2="375"/>
+                            <line x1="200" y1="0" x2="200" y2="500"/>
+                            <line x1="400" y1="0" x2="400" y2="500"/>
+                            <line x1="600" y1="0" x2="600" y2="500"/>
+                            <line x1="800" y1="0" x2="800" y2="500"/>
+                        </g>
+                        <!-- 全球大陆轮廓极简高保真多边形 -->
+                        <g fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" stroke-width="0.7">
+                            <!-- 北美洲 -->
+                            <path d="M 120 70 L 260 80 L 290 140 L 250 200 L 200 240 L 160 210 L 110 140 Z"/>
+                            <!-- 南美洲 -->
+                            <path d="M 230 260 L 310 270 L 330 350 L 280 440 L 240 380 Z"/>
+                            <!-- 欧洲 -->
+                            <path d="M 460 80 L 550 70 L 560 140 L 490 170 L 440 130 Z"/>
+                            <!-- 非洲 -->
+                            <path d="M 450 180 L 560 180 L 580 270 L 530 400 L 470 330 L 440 240 Z"/>
+                            <!-- 亚洲 -->
+                            <path d="M 570 60 L 850 70 L 890 180 L 780 260 L 680 250 L 630 180 L 570 140 Z"/>
+                            <!-- 大洋洲 -->
+                            <path d="M 770 320 L 880 320 L 870 410 L 780 410 Z"/>
+                        </g>
+                        <!-- 动态威胁航线与击中光晕层 -->
+                        <g id="svg-attack-trajectories"></g>
+                        <!-- 本机靶点中心位置 (东亚节点 x=770, y=165) -->
+                        <g transform="translate(770, 165)">
+                            <circle r="18" fill="url(#target-pulse-glow)">
+                                <animate attributeName="r" values="10;22;10" dur="2.4s" repeatCount="indefinite"/>
+                                <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2.4s" repeatCount="indefinite"/>
+                            </circle>
+                            <circle r="4" fill="#007aff" stroke="#ffffff" stroke-width="1.5"/>
+                            <text x="8" y="4" fill="#64d2ff" font-size="10" font-weight="bold" font-family="sans-serif">🛡️ 本机安全节点</text>
+                        </g>
+                    </svg>
+                    <!-- 地图悬浮信息卡 -->
+                    <div id="map-hover-tooltip" style="position: absolute; display: none; background: rgba(20,20,24,0.92); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--text); pointer-events: none; z-index: 10; box-shadow: var(--shadow-md);"></div>
+                </div>
+            </div>
+
             <!-- 地域排行与近期威胁列表 -->
             <div class="grid-2">
                 <div class="card">
@@ -1371,11 +1442,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <!-- Page 5: 系统设置 (Settings: 响应参数与审计隐藏) -->
     <div id="tab-settings" style="display: none;">
-        <!-- 顶部子页切换分段控件 (防御响应 / IP过滤) -->
+        <!-- 顶部子页切换分段控件 (防御响应 / IP过滤 / 配置备份) -->
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 防御与响应参数</button>
                 <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 IP 过滤与隐藏</button>
+                <button class="pill-btn" id="btn-settings-tab-backup" onclick="switchSettingsSubTab('backup', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">💾 版本快照与备份</button>
             </div>
         </div>
 
@@ -1575,9 +1647,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- 4. 内核阻断机制 -->
+                <!-- 4. 内核阻断与主动欺骗机制 -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
-                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ 内核底层阻断方式</div>
+                    <div style="font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 6px;">🛡️ 内核底层阻断与高级欺骗机制</div>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
                             <input type="checkbox" id="setting-policy-ban-iptables" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
@@ -1586,6 +1658,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
                             <input type="checkbox" id="setting-policy-ban-blackhole" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
                             <span><b>Linux 内核路由阻断 (blackhole)</b>（在路由选路阶段丢弃数据包）</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-policy-tarpit-delay" style="width: 16px; height: 16px; accent-color: var(--accent);">
+                            <span><b>蜜罐焦油坑 (Tarpit) 粘滞减速</b>（在应答前增加 5 秒极慢响应，耗尽攻击者扫描并发线程）</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                            <input type="checkbox" id="setting-policy-dynamic-mtd" checked style="width: 16px; height: 16px; accent-color: var(--accent);">
+                            <span><b>移动目标防御 (MTD) 动态高位诱饵轮换</b>（在高位 20000-60000 端口动态伪装未知服务）</span>
                         </label>
                     </div>
                 </div>
@@ -1634,6 +1714,46 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </thead>
                             <tbody id="hidden-ips-policy-tbody">
                                 <!-- JS 动态渲染 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SubTab 3: 配置版本快照与备份 (Snapshots & Backups) -->
+            <div id="settings-pane-backup" style="display: none; padding: 18px; flex-direction: column; gap: 14px;">
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+                        <div>
+                            <div style="font-weight: 700; font-size: 13px; color: var(--text);">💾 配置文件备份与快照管理</div>
+                            <div style="font-size: 11px; color: var(--text-sec); margin-top: 2px;">系统在每次保存策略配置时均会自动生成时间戳快照，可随时查看历史版本并一键回滚。</div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <a href="/api/config/backup" class="pill-btn accent" download style="text-decoration: none; padding: 6px 14px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">
+                                <span>📥</span><span>下载完整配置备份 (.json)</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 快照版本历史表格 -->
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--card);">
+                        <span style="font-size: 12px; font-weight: 700; color: var(--text);">历史版本快照 (<span id="config-snapshots-count">0</span>)</span>
+                        <button class="pill-btn" onclick="loadConfigSnapshots()" style="padding: 3px 8px; font-size: 11px;">🔄 刷新列表</button>
+                    </div>
+                    <div style="max-height: 380px; overflow-y: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec);">
+                                    <th style="padding: 8px 12px;">快照文件名称</th>
+                                    <th style="padding: 8px 12px;">备份时间</th>
+                                    <th style="padding: 8px 12px;">文件大小</th>
+                                    <th style="padding: 8px 12px; text-align: right;">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="config-snapshots-tbody">
+                                <tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 24px;">正在加载版本快照...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2085,9 +2205,78 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         <div style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
             <button class="pill-btn" onclick="closeModals()">关闭</button>
+            <button class="pill-btn accent" onclick="openAttackerTimelineModal(currentDetailIP)" id="btn-ip-detail-timeline" style="font-weight: 700;">⏱️ 全景画像时间线</button>
             <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
             <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 封禁此 IP</button>
             <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在控制台各视图中过滤此 IP 的所有日志记录与统计">🙈 过滤此 IP 日志</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 攻击者全景画像与时间线 (Attacker Timeline) -->
+<div class="modal-overlay" id="modal-attacker-timeline">
+    <div class="modal-sheet" style="max-width: 680px; width: 95%;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">👤</span>
+                <h3 style="font-size: 16px; font-weight: 700; margin: 0;">攻击者全景画像与足迹时间线</h3>
+            </div>
+            <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+
+        <!-- 威胁概览头部卡片 -->
+        <div style="background: var(--card-sec); border-radius: 12px; padding: 14px; border: 1px solid var(--border); margin-bottom: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-family: monospace; font-size: 18px; font-weight: 800; color: var(--text);" id="timeline-ip">--</span>
+                    <span id="timeline-banned-tag" class="tag danger" style="font-size: 11px;">已封禁</span>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                    <button class="pill-btn danger" onclick="banAttackerSubnet()" id="btn-ban-subnet" style="font-size: 11px; padding: 4px 10px; font-weight: 700;" title="直接封禁目标 /24 整个 C 段网段 (256个IP)">🚫 一键封禁 /24 C段</button>
+                    <button class="pill-btn accent" onclick="copyIP(document.getElementById('timeline-ip').innerText)" style="padding: 4px 10px; font-size: 11px;">📋 复制</button>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; font-size: 12px;">
+                <div>
+                    <span style="color: var(--text-sec);">归属地域:</span>
+                    <div style="font-weight: 700; color: var(--text); margin-top: 2px;" id="timeline-geo">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec);">运营商 / ASN:</span>
+                    <div style="font-weight: 600; color: var(--text); margin-top: 2px;" id="timeline-isp">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec);">探测频次 / 端口数:</span>
+                    <div style="font-weight: 700; color: var(--accent); margin-top: 2px;" id="timeline-stats">--</div>
+                </div>
+                <div>
+                    <span style="color: var(--text-sec);">首见 / 末见时间:</span>
+                    <div style="font-weight: 600; color: var(--text); margin-top: 2px; font-size: 11px;" id="timeline-times">--</div>
+                </div>
+            </div>
+            <!-- 威胁画像标签 -->
+            <div style="margin-top: 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span style="color: var(--text-sec); font-size: 11px; font-weight: 600;">威胁画像标签:</span>
+                <div id="timeline-threat-tags" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></div>
+            </div>
+        </div>
+
+        <!-- 提取的载荷/木马 URL -->
+        <div id="timeline-payloads-box" style="display: none; background: rgba(255, 59, 48, 0.08); border: 1px solid rgba(255, 59, 48, 0.25); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;">
+            <div style="font-weight: 700; font-size: 12px; color: var(--danger); margin-bottom: 6px;">☠️ 恶意载荷中提取的木马/下载链接:</div>
+            <div id="timeline-payloads-list" style="font-family: monospace; font-size: 11px; color: var(--text); word-break: break-all; display: flex; flex-direction: column; gap: 4px;"></div>
+        </div>
+
+        <!-- 行为足迹时间线 (Timeline List) -->
+        <div style="font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 8px;">📜 探测足迹与处置序列</div>
+        <div style="max-height: 280px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px;">
+            <div id="timeline-events-container" style="display: flex; flex-direction: column; gap: 10px;">
+                <div style="color: var(--text-sec); text-align: center; padding: 20px;">正在加载时间线...</div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;">
+            <button class="pill-btn" onclick="closeModals()">关闭</button>
         </div>
     </div>
 </div>
@@ -3162,21 +3351,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         currentSettingsSubTab = subTab;
         const paneResp = document.getElementById('settings-pane-response');
         const paneHidden = document.getElementById('settings-pane-hidden');
+        const paneBackup = document.getElementById('settings-pane-backup');
         const btnResp = document.getElementById('btn-settings-tab-response');
         const btnHidden = document.getElementById('btn-settings-tab-hidden');
+        const btnBackup = document.getElementById('btn-settings-tab-backup');
+
+        [btnResp, btnHidden, btnBackup].forEach(b => {
+            if (b) { b.className = 'pill-btn'; b.style.background = 'transparent'; }
+        });
+        [paneResp, paneHidden, paneBackup].forEach(p => {
+            if (p) p.style.display = 'none';
+        });
 
         if (subTab === 'response') {
             if (btnResp) { btnResp.className = 'pill-btn accent'; btnResp.style.background = ''; }
-            if (btnHidden) { btnHidden.className = 'pill-btn'; btnHidden.style.background = 'transparent'; }
             if (paneResp) paneResp.style.display = 'flex';
-            if (paneHidden) paneHidden.style.display = 'none';
             loadSystemSettings();
-        } else {
-            if (btnResp) { btnResp.className = 'pill-btn'; btnResp.style.background = 'transparent'; }
+        } else if (subTab === 'hidden') {
             if (btnHidden) { btnHidden.className = 'pill-btn accent'; btnHidden.style.background = ''; }
-            if (paneResp) paneResp.style.display = 'none';
             if (paneHidden) paneHidden.style.display = 'flex';
             loadHiddenIPsForPolicy();
+        } else if (subTab === 'backup') {
+            if (btnBackup) { btnBackup.className = 'pill-btn accent'; btnBackup.style.background = ''; }
+            if (paneBackup) paneBackup.style.display = 'flex';
+            loadConfigSnapshots();
         }
     }
 
@@ -3354,7 +3552,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById('cnt-log-all').innerText = events.length;
             renderLogsTable();
             renderRecentThreats(events.slice(0, 5));
+            renderWorldThreatMap(events);
         });
+
+        checkC2CompromiseStatus(false);
 
         fetch('/api/blacklist').then(res => res.json()).then(data => {
             allBlacklist = data;
@@ -3708,18 +3909,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 portBadge = `<span class="tag neutral" style="font-size:12px; font-weight:700;">${escapeHtml(pProto)} / ${pNum}</span>`;
             }
 
+            // 威胁画像标签
+            let threatTagsBadge = '';
+            if (e.threat_tags && Array.isArray(e.threat_tags) && e.threat_tags.length > 0) {
+                threatTagsBadge = e.threat_tags.map(t => `<span class="tag neutral" style="font-size: 9px; padding: 1px 4px; margin-left: 2px;">🏷️ ${escapeHtml(t)}</span>`).join('');
+            }
+
             html += `
             <tr>
                 <td>${formatTwoLineTime(e.attack_time)}</td>
                 <td>
-                    <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
+                    <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                        <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
+                        ${threatTagsBadge}
+                    </div>
                     <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td>${portBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
                 <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
-                <td>${actionBtn}</td>
+                <td>
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                        <button class="action-btn" onclick="openAttackerTimelineModal('${jsEscape(e.ip)}')" style="font-size: 11px; padding: 4px 8px;" title="查看该攻击者全景画像与时间线">⏱️ 画像</button>
+                        ${actionBtn}
+                    </div>
+                </td>
             </tr>
             `;
         });
@@ -3781,10 +3996,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 nodeBadge = `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(rawNode)}</span>`;
             }
 
+            // 威胁画像标签
+            let threatTagsBadge = '';
+            if (b.threat_tags && Array.isArray(b.threat_tags) && b.threat_tags.length > 0) {
+                threatTagsBadge = b.threat_tags.map(t => `<span class="tag neutral" style="font-size: 9px; padding: 1px 4px; margin-left: 2px;">🏷️ ${escapeHtml(t)}</span>`).join('');
+            }
+
             html += `
             <tr>
                 <td>
-                    <span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span>
+                    <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                        <span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span>
+                        ${threatTagsBadge}
+                    </div>
                     <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td>${nodeBadge}</td>
@@ -3792,7 +4016,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <td><span class="tag danger" style="font-size:11px; font-weight:700;">ipset + blackhole</span></td>
                 <td>${formatTwoLineTime(b.ban_time)}</td>
                 <td>
-                    <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                        <button class="action-btn" onclick="openAttackerTimelineModal('${jsEscape(b.ip)}')" style="font-size: 11px; padding: 4px 8px;" title="查看该攻击者全景画像与时间线">⏱️ 画像</button>
+                        <button class="action-btn success" onclick="unbanIP('${jsEscape(b.ip)}')">解除封禁</button>
+                    </div>
                 </td>
             </tr>
             `;
@@ -5456,6 +5683,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (document.getElementById('setting-policy-ban-blackhole')) {
                 document.getElementById('setting-policy-ban-blackhole').checked = data.ban_action_blackhole !== false;
             }
+            if (document.getElementById('setting-policy-tarpit-delay')) {
+                document.getElementById('setting-policy-tarpit-delay').checked = !!data.enable_tarpit_delay;
+            }
+            if (document.getElementById('setting-policy-dynamic-mtd')) {
+                document.getElementById('setting-policy-dynamic-mtd').checked = data.dynamic_honeypot_ports !== false;
+            }
 
             // 弹窗控件同步
             if (document.getElementById('setting-trap-threshold')) {
@@ -5838,6 +6071,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const autoClean = parseInt(document.getElementById('setting-policy-auto-clean')?.value || '30');
         const banIptables = document.getElementById('setting-policy-ban-iptables')?.checked !== false;
         const banBlackhole = document.getElementById('setting-policy-ban-blackhole')?.checked !== false;
+        const tarpitDelay = !!document.getElementById('setting-policy-tarpit-delay')?.checked;
+        const dynamicMtd = document.getElementById('setting-policy-dynamic-mtd')?.checked !== false;
 
         try {
             showToast('正在保存全局策略配置...', '⏳');
@@ -5853,7 +6088,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     trap_window_seconds: trapWindow,
                     auto_clean_days: autoClean,
                     ban_action_iptables: banIptables,
-                    ban_action_blackhole: banBlackhole
+                    ban_action_blackhole: banBlackhole,
+                    enable_tarpit_delay: tarpitDelay,
+                    dynamic_honeypot_ports: dynamicMtd
                 })
             });
             const data = await res.json();
@@ -6189,6 +6426,302 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         } catch (e) {
             showToast('请求异常: ' + e, '⚠️');
         }
+    }
+
+    // ================== 新增：配置版本快照与回滚管理 ==================
+    async function loadConfigSnapshots() {
+        const tbody = document.getElementById('config-snapshots-tbody');
+        const countSpan = document.getElementById('config-snapshots-count');
+        if (!tbody) return;
+        try {
+            const res = await fetch('/api/config/snapshots');
+            const list = await res.json();
+            if (countSpan) countSpan.innerText = (list || []).length;
+            if (!list || list.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 24px;">暂无可用的配置快照</td></tr>';
+                return;
+            }
+            let html = '';
+            list.forEach(s => {
+                const sizeKb = (s.size / 1024).toFixed(1) + ' KB';
+                html += `
+                <tr style="border-bottom: 1px solid var(--border-subtle);">
+                    <td style="padding: 10px 12px; font-family: monospace; font-weight: 700; color: var(--text);">${escapeHtml(s.filename)}</td>
+                    <td style="padding: 10px 12px; color: var(--text-sec); font-size: 11px;">${escapeHtml(s.backup_time || '--')}</td>
+                    <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec); font-family: monospace;">${sizeKb}</td>
+                    <td style="padding: 10px 12px; text-align: right;">
+                        <button class="pill-btn danger" onclick="rollbackConfigSnapshot('${escapeHtml(s.filename)}')" style="padding: 4px 10px; font-size: 11px; font-weight: 700;">⏪ 一键回滚此版本</button>
+                    </td>
+                </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--danger); padding: 20px;">加载快照列表异常: ' + escapeHtml(e) + '</td></tr>';
+        }
+    }
+
+    async function rollbackConfigSnapshot(filename) {
+        if (!confirm(`⚠️ 警告：确定要将系统配置回滚至快照 [${filename}] 吗？\n回滚后将立即恢复该快照时期的所有防御参数与策略！`)) {
+            return;
+        }
+        try {
+            showToast('正在回滚配置...', '⏳');
+            const res = await fetch('/api/config/rollback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || '配置已成功回滚！', '🎉');
+                loadConfigSnapshots();
+                loadSystemSettings();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '回滚失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('回滚异常: ' + e, '⚠️');
+        }
+    }
+
+    // ================== 新增：攻击者全景画像与时间线 ==================
+    let currentTimelineAttackerIP = '';
+    async function openAttackerTimelineModal(ip) {
+        if (!ip) return;
+        currentTimelineAttackerIP = ip;
+        closeModals();
+        const modal = document.getElementById('modal-attacker-timeline');
+        if (modal) modal.style.display = 'flex';
+
+        document.getElementById('timeline-ip').innerText = ip;
+        document.getElementById('timeline-geo').innerText = '分析中...';
+        document.getElementById('timeline-isp').innerText = '--';
+        document.getElementById('timeline-stats').innerText = '--';
+        document.getElementById('timeline-times').innerText = '--';
+        document.getElementById('timeline-threat-tags').innerHTML = '';
+        document.getElementById('timeline-payloads-box').style.display = 'none';
+        document.getElementById('timeline-events-container').innerHTML = '<div style="color: var(--text-sec); text-align: center; padding: 24px;">正在全量溯源攻击足迹...</div>';
+
+        try {
+            const res = await fetch(`/api/attacker/timeline?ip=${encodeURIComponent(ip)}`);
+            const data = await res.json();
+
+            document.getElementById('timeline-geo').innerText = data.country || '公网节点';
+            document.getElementById('timeline-isp').innerText = (data.region || '') + ' ' + (data.isp || '');
+            document.getElementById('timeline-stats').innerText = `${data.total_probes || 0} 次探测 · 涉及 ${(data.ports_hit || []).length} 个端口`;
+            document.getElementById('timeline-times').innerText = `${data.first_seen || '--'} / ${data.last_seen || '--'}`;
+
+            const bannedTag = document.getElementById('timeline-banned-tag');
+            if (bannedTag) {
+                bannedTag.className = data.is_banned ? 'tag danger' : 'tag warning';
+                bannedTag.innerText = data.is_banned ? '已在内核黑名单' : '未封禁 (观察中)';
+            }
+
+            // 威胁画像标签
+            const tagContainer = document.getElementById('timeline-threat-tags');
+            const tags = data.threat_tags || [];
+            if (tags.length === 0) {
+                tagContainer.innerHTML = '<span class="tag neutral" style="font-size: 10px;">普通公网探测源</span>';
+            } else {
+                tagContainer.innerHTML = tags.map(t => {
+                    let cls = 'neutral';
+                    if (t.includes('Tor') || t.includes('高危') || t.includes('扫描器')) cls = 'danger';
+                    else if (t.includes('测绘') || t.includes('爬虫')) cls = 'warning';
+                    else if (t.includes('IDC') || t.includes('机房')) cls = 'accent';
+                    return `<span class="tag ${cls}" style="font-size: 10px; font-weight: 700;">🏷️ ${escapeHtml(t)}</span>`;
+                }).join(' ');
+            }
+
+            // 恶意载荷展示
+            const payloads = data.extracted_payloads || [];
+            const payloadBox = document.getElementById('timeline-payloads-box');
+            const payloadList = document.getElementById('timeline-payloads-list');
+            if (payloads.length > 0) {
+                payloadBox.style.display = 'block';
+                payloadList.innerHTML = payloads.map(p => `<div style="padding: 2px 0;">🔗 <span style="color: var(--danger); font-weight: 700;">${escapeHtml(p)}</span></div>`).join('');
+            } else {
+                payloadBox.style.display = 'none';
+            }
+
+            // 足迹时间线列表
+            const events = data.events || [];
+            const container = document.getElementById('timeline-events-container');
+            if (events.length === 0) {
+                container.innerHTML = '<div style="color: var(--text-sec); text-align: center; padding: 20px;">未捕获到具体的行为轨迹</div>';
+            } else {
+                let html = '';
+                events.forEach((ev, idx) => {
+                    const isBan = (ev.status === 'BANNED' || ev.status === 'DROP');
+                    const dotColor = isBan ? '#ff3b30' : '#ff9500';
+                    const icon = isBan ? '🚫' : '🍯';
+                    html += `
+                    <div style="display: flex; gap: 10px; position: relative;">
+                        <div style="display: flex; flex-direction: column; align-items: center; width: 18px; flex-shrink: 0;">
+                            <div style="width: 10px; height: 10px; border-radius: 50%; background: ${dotColor}; box-shadow: 0 0 6px ${dotColor}; margin-top: 4px;"></div>
+                            ${idx < events.length - 1 ? `<div style="width: 2px; flex: 1; background: var(--border-subtle); margin: 4px 0;"></div>` : ''}
+                        </div>
+                        <div style="flex: 1; background: var(--card-sec); border-radius: 8px; padding: 8px 12px; border: 1px solid var(--border-subtle); margin-bottom: 6px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; flex-wrap: wrap; gap: 4px;">
+                                <span style="font-size: 11px; font-weight: 700; color: var(--text);">${icon} 命中端口 ${ev.port || '--'} (${escapeHtml(ev.port_name || '服务诱饵')})</span>
+                                <span style="font-size: 10px; color: var(--text-sec); font-family: monospace;">${escapeHtml(ev.attack_time || '--')}</span>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-sec); display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                                <span class="tag ${isBan ? 'danger' : 'warning'}" style="font-size: 9px;">${isBan ? '内核阻断 (BANNED)' : '诱捕观察 (WATCH)'}</span>
+                                <span>协议: <b>${escapeHtml(ev.proto || 'TCP')}</b></span>
+                                ${ev.category ? `<span>分类: <b>${escapeHtml(ev.category)}</b></span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    `;
+                });
+                container.innerHTML = html;
+            }
+        } catch (e) {
+            console.error('加载时间线失败:', e);
+            document.getElementById('timeline-events-container').innerHTML = '<div style="color: var(--danger); text-align: center; padding: 20px;">溯源加载失败</div>';
+        }
+    }
+
+    async function banAttackerSubnet() {
+        if (!currentTimelineAttackerIP) return;
+        const parts = currentTimelineAttackerIP.split('.');
+        if (parts.length !== 4) {
+            showToast('仅支持对 IPv4 执行 C 段封禁', '⚠️');
+            return;
+        }
+        const subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+        if (!confirm(`⚠️ 严正确认：是否立即对 ${currentTimelineAttackerIP} 所在的整个 /24 C 段网段 [${subnet}] 执行全段封禁？\n（将把整个 256 个 IP 写入内核黑名单防火墙，彻底阻断该网段的一切连接）`)) {
+            return;
+        }
+        try {
+            showToast(`正在封禁整个 C 段: ${subnet}...`, '⏳');
+            const res = await fetch('/api/blacklist/ban_subnet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: currentTimelineAttackerIP, reason: `手动一键阻断 /24 C段网段 (${subnet})` })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(data.msg || `成功阻断 /24 C段网段！`, '🎉');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(data.msg || '封禁 C 段失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
+        }
+    }
+
+    // ================== 新增：C2 信标失陷反向检测 ==================
+    async function checkC2CompromiseStatus(showToastMsg) {
+        const badge = document.getElementById('c2-health-badge');
+        const text = document.getElementById('c2-status-text');
+        try {
+            const res = await fetch('/api/compromise/check');
+            const data = await res.json();
+            const alerts = data.compromised_alerts || [];
+            if (badge && text) {
+                if (alerts.length === 0) {
+                    badge.style.background = 'rgba(52, 199, 89, 0.12)';
+                    badge.style.color = 'var(--success)';
+                    badge.style.borderColor = 'rgba(52, 199, 89, 0.3)';
+                    text.innerText = 'C2 远控信标: 未失陷 (安全)';
+                    if (showToastMsg) showToast('未检测到本机与已知恶意 C2 的异常反向连线！', '🟢');
+                } else {
+                    badge.style.background = 'rgba(255, 59, 48, 0.2)';
+                    badge.style.color = 'var(--danger)';
+                    badge.style.borderColor = 'var(--danger)';
+                    text.innerText = `🚨 警告: 发现 ${alerts.length} 个 C2 异常出站连接!`;
+                    if (showToastMsg) showToast(`发现 ${alerts.length} 个与恶意 C2 节点的出站连接，请立即排查！`, '🚨');
+                }
+            }
+        } catch (e) {
+            console.error('C2 检查失败:', e);
+        }
+    }
+
+    // ================== 新增：全球威胁态势地图渲染 ==================
+    const COUNTRY_COORDINATES = {
+        'CN': { x: 740, y: 190, name: '中国' },
+        'US': { x: 220, y: 160, name: '美国' },
+        'RU': { x: 680, y: 100, name: '俄罗斯' },
+        'DE': { x: 500, y: 130, name: '德国' },
+        'NL': { x: 485, y: 125, name: '荷兰' },
+        'GB': { x: 470, y: 120, name: '英国' },
+        'FR': { x: 475, y: 145, name: '法国' },
+        'KR': { x: 790, y: 175, name: '韩国' },
+        'JP': { x: 825, y: 170, name: '日本' },
+        'SG': { x: 720, y: 280, name: '新加坡' },
+        'HK': { x: 745, y: 215, name: '香港' },
+        'TW': { x: 765, y: 210, name: '台湾' },
+        'IN': { x: 650, y: 220, name: '印度' },
+        'BR': { x: 310, y: 340, name: '巴西' },
+        'AU': { x: 830, y: 360, name: '澳大利亚' },
+        'CA': { x: 200, y: 110, name: '加拿大' },
+        'VN': { x: 725, y: 235, name: '越南' },
+        'ID': { x: 760, y: 300, name: '印尼' },
+        'UA': { x: 550, y: 135, name: '乌克兰' }
+    };
+
+    function renderWorldThreatMap(events) {
+        const svgContainer = document.getElementById('svg-attack-trajectories');
+        if (!svgContainer) return;
+        const targetX = 770;
+        const targetY = 165;
+
+        // 统计来源国家频次
+        const countryCounts = {};
+        (events || []).slice(0, 40).forEach(ev => {
+            const c = ev.country || '';
+            if (c) {
+                countryCounts[c] = (countryCounts[c] || 0) + 1;
+            }
+        });
+
+        let svgHtml = '';
+        Object.entries(countryCounts).forEach(([cName, count]) => {
+            // 查找对应坐标
+            let coord = null;
+            for (const [code, info] of Object.entries(COUNTRY_COORDINATES)) {
+                if (cName.includes(info.name) || cName.toUpperCase().includes(code)) {
+                    coord = info;
+                    break;
+                }
+            }
+            if (!coord) {
+                // 离散伪随机散列散点
+                let hash = 0;
+                for (let i = 0; i < cName.length; i++) hash = (hash * 31 + cName.charCodeAt(i)) & 0xffffffff;
+                const pseudoX = 150 + Math.abs(hash % 700);
+                const pseudoY = 90 + Math.abs((hash >> 3) % 300);
+                coord = { x: pseudoX, y: pseudoY, name: cName };
+            }
+
+            // 贝塞尔飞线控制点
+            const midX = (coord.x + targetX) / 2;
+            const midY = Math.min(coord.y, targetY) - 35 - Math.min(60, count * 2);
+            const pathD = `M ${coord.x} ${coord.y} Q ${midX} ${midY} ${targetX} ${targetY}`;
+
+            // 发起源光晕点
+            svgHtml += `
+            <g style="cursor: pointer;" onclick="filterLogs('${escapeHtml(coord.name)}')">
+                <circle cx="${coord.x}" cy="${coord.y}" r="${Math.min(10, 4 + count)}" fill="rgba(255, 59, 48, 0.4)">
+                    <animate attributeName="r" values="3;${Math.min(12, 5 + count)};3" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.8;0.3;0.8" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="${coord.x}" cy="${coord.y}" r="3" fill="#ff3b30"/>
+                <!-- 威胁飞线 -->
+                <path d="${pathD}" fill="none" stroke="url(#attack-beam-gradient)" stroke-width="${Math.min(2.5, 1 + count * 0.3)}" stroke-dasharray="6,4" opacity="0.85">
+                    <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2.5s" repeatCount="indefinite"/>
+                </path>
+                <text x="${coord.x}" y="${coord.y - 7}" fill="#ff9500" font-size="9" font-weight="bold" text-anchor="middle">${escapeHtml(coord.name)} (${count})</text>
+            </g>
+            `;
+        });
+        svgContainer.innerHTML = svgHtml;
     }
 
     async function batchBanAllProbes() {
@@ -6865,6 +7398,8 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     "trap_business_ports": bool(cfg.get("trap_business_ports", False)),
                     "ban_action_iptables": bool(cfg.get("ban_action_iptables", True)),
                     "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
+                    "enable_tarpit_delay": bool(cfg.get("enable_tarpit_delay", False)),
+                    "dynamic_honeypot_ports": bool(cfg.get("dynamic_honeypot_ports", True)),
                     "defense_paused": bool(cfg.get("defense_paused", False)),
                     "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
                     "cluster_sync": cfg.get("cluster_sync", {
@@ -6873,6 +7408,32 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                         "cluster_nodes": []
                     }),
                     "web_port": int(cfg.get("web_port", 9099) or 9099)
+                })
+                return
+
+            if path == "/api/config/snapshots":
+                snaps = get_config_snapshots()
+                self._send_json(snaps)
+                return
+
+            if path == "/api/config/backup":
+                # 导出完整配置文件备份
+                cfg_str = json.dumps(load_config(), indent=2, ensure_ascii=False).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(cfg_str)))
+                self.send_header('Content-Disposition', f'attachment; filename="portguard_config_backup_{int(time.time())}.json"')
+                self.end_headers()
+                self.wfile.write(cfg_str)
+                return
+
+            if path == "/api/compromise/check":
+                # C2 反向连线失陷检测
+                alerts = check_c2_compromise_connections()
+                self._send_json({
+                    "status": "safe" if not alerts else "warning",
+                    "compromised_alerts": alerts,
+                    "check_time": time.strftime("%Y-%m-%d %H:%M:%S")
                 })
                 return
 
@@ -6926,16 +7487,72 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                         else:
                             r["country"] = "公网节点"
                             _EXECUTOR.submit(resolve_ip_geo, r["ip"])
+                    # 动态植入威胁信誉指纹标签
+                    r["threat_tags"] = get_ip_threat_tags(r["ip"], r)
                 self._send_json(rows)
+                return
+
+            if path == "/api/attacker/timeline":
+                # 攻击者全景画像与足迹时间线档案 API
+                query = parse_qs(parsed.query)
+                att_ip = query.get("ip", [""])[0].strip()
+                if not att_ip:
+                    self._send_json({"error": "缺少 IP 参数"}, status=400)
+                    return
+                conn = get_db()
+                c = conn.cursor()
+                # 1. 查找历史拦截事件时间线
+                c.execute("""
+                    SELECT id, port, proto, port_name, category, level, attack_time, timestamp, status
+                    FROM events WHERE ip = ? ORDER BY timestamp DESC LIMIT 100
+                """, (att_ip,))
+                events_list = [dict(r) for r in c.fetchall()]
+
+                # 2. 查找黑名单阻断记录
+                c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist WHERE ip = ?", (att_ip,))
+                ban_record = c.fetchone()
+                ban_dict = dict(ban_record) if ban_record else None
+
+                # 3. 查找所有端口访问探测足迹 (distinct ports)
+                c.execute("SELECT DISTINCT port, port_name, action FROM port_access_logs WHERE ip = ? ORDER BY id DESC", (att_ip,))
+                footprints = [dict(r) for r in c.fetchall()]
+
+                # 4. 统计同 C 段 (/24) 活跃攻击威胁源
+                c_subnet_ips = []
+                try:
+                    if "." in att_ip:
+                        c_prefix = ".".join(att_ip.split(".")[:3]) + ".%"
+                        c.execute("SELECT DISTINCT ip FROM events WHERE ip LIKE ? AND ip != ? LIMIT 10", (c_prefix, att_ip))
+                        c_subnet_ips = [r[0] for r in c.fetchall()]
+                except Exception:
+                    pass
+
+                conn.close()
+
+                geo = _GEO_CACHE.get(att_ip) or resolve_ip_geo_local(att_ip) or {}
+                threat_tags = get_ip_threat_tags(att_ip, geo)
+
+                self._send_json({
+                    "ip": att_ip,
+                    "geo": geo,
+                    "threat_tags": threat_tags,
+                    "ban_record": ban_dict,
+                    "event_count": len(events_list),
+                    "events": events_list,
+                    "port_footprints": footprints,
+                    "subnet_c_peers": c_subnet_ips,
+                    "subnet_cidr": ".".join(att_ip.split(".")[:3]) + ".0/24" if "." in att_ip else att_ip
+                })
                 return
 
             if path == "/api/ip_info":
                 query = parse_qs(parsed.query)
                 ip = query.get("ip", [""])[0].strip()
                 if not ip:
-                    self._send_json({"country": "未知地域", "region": "", "city": "", "isp": ""})
+                    self._send_json({"country": "未知地域", "region": "", "city": "", "isp": "", "threat_tags": []})
                     return
                 geo = resolve_ip_geo(ip)
+                geo["threat_tags"] = get_ip_threat_tags(ip, geo)
                 self._send_json(geo)
                 return
 
@@ -6963,6 +7580,7 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                         r["region"] = geo.get("region") or r.get("region", "")
                         r["city"] = geo.get("city") or r.get("city", "")
                         r["isp"] = geo.get("isp") or r.get("isp", "")
+                    r["threat_tags"] = get_ip_threat_tags(ip_k, geo)
                 self._send_json(rows)
                 return
 
@@ -7752,6 +8370,10 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     cfg["ban_action_iptables"] = bool(req_data["ban_action_iptables"])
                 if "ban_action_blackhole" in req_data:
                     cfg["ban_action_blackhole"] = bool(req_data["ban_action_blackhole"])
+                if "enable_tarpit_delay" in req_data:
+                    cfg["enable_tarpit_delay"] = bool(req_data["enable_tarpit_delay"])
+                if "dynamic_honeypot_ports" in req_data:
+                    cfg["dynamic_honeypot_ports"] = bool(req_data["dynamic_honeypot_ports"])
                 if "trap_business_ports" in req_data:
                     cfg["trap_business_ports"] = bool(req_data["trap_business_ports"])
                 if "trap_all_unopened_ports" in req_data:
@@ -7764,6 +8386,34 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     cfg["cluster_sync"] = req_data["cluster_sync"]
                 save_config(cfg)
                 self._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
+                return
+
+            if path == "/api/config/rollback":
+                # 快照一键回滚接口
+                snap_filename = req_data.get("filename", "").strip()
+                if not snap_filename:
+                    self._send_json({"success": False, "msg": "缺少快照文件名"}, status=400)
+                    return
+                ok, msg = rollback_config_snapshot(snap_filename)
+                self._send_json({"success": ok, "msg": msg})
+                return
+
+            if path == "/api/blacklist/ban_subnet":
+                # 一键封禁整个 /24 C段网段
+                subnet = req_data.get("subnet", "").strip()
+                reason = req_data.get("reason", "管理员手动封禁攻击源 /24 C段").strip()
+                if not subnet or "/" not in subnet:
+                    self._send_json({"success": False, "msg": "非法的 CIDR 网段格式 (如 1.2.3.0/24)"}, status=400)
+                    return
+                try:
+                    net_obj = ipaddress.ip_network(subnet, strict=False)
+                    # 下发网段级黑洞路由与防火墙拦截
+                    subprocess.run(["ip", "route", "add", "blackhole", str(net_obj)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["iptables", "-I", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    ban_ip(str(net_obj), reason=reason, category="subnet_ban", level="极高危")
+                    self._send_json({"success": True, "msg": f"已成功对 {net_obj} 整个网段实施内核黑洞阻断与拦截！"})
+                except Exception as e:
+                    self._send_json({"success": False, "msg": f"网段阻断失败: {e}"}, status=400)
                 return
 
             if path == "/api/blacklist/batch_ban_all":
