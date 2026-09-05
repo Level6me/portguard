@@ -886,73 +886,87 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- 全球威胁态势地图与 C2 失陷反向检测状态 -->
+            <!-- 全球威胁态势地图与 C2 失陷反向检测状态 (高精度可交互版) -->
             <div class="card" style="margin-bottom: 16px;">
                 <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
                     <div>
                         <div class="card-title">🗺️ 全球威胁态势地图 · 实时溯源</div>
-                        <div class="val-sub">实时呈现攻击来源地理位置与对本机防御靶点的探测航线</div>
+                        <div class="val-sub">实时呈现攻击来源高精度地理坐标与对本机防御靶点的威胁飞线轨迹</div>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button class="pill-btn accent" onclick="openThreatMapDetailModal()" style="font-size: 11px; padding: 4px 12px; font-weight: 700; display: inline-flex; align-items: center; gap: 5px;">
+                            <span>🔍</span><span>全屏交互巨幕</span>
+                        </button>
                         <div id="c2-health-badge" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3);">
                             <span class="status-dot" style="width: 6px; height: 6px; background: var(--success);"></span>
-                            <span id="c2-status-text">C2 远控信标: 未失陷 (安全)</span>
+                            <span id="c2-status-text">C2 信标: 安全</span>
                         </div>
-                        <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="padding: 4px 10px; font-size: 11px;">🔍 检测出站</button>
+                        <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="padding: 4px 8px; font-size: 11px;">检测出站</button>
                     </div>
                 </div>
-                <!-- 轻量矢量 SVG 态势地图容器 -->
-                <div style="position: relative; width: 100%; height: 260px; background: radial-gradient(circle at center, #182030 0%, #0c101a 100%); border-radius: 12px; overflow: hidden; border: 1px solid var(--border-subtle);">
+                <!-- 精细高保真矢量 SVG 态势地图容器 -->
+                <div style="position: relative; width: 100%; height: 300px; background: radial-gradient(circle at 50% 50%, #151d2f 0%, #070a12 100%); border-radius: 12px; overflow: hidden; border: 1px solid var(--border-subtle); cursor: pointer;" onclick="openThreatMapDetailModal()" title="点击展开全屏交互大地图与发起源国家明细">
                     <svg id="threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
                         <defs>
                             <radialGradient id="target-pulse-glow" cx="50%" cy="50%" r="50%">
-                                <stop offset="0%" stop-color="#007aff" stop-opacity="0.8"/>
+                                <stop offset="0%" stop-color="#007aff" stop-opacity="0.9"/>
+                                <stop offset="60%" stop-color="#5856d6" stop-opacity="0.35"/>
                                 <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
                             </radialGradient>
                             <linearGradient id="attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                                <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.9"/>
-                                <stop offset="100%" stop-color="#ff9500" stop-opacity="0.4"/>
+                                <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.95"/>
+                                <stop offset="70%" stop-color="#ff9500" stop-opacity="0.6"/>
+                                <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.2"/>
                             </linearGradient>
                         </defs>
                         <!-- 经纬网格线 -->
-                        <g stroke="rgba(255,255,255,0.04)" stroke-width="0.8" stroke-dasharray="3,3">
-                            <line x1="0" y1="125" x2="1000" y2="125"/>
-                            <line x1="0" y1="250" x2="1000" y2="250"/>
-                            <line x1="0" y1="375" x2="1000" y2="375"/>
-                            <line x1="200" y1="0" x2="200" y2="500"/>
-                            <line x1="400" y1="0" x2="400" y2="500"/>
-                            <line x1="600" y1="0" x2="600" y2="500"/>
-                            <line x1="800" y1="0" x2="800" y2="500"/>
+                        <g stroke="rgba(255,255,255,0.04)" stroke-width="0.7" stroke-dasharray="3,3">
+                            <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
+                            <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
                         </g>
-                        <!-- 全球大陆轮廓极简高保真多边形 -->
-                        <g fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.15)" stroke-width="0.7">
-                            <!-- 北美洲 -->
-                            <path d="M 120 70 L 260 80 L 290 140 L 250 200 L 200 240 L 160 210 L 110 140 Z"/>
-                            <!-- 南美洲 -->
-                            <path d="M 230 260 L 310 270 L 330 350 L 280 440 L 240 380 Z"/>
-                            <!-- 欧洲 -->
-                            <path d="M 460 80 L 550 70 L 560 140 L 490 170 L 440 130 Z"/>
-                            <!-- 非洲 -->
-                            <path d="M 450 180 L 560 180 L 580 270 L 530 400 L 470 330 L 440 240 Z"/>
-                            <!-- 亚洲 -->
-                            <path d="M 570 60 L 850 70 L 890 180 L 780 260 L 680 250 L 630 180 L 570 140 Z"/>
-                            <!-- 大洋洲 -->
-                            <path d="M 770 320 L 880 320 L 870 410 L 780 410 Z"/>
+                        <!-- 全球各大洲精细矢量轮廓 (高保真) -->
+                        <g fill="rgba(255,255,255,0.07)" stroke="rgba(255,255,255,0.2)" stroke-width="0.75">
+                            <!-- 北美大陆 -->
+                            <path d="M 100,45 L 130,40 L 165,30 L 220,25 L 290,20 L 310,35 L 300,55 L 275,60 L 260,80 L 295,95 L 305,130 L 275,150 L 260,190 L 225,225 L 205,245 L 180,215 L 165,225 L 145,190 L 130,175 L 105,145 L 85,120 L 80,85 Z"/>
+                            <!-- 格陵兰 -->
+                            <path d="M 320,15 L 375,10 L 400,25 L 380,65 L 335,60 L 315,35 Z"/>
+                            <!-- 南美大陆 -->
+                            <path d="M 215,250 L 245,245 L 285,255 L 335,280 L 350,315 L 330,370 L 290,440 L 265,475 L 245,470 L 250,420 L 230,360 L 210,300 L 205,270 Z"/>
+                            <!-- 欧陆 -->
+                            <path d="M 455,60 L 490,45 L 530,45 L 555,65 L 545,85 L 575,100 L 550,135 L 525,145 L 505,135 L 485,155 L 450,155 L 435,135 L 440,105 L 420,95 L 430,75 Z"/>
+                            <!-- 不列颠群岛 -->
+                            <path d="M 430,80 L 445,75 L 440,95 L 425,100 Z"/>
+                            <!-- 非洲大陆 -->
+                            <path d="M 445,165 L 525,160 L 565,185 L 590,240 L 565,285 L 535,370 L 495,430 L 465,375 L 430,310 L 405,245 L 415,195 Z"/>
+                            <!-- 马达加斯加 -->
+                            <path d="M 575,340 L 590,345 L 580,390 L 565,380 Z"/>
+                            <!-- 亚欧大陆与中亚/东亚 -->
+                            <path d="M 565,60 L 635,50 L 715,40 L 795,45 L 870,65 L 905,95 L 885,135 L 845,150 L 815,180 L 830,225 L 800,255 L 755,270 L 730,250 L 710,215 L 675,235 L 635,225 L 605,185 L 585,155 L 565,120 Z"/>
+                            <!-- 日本列岛 -->
+                            <path d="M 865,130 L 880,140 L 870,180 L 855,165 Z"/>
+                            <!-- 东南亚/印尼群岛 -->
+                            <path d="M 740,285 L 790,280 L 840,295 L 835,315 L 775,310 Z"/>
+                            <!-- 澳洲大陆 -->
+                            <path d="M 780,335 L 860,330 L 890,375 L 875,430 L 815,435 L 770,395 Z"/>
+                            <!-- 新西兰 -->
+                            <path d="M 910,420 L 925,430 L 905,470 L 895,455 Z"/>
                         </g>
                         <!-- 动态威胁航线与击中光晕层 -->
                         <g id="svg-attack-trajectories"></g>
-                        <!-- 本机靶点中心位置 (东亚节点 x=770, y=165) -->
+                        <!-- 本机靶点中心守护核心 (x=770, y=165) -->
                         <g transform="translate(770, 165)">
-                            <circle r="18" fill="url(#target-pulse-glow)">
-                                <animate attributeName="r" values="10;22;10" dur="2.4s" repeatCount="indefinite"/>
-                                <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2.4s" repeatCount="indefinite"/>
+                            <circle r="20" fill="url(#target-pulse-glow)">
+                                <animate attributeName="r" values="12;26;12" dur="2.4s" repeatCount="indefinite"/>
+                                <animate attributeName="opacity" values="0.85;0.15;0.85" dur="2.4s" repeatCount="indefinite"/>
                             </circle>
-                            <circle r="4" fill="#007aff" stroke="#ffffff" stroke-width="1.5"/>
-                            <text x="8" y="4" fill="#64d2ff" font-size="10" font-weight="bold" font-family="sans-serif">🛡️ 本机安全节点</text>
+                            <circle r="4.5" fill="#007aff" stroke="#ffffff" stroke-width="1.8"/>
+                            <text x="10" y="4" fill="#64d2ff" font-size="10" font-weight="bold" font-family="sans-serif">🛡️ 本机防御节点</text>
                         </g>
                     </svg>
-                    <!-- 地图悬浮信息卡 -->
-                    <div id="map-hover-tooltip" style="position: absolute; display: none; background: rgba(20,20,24,0.92); backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--text); pointer-events: none; z-index: 10; box-shadow: var(--shadow-md);"></div>
+                    <!-- 地图右下角点击提示 -->
+                    <div style="position: absolute; right: 12px; bottom: 10px; background: rgba(0,0,0,0.6); padding: 4px 10px; border-radius: 6px; font-size: 10px; color: var(--text-sec); backdrop-filter: blur(8px); border: 1px solid var(--border-subtle); pointer-events: none;">
+                        💡 点击地图任意位置打开交互巨幕
+                    </div>
                 </div>
             </div>
 
@@ -2276,6 +2290,116 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
 
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;">
+            <button class="pill-btn" onclick="closeModals()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 全球威胁态势巨幕全景交互地图 (Full Interactive Threat Map Modal) -->
+<div class="modal-overlay" id="modal-map-detail">
+    <div class="modal-sheet" style="max-width: 1100px; width: 96%; max-height: 90vh; display: flex; flex-direction: column; padding: 18px 20px; border-radius: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 10px; flex-shrink: 0;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 24px;">🌐</span>
+                <div>
+                    <h3 style="font-size: 17px; font-weight: 800; margin: 0; color: var(--text);">全球威胁态势全景溯源地图</h3>
+                    <div style="font-size: 11px; color: var(--text-sec); margin-top: 2px;">全精度高保真地理矢量投影 · 点击任意攻击源国家或飞线节点查看威胁情报</div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="modal-map-active-badge" class="tag accent" style="font-size: 11px;">0 个活跃来源国</span>
+                <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:20px; cursor:pointer; padding: 4px 8px;">✕</button>
+            </div>
+        </div>
+
+        <!-- 巨幕地图核心渲染区 -->
+        <div style="position: relative; width: 100%; height: 440px; background: radial-gradient(circle at 50% 50%, #151d2f 0%, #070a12 100%); border-radius: 14px; overflow: hidden; border: 1px solid var(--border-subtle); flex-shrink: 0;">
+            <svg id="modal-threat-world-map-svg" viewBox="0 0 1000 500" style="width: 100%; height: 100%; display: block;" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                    <radialGradient id="modal-target-pulse-glow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#007aff" stop-opacity="0.9"/>
+                        <stop offset="60%" stop-color="#5856d6" stop-opacity="0.4"/>
+                        <stop offset="100%" stop-color="#007aff" stop-opacity="0"/>
+                    </radialGradient>
+                    <linearGradient id="modal-attack-beam-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stop-color="#ff3b30" stop-opacity="0.95"/>
+                        <stop offset="70%" stop-color="#ff9500" stop-opacity="0.7"/>
+                        <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.3"/>
+                    </linearGradient>
+                </defs>
+                <!-- 经纬度网格线 -->
+                <g stroke="rgba(255,255,255,0.05)" stroke-width="0.7" stroke-dasharray="3,3">
+                    <line x1="0" y1="100" x2="1000" y2="100"/><line x1="0" y1="200" x2="1000" y2="200"/><line x1="0" y1="300" x2="1000" y2="300"/><line x1="0" y1="400" x2="1000" y2="400"/>
+                    <line x1="166" y1="0" x2="166" y2="500"/><line x1="333" y1="0" x2="333" y2="500"/><line x1="500" y1="0" x2="500" y2="500"/><line x1="666" y1="0" x2="666" y2="500"/><line x1="833" y1="0" x2="833" y2="500"/>
+                </g>
+                <!-- 精细化全球各大洲陆地底图 -->
+                <g fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="0.8">
+                    <!-- 北美大陆 -->
+                    <path d="M 100,45 L 130,40 L 165,30 L 220,25 L 290,20 L 310,35 L 300,55 L 275,60 L 260,80 L 295,95 L 305,130 L 275,150 L 260,190 L 225,225 L 205,245 L 180,215 L 165,225 L 145,190 L 130,175 L 105,145 L 85,120 L 80,85 Z"/>
+                    <!-- 格陵兰 -->
+                    <path d="M 320,15 L 375,10 L 400,25 L 380,65 L 335,60 L 315,35 Z"/>
+                    <!-- 南美大陆 -->
+                    <path d="M 215,250 L 245,245 L 285,255 L 335,280 L 350,315 L 330,370 L 290,440 L 265,475 L 245,470 L 250,420 L 230,360 L 210,300 L 205,270 Z"/>
+                    <!-- 欧陆 -->
+                    <path d="M 455,60 L 490,45 L 530,45 L 555,65 L 545,85 L 575,100 L 550,135 L 525,145 L 505,135 L 485,155 L 450,155 L 435,135 L 440,105 L 420,95 L 430,75 Z"/>
+                    <!-- 不列颠群岛 -->
+                    <path d="M 430,80 L 445,75 L 440,95 L 425,100 Z"/>
+                    <!-- 非洲大陆 -->
+                    <path d="M 445,165 L 525,160 L 565,185 L 590,240 L 565,285 L 535,370 L 495,430 L 465,375 L 430,310 L 405,245 L 415,195 Z"/>
+                    <!-- 马达加斯加 -->
+                    <path d="M 575,340 L 590,345 L 580,390 L 565,380 Z"/>
+                    <!-- 亚欧大陆与中亚/东亚 -->
+                    <path d="M 565,60 L 635,50 L 715,40 L 795,45 L 870,65 L 905,95 L 885,135 L 845,150 L 815,180 L 830,225 L 800,255 L 755,270 L 730,250 L 710,215 L 675,235 L 635,225 L 605,185 L 585,155 L 565,120 Z"/>
+                    <!-- 日本列岛 -->
+                    <path d="M 865,130 L 880,140 L 870,180 L 855,165 Z"/>
+                    <!-- 东南亚/印尼群岛 -->
+                    <path d="M 740,285 L 790,280 L 840,295 L 835,315 L 775,310 Z"/>
+                    <!-- 澳洲大陆 -->
+                    <path d="M 780,335 L 860,330 L 890,375 L 875,430 L 815,435 L 770,395 Z"/>
+                    <!-- 新西兰 -->
+                    <path d="M 910,420 L 925,430 L 905,470 L 895,455 Z"/>
+                </g>
+                <!-- 动态威胁飞线与光晕层 (Modal) -->
+                <g id="modal-svg-attack-trajectories"></g>
+                <!-- 靶点中心守护核心 (x=770, y=165) -->
+                <g transform="translate(770, 165)">
+                    <circle r="24" fill="url(#modal-target-pulse-glow)">
+                        <animate attributeName="r" values="14;30;14" dur="2.4s" repeatCount="indefinite"/>
+                        <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.4s" repeatCount="indefinite"/>
+                    </circle>
+                    <circle r="5.5" fill="#007aff" stroke="#ffffff" stroke-width="2"/>
+                    <text x="12" y="5" fill="#64d2ff" font-size="11" font-weight="800" font-family="sans-serif">🛡️ 本机防御节点</text>
+                </g>
+            </svg>
+            <!-- 弹窗悬浮气泡 -->
+            <div id="modal-map-tooltip" style="position: absolute; display: none; background: rgba(15,18,26,0.95); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); pointer-events: none; z-index: 20; box-shadow: 0 12px 32px rgba(0,0,0,0.5);"></div>
+        </div>
+
+        <!-- 底部威胁来源国家与实体联动明细卡 -->
+        <div style="margin-top: 14px; flex: 1; min-height: 0; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-weight: 700; font-size: 12px; color: var(--text);">🎯 活跃威胁发起源与国家分布明细（点击任意国家行可高亮联动定位）</span>
+                <span style="font-size: 11px; color: var(--text-sec);">共 <b id="modal-map-total-countries" style="color: var(--accent);">0</b> 个攻击来源地区</span>
+            </div>
+            <div style="flex: 1; max-height: 180px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec); position: sticky; top: 0; z-index: 2;">
+                            <th style="padding: 8px 12px;">来源国家/地区</th>
+                            <th style="padding: 8px 12px;">探测拦截频次</th>
+                            <th style="padding: 8px 12px;">代表性探测源 IP</th>
+                            <th style="padding: 8px 12px;">主要命中服务</th>
+                            <th style="padding: 8px 12px; text-align: right;">快捷联动</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modal-map-country-tbody">
+                        <tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">正在加载威胁来源数据...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; flex-shrink: 0;">
             <button class="pill-btn" onclick="closeModals()">关闭</button>
         </div>
     </div>
@@ -6643,85 +6767,214 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // ================== 新增：全球威胁态势地图渲染 ==================
+    // ================== 新增：全球威胁态势地图渲染 (高保真交互版) ==================
     const COUNTRY_COORDINATES = {
-        'CN': { x: 740, y: 190, name: '中国' },
-        'US': { x: 220, y: 160, name: '美国' },
-        'RU': { x: 680, y: 100, name: '俄罗斯' },
-        'DE': { x: 500, y: 130, name: '德国' },
-        'NL': { x: 485, y: 125, name: '荷兰' },
-        'GB': { x: 470, y: 120, name: '英国' },
-        'FR': { x: 475, y: 145, name: '法国' },
-        'KR': { x: 790, y: 175, name: '韩国' },
-        'JP': { x: 825, y: 170, name: '日本' },
-        'SG': { x: 720, y: 280, name: '新加坡' },
-        'HK': { x: 745, y: 215, name: '香港' },
-        'TW': { x: 765, y: 210, name: '台湾' },
-        'IN': { x: 650, y: 220, name: '印度' },
-        'BR': { x: 310, y: 340, name: '巴西' },
-        'AU': { x: 830, y: 360, name: '澳大利亚' },
-        'CA': { x: 200, y: 110, name: '加拿大' },
-        'VN': { x: 725, y: 235, name: '越南' },
-        'ID': { x: 760, y: 300, name: '印尼' },
-        'UA': { x: 550, y: 135, name: '乌克兰' }
+        'CN': { x: 740, y: 190, name: '中国', flag: '🇨🇳' },
+        'US': { x: 220, y: 160, name: '美国', flag: '🇺🇸' },
+        'RU': { x: 680, y: 100, name: '俄罗斯', flag: '🇷🇺' },
+        'DE': { x: 500, y: 130, name: '德国', flag: '🇩🇪' },
+        'NL': { x: 485, y: 125, name: '荷兰', flag: '🇳🇱' },
+        'GB': { x: 470, y: 120, name: '英国', flag: '🇬🇧' },
+        'FR': { x: 475, y: 145, name: '法国', flag: '🇫🇷' },
+        'KR': { x: 790, y: 175, name: '韩国', flag: '🇰🇷' },
+        'JP': { x: 825, y: 170, name: '日本', flag: '🇯🇵' },
+        'SG': { x: 720, y: 280, name: '新加坡', flag: '🇸🇬' },
+        'HK': { x: 745, y: 215, name: '中国香港', flag: '🇭🇰' },
+        'TW': { x: 765, y: 210, name: '中国台湾', flag: '🇹🇼' },
+        'IN': { x: 650, y: 220, name: '印度', flag: '🇮🇳' },
+        'BR': { x: 310, y: 340, name: '巴西', flag: '🇧🇷' },
+        'AU': { x: 830, y: 360, name: '澳大利亚', flag: '🇦🇺' },
+        'CA': { x: 200, y: 110, name: '加拿大', flag: '🇨🇦' },
+        'VN': { x: 725, y: 235, name: '越南', flag: '🇻🇳' },
+        'ID': { x: 760, y: 300, name: '印度尼西亚', flag: '🇮🇩' },
+        'UA': { x: 550, y: 135, name: '乌克兰', flag: '🇺🇦' },
+        'IT': { x: 495, y: 155, name: '意大利', flag: '🇮🇹' },
+        'ES': { x: 450, y: 160, name: '西班牙', flag: '🇪🇸' },
+        'PL': { x: 520, y: 125, name: '波兰', flag: '🇵🇱' },
+        'SE': { x: 510, y: 85, name: '瑞典', flag: '🇸🇪' },
+        'FI': { x: 540, y: 75, name: '芬兰', flag: '🇫🇮' },
+        'NO': { x: 490, y: 80, name: '挪威', flag: '🇳🇴' },
+        'CH': { x: 488, y: 140, name: '瑞士', flag: '🇨🇭' },
+        'AT': { x: 510, y: 140, name: '奥地利', flag: '🇦🇹' },
+        'TR': { x: 575, y: 170, name: '土耳其', flag: '🇹🇷' },
+        'IR': { x: 615, y: 185, name: '伊朗', flag: '🇮🇷' },
+        'SA': { x: 590, y: 225, name: '沙特阿拉伯', flag: '🇸🇦' },
+        'AE': { x: 625, y: 220, name: '阿联酋', flag: '🇦🇪' },
+        'TH': { x: 715, y: 240, name: '泰国', flag: '🇹🇭' },
+        'MY': { x: 720, y: 275, name: '马来西亚', flag: '🇲🇾' },
+        'PH': { x: 785, y: 250, name: '菲律宾', flag: '🇵🇭' },
+        'ZA': { x: 525, y: 410, name: '南非', flag: '🇿🇦' },
+        'EG': { x: 535, y: 200, name: '埃及', flag: '🇪🇬' },
+        'MX': { x: 175, y: 215, name: '墨西哥', flag: '🇲🇽' },
+        'AR': { x: 280, y: 430, name: '阿根廷', flag: '🇦🇷' },
+        'CL': { x: 245, y: 415, name: '智利', flag: '🇨🇱' },
+        'CO': { x: 230, y: 265, name: '哥伦比亚', flag: '🇨🇴' },
+        'NZ': { x: 910, y: 440, name: '新西兰', flag: '🇳🇿' },
+        'IE': { x: 435, y: 110, name: '爱尔兰', flag: '🇮🇪' },
+        'IL': { x: 555, y: 195, name: '以色列', flag: '🇮🇱' }
     };
 
+    let latestThreatEventsCache = [];
+
+    function findCountryCoordinate(cName) {
+        if (!cName) return null;
+        for (const [code, info] of Object.entries(COUNTRY_COORDINATES)) {
+            if (cName.includes(info.name) || cName.toUpperCase().includes(code)) {
+                return info;
+            }
+        }
+        // 伪随机均匀散列散点
+        let hash = 0;
+        for (let i = 0; i < cName.length; i++) hash = (hash * 31 + cName.charCodeAt(i)) & 0xffffffff;
+        const pseudoX = 140 + Math.abs(hash % 720);
+        const pseudoY = 80 + Math.abs((hash >> 3) % 320);
+        return { x: pseudoX, y: pseudoY, name: cName, flag: '🌐' };
+    }
+
     function renderWorldThreatMap(events) {
+        latestThreatEventsCache = events || [];
         const svgContainer = document.getElementById('svg-attack-trajectories');
         if (!svgContainer) return;
         const targetX = 770;
         const targetY = 165;
 
-        // 统计来源国家频次
-        const countryCounts = {};
-        (events || []).slice(0, 40).forEach(ev => {
-            const c = ev.country || '';
+        const countryStats = {};
+        (events || []).slice(0, 50).forEach(ev => {
+            const c = (ev.country || '').trim();
             if (c) {
-                countryCounts[c] = (countryCounts[c] || 0) + 1;
+                if (!countryStats[c]) {
+                    countryStats[c] = { count: 0, sample_ip: ev.ip, ports: new Set() };
+                }
+                countryStats[c].count++;
+                if (ev.port) countryStats[c].ports.add(ev.port);
             }
         });
 
         let svgHtml = '';
-        Object.entries(countryCounts).forEach(([cName, count]) => {
-            // 查找对应坐标
-            let coord = null;
-            for (const [code, info] of Object.entries(COUNTRY_COORDINATES)) {
-                if (cName.includes(info.name) || cName.toUpperCase().includes(code)) {
-                    coord = info;
-                    break;
-                }
-            }
-            if (!coord) {
-                // 离散伪随机散列散点
-                let hash = 0;
-                for (let i = 0; i < cName.length; i++) hash = (hash * 31 + cName.charCodeAt(i)) & 0xffffffff;
-                const pseudoX = 150 + Math.abs(hash % 700);
-                const pseudoY = 90 + Math.abs((hash >> 3) % 300);
-                coord = { x: pseudoX, y: pseudoY, name: cName };
-            }
-
-            // 贝塞尔飞线控制点
+        Object.entries(countryStats).forEach(([cName, stat]) => {
+            const count = stat.count;
+            const coord = findCountryCoordinate(cName);
             const midX = (coord.x + targetX) / 2;
-            const midY = Math.min(coord.y, targetY) - 35 - Math.min(60, count * 2);
+            const midY = Math.min(coord.y, targetY) - 30 - Math.min(65, count * 2.2);
             const pathD = `M ${coord.x} ${coord.y} Q ${midX} ${midY} ${targetX} ${targetY}`;
+            const dotR = Math.min(10, 4 + count * 0.8);
 
-            // 发起源光晕点
             svgHtml += `
-            <g style="cursor: pointer;" onclick="filterLogs('${escapeHtml(coord.name)}')">
-                <circle cx="${coord.x}" cy="${coord.y}" r="${Math.min(10, 4 + count)}" fill="rgba(255, 59, 48, 0.4)">
-                    <animate attributeName="r" values="3;${Math.min(12, 5 + count)};3" dur="2s" repeatCount="indefinite"/>
-                    <animate attributeName="opacity" values="0.8;0.3;0.8" dur="2s" repeatCount="indefinite"/>
+            <g style="cursor: pointer;" onclick="event.stopPropagation(); openThreatMapDetailModal();" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
+                <circle cx="${coord.x}" cy="${coord.y}" r="${dotR}" fill="rgba(255, 59, 48, 0.45)">
+                    <animate attributeName="r" values="3;${dotR + 5};3" dur="2.2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.9;0.25;0.9" dur="2.2s" repeatCount="indefinite"/>
                 </circle>
-                <circle cx="${coord.x}" cy="${coord.y}" r="3" fill="#ff3b30"/>
-                <!-- 威胁飞线 -->
-                <path d="${pathD}" fill="none" stroke="url(#attack-beam-gradient)" stroke-width="${Math.min(2.5, 1 + count * 0.3)}" stroke-dasharray="6,4" opacity="0.85">
-                    <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2.5s" repeatCount="indefinite"/>
+                <circle cx="${coord.x}" cy="${coord.y}" r="3.5" fill="#ff3b30" stroke="#ffffff" stroke-width="0.8"/>
+                <path d="${pathD}" fill="none" stroke="url(#attack-beam-gradient)" stroke-width="${Math.min(2.6, 1 + count * 0.25)}" stroke-dasharray="6,4" opacity="0.88">
+                    <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2.4s" repeatCount="indefinite"/>
                 </path>
-                <text x="${coord.x}" y="${coord.y - 7}" fill="#ff9500" font-size="9" font-weight="bold" text-anchor="middle">${escapeHtml(coord.name)} (${count})</text>
+                <text x="${coord.x}" y="${coord.y - 8}" fill="#ffd60a" font-size="9" font-weight="800" text-anchor="middle" style="text-shadow: 0 1px 3px rgba(0,0,0,0.8);">${escapeHtml(coord.name)} (${count})</text>
             </g>
             `;
         });
         svgContainer.innerHTML = svgHtml;
+    }
+
+    function openThreatMapDetailModal() {
+        const modal = document.getElementById('modal-map-detail');
+        if (!modal) return;
+        modal.style.display = 'flex';
+
+        const svgModalContainer = document.getElementById('modal-svg-attack-trajectories');
+        const targetX = 770;
+        const targetY = 165;
+        const events = latestThreatEventsCache || allEvents || [];
+
+        const countryStats = {};
+        events.forEach(ev => {
+            const c = (ev.country || '').trim();
+            if (c) {
+                if (!countryStats[c]) {
+                    countryStats[c] = { count: 0, sample_ip: ev.ip, ips: new Set(), ports: new Set() };
+                }
+                countryStats[c].count++;
+                if (ev.ip) countryStats[c].ips.add(ev.ip);
+                if (ev.port) countryStats[c].ports.add(ev.port);
+            }
+        });
+
+        const sortedCountries = Object.entries(countryStats).sort((a, b) => b[1].count - a[1].count);
+
+        document.getElementById('modal-map-active-badge').innerText = `${sortedCountries.length} 个活跃来源国`;
+        document.getElementById('modal-map-total-countries').innerText = sortedCountries.length;
+
+        // 渲染巨幕 SVG 飞线与发起源
+        let svgModalHtml = '';
+        sortedCountries.forEach(([cName, stat]) => {
+            const count = stat.count;
+            const coord = findCountryCoordinate(cName);
+            const midX = (coord.x + targetX) / 2;
+            const midY = Math.min(coord.y, targetY) - 35 - Math.min(75, count * 2.5);
+            const pathD = `M ${coord.x} ${coord.y} Q ${midX} ${midY} ${targetX} ${targetY}`;
+            const dotR = Math.min(13, 5 + count * 0.9);
+
+            svgModalHtml += `
+            <g id="map-modal-country-${escapeHtml(cName)}" style="cursor: pointer;" onclick="highlightThreatCountry('${escapeHtml(cName)}')" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
+                <circle cx="${coord.x}" cy="${coord.y}" r="${dotR}" fill="rgba(255, 59, 48, 0.4)">
+                    <animate attributeName="r" values="4;${dotR + 7};4" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.85;0.2;0.85" dur="2s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="${coord.x}" cy="${coord.y}" r="4" fill="#ff453a" stroke="#ffffff" stroke-width="1.2"/>
+                <path d="${pathD}" fill="none" stroke="url(#modal-attack-beam-gradient)" stroke-width="${Math.min(3, 1.2 + count * 0.3)}" stroke-dasharray="8,4" opacity="0.9">
+                    <animate attributeName="stroke-dashoffset" from="120" to="0" dur="2.2s" repeatCount="indefinite"/>
+                </path>
+                <text x="${coord.x}" y="${coord.y - 10}" fill="#ffd60a" font-size="10" font-weight="800" text-anchor="middle" style="text-shadow: 0 2px 4px rgba(0,0,0,0.9);">${coord.flag || ''} ${escapeHtml(coord.name)} (${count})</text>
+            </g>
+            `;
+        });
+        if (svgModalContainer) svgModalContainer.innerHTML = svgModalHtml;
+
+        // 渲染底部国家明细表格
+        const tbody = document.getElementById('modal-map-country-tbody');
+        if (!tbody) return;
+        if (sortedCountries.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">暂无捕获到地域威胁样本</td></tr>';
+            return;
+        }
+
+        let tableHtml = '';
+        sortedCountries.forEach(([cName, stat]) => {
+            const coord = findCountryCoordinate(cName);
+            const portList = Array.from(stat.ports).slice(0, 4).join(', ') || '多端口扫描';
+            tableHtml += `
+            <tr id="row-map-country-${escapeHtml(cName)}" style="border-bottom: 1px solid var(--border-subtle); transition: background 0.15s ease;">
+                <td style="padding: 10px 12px; font-weight: 700; color: var(--text);">
+                    <span style="font-size: 14px; margin-right: 4px;">${coord.flag || '🌐'}</span>
+                    <span>${escapeHtml(coord.name)}</span>
+                </td>
+                <td style="padding: 10px 12px; font-weight: 800; color: var(--accent); font-size: 13px;">
+                    ${stat.count.toLocaleString()} 次
+                </td>
+                <td style="padding: 10px 12px; font-family: monospace; font-size: 12px; font-weight: 700;">
+                    <span class="ip-text" onclick="showIPDetail('${escapeHtml(stat.sample_ip)}')">${escapeHtml(stat.sample_ip)}</span>
+                    ${stat.ips.size > 1 ? `<span style="font-size: 10px; color: var(--text-sec); margin-left: 4px;">等 ${stat.ips.size} 个IP</span>` : ''}
+                </td>
+                <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec);">
+                    ${escapeHtml(portList)}
+                </td>
+                <td style="padding: 10px 12px; text-align: right;">
+                    <button class="pill-btn accent" onclick="closeModals(); filterLogs('${escapeHtml(cName)}');" style="padding: 3px 8px; font-size: 11px;">🔍 查看该国日志</button>
+                </td>
+            </tr>
+            `;
+        });
+        tbody.innerHTML = tableHtml;
+    }
+
+    function highlightThreatCountry(cName) {
+        showToast(`已定位国家: ${cName}`, '📍');
+        const row = document.getElementById(`row-map-country-${cName}`);
+        if (row) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            row.style.background = 'rgba(0, 122, 255, 0.2)';
+            setTimeout(() => { row.style.background = 'transparent'; }, 2000);
+        }
     }
 
     async function batchBanAllProbes() {
