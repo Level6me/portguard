@@ -268,17 +268,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             align-items: center;
             margin-bottom: 14px;
             gap: 10px;
+            flex-wrap: wrap;
         }
         .analytics-filter-row {
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
         @media (max-width: 768px) {
             .analytics-subtab-bar {
                 flex-direction: column;
-                align-items: flex-start;
-                gap: 8px;
+                align-items: stretch;
+                gap: 10px;
             }
             .analytics-filter-row {
                 width: 100%;
@@ -821,9 +823,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
         <div class="analytics-subtab-bar">
             <!-- 模式切换分段按钮 (采用与访问日志一致的胶囊拟态设计) -->
-            <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
-                <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 态势概览</button>
-                <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维分析</button>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
+                    <button class="pill-btn accent" id="subtab-btn-overview" onclick="switchOverviewSubTab('overview', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700;">📊 态势概览</button>
+                    <button class="pill-btn" id="subtab-btn-analysis" onclick="switchOverviewSubTab('analysis', this)" style="padding: 4px 12px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🔬 多维分析</button>
+                </div>
+                <!-- 态势概览子页常驻：C2 出站失陷感知徽标与即时检测 -->
+                <div id="c2-global-bar" style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    <div id="c2-health-badge" style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3);" title="反向检测本机是否存在连接境外/恶意 C2 僵尸网络或失陷木马的异常出站">
+                        <span class="status-dot" style="width: 6px; height: 6px; background: var(--success);"></span>
+                        <span id="c2-status-text">C2: 安全</span>
+                    </div>
+                    <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="padding: 3px 8px; font-size: 11px;" title="立即执行内核级反向 C2 信标连接排查">检测出站</button>
+                </div>
             </div>
             <div id="analytics-toolbar" class="analytics-filter-row" style="display: none;">
                 <div class="segmented-control" style="background: var(--card); border: 1px solid var(--border);">
@@ -857,21 +869,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看今日拦截记录">
                     <div class="val-sub" style="color:var(--warning);">⚡ 今日拦截探测</div>
                     <div class="val-big" id="stat-today" style="color: var(--warning);">--</div>
-                    <div class="val-sub">威胁特征自动识别</div>
+                    <div class="val-sub">今日拦截恶意连接</div>
                 </div>
-                <div class="card interactive" onclick="switchTab('traps')" title="点击管理防护规则">
-                    <div class="val-sub" style="color:var(--accent);">🛡️ 活跃防御端口</div>
-                    <div class="val-big" id="stat-traps" style="color: var(--accent);">--</div>
-                    <div class="val-sub">生产业务端口自动避让</div>
+                <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看持续活跃威胁源">
+                    <div class="val-sub" style="color:var(--primary);">🎯 威胁来源 IP</div>
+                    <div class="val-big" id="stat-unique-ips" style="color: var(--primary);">--</div>
+                    <div class="val-sub">已定位独立攻击实体</div>
                 </div>
-                <div class="card interactive" onclick="switchTab('whitelist')" title="点击管理安全白名单">
-                    <div class="val-sub" style="color:var(--success);">🛡️ 信任白名单</div>
-                    <div class="val-big" id="stat-white" style="color: var(--success);">--</div>
-                    <div class="val-sub">管理与信任 IP 放行保护</div>
+                <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看防御集群联防规模">
+                    <div class="val-sub" style="color:var(--success);">🌐 集群联防节点</div>
+                    <div class="val-big" id="stat-cluster-nodes" style="color: var(--success);">1</div>
+                    <div class="val-sub">多机全网威胁情报同步</div>
                 </div>
             </div>
 
-            <!-- 24小时攻击趋势与端口排行图 -->
+            <!-- 24小时拦截趋势与目标端口分布 (Grid 2) -->
             <div class="grid-2">
                 <div class="card">
                     <div class="card-header">
@@ -883,17 +895,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div style="height: 200px;"><canvas id="trendChart"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
+                    <div class="card-header">
                         <div>
                             <div class="card-title">🎯 目标端口拦截排行 Top 5</div>
                             <div class="val-sub">受探测服务类型分布</div>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                            <div id="c2-health-badge" style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3);">
-                                <span class="status-dot" style="width: 6px; height: 6px; background: var(--success);"></span>
-                                <span id="c2-status-text">C2: 安全</span>
-                            </div>
-                            <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="padding: 3px 8px; font-size: 11px;">检测出站</button>
                         </div>
                     </div>
                     <div style="height: 200px;"><canvas id="portChart"></canvas></div>
@@ -2933,14 +2938,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (ctxPort) {
             const portPalette = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#ffd60a'];
             analyticsPortChartInstance = new Chart(ctxPort, {
-                type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: portPalette, borderWidth: 0 }] },
+                type: 'bar',
+                data: { labels: [], datasets: [{ label: '拦截探测频次', data: [], backgroundColor: portPalette, borderRadius: 4 }] },
                 options: {
+                    indexAxis: 'y',
                     responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 9 } } },
+                        y: { grid: { display: false }, ticks: { color: textColor, font: { size: 10, weight: 600 } } }
+                    }
                 }
             });
-            applyDoughnutInteractive(analyticsPortChartInstance, portPalette);
+            applyBarInteractive(analyticsPortChartInstance, portPalette);
         }
 
         const ctxHttp = document.getElementById('analyticsHttpStatusChart')?.getContext('2d');
@@ -2988,6 +2998,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const subviewOverview = document.getElementById('subview-overview');
         const subviewAnalysis = document.getElementById('subview-analysis');
         const toolbar = document.getElementById('analytics-toolbar');
+        const c2Bar = document.getElementById('c2-global-bar');
         const btnOverview = document.getElementById('subtab-btn-overview');
         const btnAnalysis = document.getElementById('subtab-btn-analysis');
 
@@ -2997,6 +3008,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (subviewOverview) subviewOverview.style.display = 'block';
             if (subviewAnalysis) subviewAnalysis.style.display = 'none';
             if (toolbar) toolbar.style.display = 'none';
+            if (c2Bar) c2Bar.style.display = 'inline-flex';
             fetchData(false);
         } else {
             if (btnOverview) { btnOverview.className = 'pill-btn'; btnOverview.style.background = 'transparent'; }
@@ -3004,6 +3016,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (subviewOverview) subviewOverview.style.display = 'none';
             if (subviewAnalysis) subviewAnalysis.style.display = 'block';
             if (toolbar) toolbar.style.display = 'flex';
+            if (c2Bar) c2Bar.style.display = 'none';
             
             // 确保在父容器 display: block 可见之后初始化或重算尺寸
             initAnalyticsCharts();
@@ -3101,9 +3114,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 analyticsActionChartInstance.update();
             }
 
-            // 8. Port Distribution (目标端口分析)
+            // 8. Port Distribution (目标端口分析 - 横向条形图)
             if (data.port_distribution && analyticsPortChartInstance && data.port_distribution.length > 0) {
-                analyticsPortChartInstance.data.labels = data.port_distribution.map(p => `${p.port} (${p.name || '探测'}) - ${p.count}次`);
+                analyticsPortChartInstance.data.labels = data.port_distribution.map(p => `${p.port} (${p.name || '探测'})`);
                 analyticsPortChartInstance.data.datasets[0].data = data.port_distribution.map(p => p.count);
                 analyticsPortChartInstance._selectedCategoryIndex = -1;
                 analyticsPortChartInstance.resize();
@@ -3672,26 +3685,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             unbanIP(currentDetailIP);
             closeModals();
         } else {
+            if (isPotentialSelfLockoutIP(currentDetailIP)) {
+                alert(`⚠️ 防自锁保护拦截：IP [${currentDetailIP}] 属于本地回环、控制台访问地址或信任白名单，严禁封禁！`);
+                return;
+            }
             if (banBtn) { banBtn.disabled = true; banBtn.innerText = '正在封禁...'; }
             fetch('/api/ban', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ip: currentDetailIP, reason: '控制台快速封禁' })
             }).then(res => res.json()).then(res => {
-                showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
-                if (!allBlacklist) allBlacklist = [];
-                if (!allBlacklist.some(b => b.ip === currentDetailIP)) {
-                    allBlacklist.unshift({
-                        ip: currentDetailIP,
-                        reason: '控制台快速封禁',
-                        country: currentDetailMeta.country || '手动添加',
-                        level: '极高危',
-                        ban_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
-                        source_node: '本机'
-                    });
+                if (res.success) {
+                    showToast(res.msg || `已成功封禁 IP: ${currentDetailIP}`, '🚫');
+                    if (!allBlacklist) allBlacklist = [];
+                    if (!allBlacklist.some(b => b.ip === currentDetailIP)) {
+                        allBlacklist.unshift({
+                            ip: currentDetailIP,
+                            reason: '控制台快速封禁',
+                            country: currentDetailMeta.country || '手动添加',
+                            level: '极高危',
+                            ban_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
+                            source_node: '本机'
+                        });
+                    }
+                    closeModals();
+                    fetchData(false);
+                } else {
+                    if (banBtn) { banBtn.disabled = false; banBtn.innerText = '🚫 封禁此 IP'; }
+                    showToast(res.msg || '封禁失败', '⚠️');
                 }
-                closeModals();
-                fetchData(false);
             }).catch(err => {
                 if (banBtn) { banBtn.disabled = false; banBtn.innerText = '🚫 封禁此 IP'; }
                 showToast('封禁请求失败: ' + (err.message || '网络异常'), '⚠️');
@@ -5024,15 +5046,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     }
 
+    function isPotentialSelfLockoutIP(ip) {
+        if (!ip) return false;
+        const clean = ip.trim().toLowerCase();
+        if (clean === '127.0.0.1' || clean === '::1' || clean === 'localhost' || clean.startsWith('127.')) return true;
+        const curHost = window.location.hostname;
+        if (curHost && curHost !== 'localhost' && clean === curHost) return true;
+        if (allWhitelist && allWhitelist.some(w => (w.ip || w) === clean)) return true;
+        return false;
+    }
+
     function quickBanIP(ip, reason) {
-        if (!confirm(`确定要立即将 ${ip} 下发至内核黑名单并同步全网封禁吗？`)) return;
+        if (isPotentialSelfLockoutIP(ip)) {
+            alert(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台主机或安全信任白名单，严禁封禁！`);
+            return;
+        }
+        if (!confirm(`确定要立即将 ${ip} 下发至内核黑名单并永久全网封禁吗？`)) return;
         fetch('/api/ban', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ip, reason: reason || '手动封禁观察中IP' })
         }).then(res => res.json()).then(res => {
-            showToast(res.msg || `已成功封禁 IP: ${ip}`, '🚫');
-            fetchData(false);
+            if (res.success) {
+                showToast(res.msg || `已成功封禁 IP: ${ip}`, '🚫');
+                fetchData(false);
+            } else {
+                showToast(res.msg || '封禁失败', '⚠️');
+            }
         }).catch(err => {
             showToast('封禁请求失败: ' + err.message, '⚠️');
         });
@@ -5052,14 +5092,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const ip = document.getElementById('ban-ip-val').value.trim();
         const reason = document.getElementById('ban-reason-val').value.trim();
         if (!ip) return showToast('请输入目标 IP', '⚠️');
+        if (isPotentialSelfLockoutIP(ip)) {
+            return alert(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台访问地址或信任白名单，严禁添加至黑名单！`);
+        }
         fetch('/api/ban', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ip, reason })
         }).then(res => res.json()).then(res => {
-            showToast(res.msg, '🚫');
-            closeModals();
-            fetchData(false);
+            if (res.success) {
+                showToast(res.msg, '🚫');
+                closeModals();
+                fetchData(false);
+            } else {
+                showToast(res.msg || '封禁操作被阻断', '⚠️');
+            }
+        }).catch(err => {
+            showToast('封禁请求失败: ' + err.message, '⚠️');
         });
     }
 
@@ -8212,8 +8261,17 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     return
                 ip = valid_ip
 
+                # 防自锁与白名单保护：当前控制台客户端、活跃SSH管理会话及安全白名单严禁封禁
+                client_ip = getattr(self, "client_address", ("", 0))[0]
+                if ip == client_ip:
+                    self._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 为当前登录控制台的客户端地址，触发管理员防自锁保护！"}, status=400)
+                    return
+                if ip_in_whitelist(ip):
+                    self._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 属于系统安全白名单或活跃管理会话，严禁封禁！"}, status=400)
+                    return
+
                 ban_ip(ip, reason=reason, category="manual", level="极高危")
-                self._send_json({"success": True, "msg": f"已成功封禁 IP: {ip}（已下发内核防火墙并同步集群协同阻断）"})
+                self._send_json({"success": True, "msg": f"已成功永久封禁 IP: {ip}（已下发内核防火墙并同步集群协同阻断）"})
                 return
 
             if path == "/api/defense/toggle_pause":
