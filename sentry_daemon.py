@@ -1991,38 +1991,52 @@ def get_system_ssh_ports():
     return ports
 
 def get_active_ssh_client_ips():
-    """动态探测当前系统所有活跃 SSH 会话的客户端 IP (防管理员自杀保护机制)"""
+    """动态探测当前系统真正已认证登录的管理员 SSH 客户端 IP (防管理员自杀保护机制)
+    注意：严禁直接使用原始 TCP ESTABLISHED 状态判断，因为外部爆破者在输入密码握手阶段 (Preauth)
+    也会处于 TCP ESTABLISHED 状态，若无差别放行会导致暴力破解攻击源获得临时白名单豁免。
+    """
     global _DYNAMIC_SSH_IPS_CACHE, _DYNAMIC_SSH_IPS_LAST_CHECK
     now = time.time()
     if (now - _DYNAMIC_SSH_IPS_LAST_CHECK < 5) and _DYNAMIC_SSH_IPS_CACHE:
         return _DYNAMIC_SSH_IPS_CACHE
     
     ips = set()
+    
+    # 1. 从 who 命令读取真正已登录终端的客户端 IP
     try:
-        # 1. 从 who 命令读取登录客户端 IP
         out = subprocess.check_output("who 2>/dev/null || true", shell=True, text=True)
         for line in out.splitlines():
             m = re.search(r'\(([\d\w\.\:]+)\)', line)
             if m:
-                clean_ip = m.group(1).split(':')[0].strip('[]')
+                clean_ip = m.group(1).split(':')[0].strip('[]').replace('::ffff:', '')
                 if clean_ip and not clean_ip.startswith("127."):
                     ips.add(clean_ip)
     except Exception:
         pass
-    
+
+    # 2. 从当前运行环境的 SSH_CLIENT / SSH_CONNECTION 读取
     try:
-        # 2. 从 ss 命令读取已建立的 SSH 连接来源
-        ssh_ports = get_system_ssh_ports()
-        port_filter = " or ".join([f"sport = :{p}" for p in ssh_ports])
-        cmd = f"ss -tn state established '( {port_filter} )' 2>/dev/null || true"
-        out = subprocess.check_output(cmd, shell=True, text=True)
-        for line in out.splitlines()[1:]:
+        for env_var in ("SSH_CLIENT", "SSH_CONNECTION"):
+            val = os.environ.get(env_var, "").strip()
+            if val:
+                c_ip = val.split()[0].replace('::ffff:', '')
+                if c_ip and not c_ip.startswith("127."):
+                    ips.add(c_ip)
+    except Exception:
+        pass
+
+    # 3. 跨进程检测已登录用户 (针对 systemd-logind 会话)
+    try:
+        out = subprocess.check_output("loginctl list-sessions --no-legend 2>/dev/null || true", shell=True, text=True)
+        for line in out.splitlines():
             parts = line.split()
-            if len(parts) >= 4:
-                peer = parts[3]
-                peer_ip = peer.rsplit(':', 1)[0].strip('[]').replace('::ffff:', '')
-                if peer_ip and not peer_ip.startswith("127."):
-                    ips.add(peer_ip)
+            if parts:
+                s_id = parts[0]
+                s_info = subprocess.check_output(f"loginctl show-session {s_id} -p RemoteHost 2>/dev/null || true", shell=True, text=True)
+                if "RemoteHost=" in s_info:
+                    r_host = s_info.split("RemoteHost=", 1)[1].strip()
+                    if r_host and not r_host.startswith("127."):
+                        ips.add(r_host.replace('::ffff:', ''))
     except Exception:
         pass
     
