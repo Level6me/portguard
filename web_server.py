@@ -913,7 +913,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="card-header">
                         <div class="card-title">🌍 威胁来源地域排行</div>
                     </div>
-                    <div id="geo-rank-box" style="padding-top: 4px;">正在统计地域流量...</div>
+                    <div id="geo-rank-box">正在统计地域流量...</div>
                 </div>
                 <div class="card">
                     <div class="card-header">
