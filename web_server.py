@@ -2440,25 +2440,39 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div id="modal-map-tooltip" style="position: absolute; display: none; background: rgba(15,18,26,0.95); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); pointer-events: none; z-index: 20; box-shadow: 0 12px 32px rgba(0,0,0,0.5);"></div>
             </div>
 
-            <!-- 右侧 (小屏下方): 威胁来源国家与实体联动明细卡 -->
+            <!-- 右侧 (小屏下方): 威胁来源地域与实体联动明细卡 -->
             <div class="threat-map-modal-aside">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-shrink: 0;">
-                    <span style="font-weight: 700; font-size: 12px; color: var(--text);">🎯 活跃威胁发起源与国家分布明细（点击可高亮联动）</span>
-                    <span style="font-size: 11px; color: var(--text-sec);">共 <b id="modal-map-total-countries" style="color: var(--accent);">0</b> 个攻击来源地区</span>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-shrink: 0; flex-wrap: wrap; gap: 6px;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-weight: 700; font-size: 12px; color: var(--text);">🎯 攻击溯源明细:</span>
+                        <!-- 聚合粒度切换胶囊 -->
+                        <div style="display: inline-flex; background: var(--card-sec); padding: 2px; border-radius: 8px; border: 1px solid var(--border-subtle);">
+                            <button id="btn-map-granularity-country" onclick="setThreatMapGranularity('country')" style="border: none; background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;">国家/地区</button>
+                            <button id="btn-map-granularity-city" onclick="setThreatMapGranularity('city')" style="border: none; background: transparent; color: var(--text-sec); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;">省份/城市</button>
+                            <button id="btn-map-granularity-ip" onclick="setThreatMapGranularity('ip')" style="border: none; background: transparent; color: var(--text-sec); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; cursor: pointer; transition: all 0.15s ease;">独立 IP 实体</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-sec);">
+                        共 <b id="modal-map-total-countries" style="color: var(--accent);">0</b> 项
+                    </div>
+                </div>
+                <!-- 联动筛选/层级返回提示条 -->
+                <div id="modal-map-filter-indicator" style="display: none; align-items: center; justify-content: space-between; background: rgba(0, 122, 255, 0.1); border: 1px solid rgba(0, 122, 255, 0.25); border-radius: 8px; padding: 5px 10px; margin-bottom: 8px; font-size: 11px; flex-shrink: 0;">
+                    <span style="color: var(--accent); font-weight: 700;" id="modal-map-filter-text">已按国家聚焦: 中国</span>
+                    <button onclick="clearThreatMapCountryFilter()" style="border: none; background: none; color: var(--accent); font-size: 11px; cursor: pointer; font-weight: 700; text-decoration: underline;">重置 / 显示全部</button>
                 </div>
                 <div class="threat-map-modal-table-wrap">
                     <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left;">
                         <thead>
-                            <tr style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec); position: sticky; top: 0; z-index: 2;">
-                                <th style="padding: 8px 12px;">来源国家/地区</th>
-                                <th style="padding: 8px 12px;">探测拦截频次</th>
-                                <th style="padding: 8px 12px;">代表性探测源 IP</th>
-                                <th style="padding: 8px 12px;">主要命中服务</th>
+                            <tr id="modal-map-table-header-row" style="border-bottom: 1px solid var(--border-subtle); color: var(--text-sec); font-size: 11px; background: var(--card-sec); position: sticky; top: 0; z-index: 2;">
+                                <th style="padding: 8px 12px;" id="modal-col-header-entity">来源国家/地区</th>
+                                <th style="padding: 8px 12px;">探测频次</th>
+                                <th style="padding: 8px 12px;" id="modal-col-header-detail">主要命中服务 / 运营商</th>
                                 <th style="padding: 8px 12px; text-align: right;">快捷联动</th>
                             </tr>
                         </thead>
                         <tbody id="modal-map-country-tbody">
-                            <tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">正在加载威胁来源数据...</td></tr>
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 20px;">正在加载威胁来源数据...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -6833,7 +6847,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // ================== 新增：全球威胁态势地图渲染 (高保真交互版) ==================
+    // ================== 全球威胁态势地图与多层级细分渲染 (国家 / 省市 / 独立IP) ==================
     const COUNTRY_COORDINATES = {
         'CN': { x: 740, y: 190, name: '中国', flag: '🇨🇳' },
         'US': { x: 220, y: 160, name: '美国', flag: '🇺🇸' },
@@ -6880,23 +6894,246 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         'IL': { x: 555, y: 195, name: '以色列', flag: '🇮🇱' }
     };
 
-    let latestThreatEventsCache = [];
+    // 精准主要城市与省份坐标映射表 (全球代表性攻击源密集区)
+    const CITY_COORDINATES = {
+        // 中国各重点省份与城市
+        '香港': { x: 745, y: 215, flag: '🇭🇰' },
+        '香港特别行政区': { x: 745, y: 215, flag: '🇭🇰' },
+        'HONG KONG': { x: 745, y: 215, flag: '🇭🇰' },
+        '台湾': { x: 765, y: 210, flag: '🇹🇼' },
+        '台北': { x: 765, y: 210, flag: '🇹🇼' },
+        '北京': { x: 742, y: 165, flag: '🇨🇳' },
+        '上海': { x: 758, y: 188, flag: '🇨🇳' },
+        '广东': { x: 738, y: 212, flag: '🇨🇳' },
+        '广州': { x: 738, y: 212, flag: '🇨🇳' },
+        '深圳': { x: 742, y: 214, flag: '🇨🇳' },
+        '浙江': { x: 755, y: 195, flag: '🇨🇳' },
+        '杭州': { x: 755, y: 195, flag: '🇨🇳' },
+        '江苏': { x: 752, y: 185, flag: '🇨🇳' },
+        '南京': { x: 752, y: 185, flag: '🇨🇳' },
+        '山东': { x: 746, y: 175, flag: '🇨🇳' },
+        '济南': { x: 746, y: 175, flag: '🇨🇳' },
+        '青岛': { x: 750, y: 176, flag: '🇨🇳' },
+        '河南': { x: 735, y: 180, flag: '🇨🇳' },
+        '郑州': { x: 735, y: 180, flag: '🇨🇳' },
+        '郑州市': { x: 735, y: 180, flag: '🇨🇳' },
+        '湖北': { x: 735, y: 192, flag: '🇨🇳' },
+        '武汉': { x: 735, y: 192, flag: '🇨🇳' },
+        '湖南': { x: 732, y: 202, flag: '🇨🇳' },
+        '长沙': { x: 732, y: 202, flag: '🇨🇳' },
+        '四川': { x: 710, y: 190, flag: '🇨🇳' },
+        '成都': { x: 710, y: 190, flag: '🇨🇳' },
+        '重庆': { x: 718, y: 195, flag: '🇨🇳' },
+        '陕西': { x: 725, y: 180, flag: '🇨🇳' },
+        '西安': { x: 725, y: 180, flag: '🇨🇳' },
+        '福建': { x: 750, y: 208, flag: '🇨🇳' },
+        '福州': { x: 750, y: 208, flag: '🇨🇳' },
+        '厦门': { x: 748, y: 211, flag: '🇨🇳' },
+        '辽宁': { x: 760, y: 155, flag: '🇨🇳' },
+        '沈阳': { x: 760, y: 155, flag: '🇨🇳' },
+        '大连': { x: 762, y: 162, flag: '🇨🇳' },
+        '河北': { x: 740, y: 170, flag: '🇨🇳' },
+        '石家庄': { x: 740, y: 170, flag: '🇨🇳' },
+        '天津': { x: 744, y: 168, flag: '🇨🇳' },
+        '广西': { x: 726, y: 216, flag: '🇨🇳' },
+        '安徽': { x: 748, y: 190, flag: '🇨🇳' },
+        '江西': { x: 742, y: 202, flag: '🇨🇳' },
+        '云南': { x: 700, y: 218, flag: '🇨🇳' },
+        '贵州': { x: 718, y: 208, flag: '🇨🇳' },
+        '黑龙江': { x: 770, y: 135, flag: '🇨🇳' },
+        '吉林': { x: 770, y: 145, flag: '🇨🇳' },
+        '内蒙古': { x: 725, y: 150, flag: '🇨🇳' },
+        '新疆': { x: 670, y: 155, flag: '🇨🇳' },
+        // 韩国主要道/市
+        'SEOUL': { x: 790, y: 172, flag: '🇰🇷' },
+        '首尔': { x: 790, y: 172, flag: '🇰🇷' },
+        'GYEONGGI-DO': { x: 790, y: 175, flag: '🇰🇷' },
+        '京畿道': { x: 790, y: 175, flag: '🇰🇷' },
+        'BUSAN': { x: 795, y: 182, flag: '🇰🇷' },
+        '釜山': { x: 795, y: 182, flag: '🇰🇷' },
+        'DAEGU': { x: 793, y: 179, flag: '🇰🇷' },
+        '大邱': { x: 793, y: 179, flag: '🇰🇷' },
+        'INCHEON': { x: 788, y: 173, flag: '🇰🇷' },
+        '仁川': { x: 788, y: 173, flag: '🇰🇷' },
+        'GYEONGSANGNAM-DO': { x: 793, y: 182, flag: '🇰🇷' },
+        'CHUNGCHEONGNAM-DO': { x: 789, y: 177, flag: '🇰🇷' },
+        // 日本主要都府县
+        'TOKYO': { x: 830, y: 170, flag: '🇯🇵' },
+        '东京': { x: 830, y: 170, flag: '🇯🇵' },
+        'OSAKA': { x: 822, y: 174, flag: '🇯🇵' },
+        '大阪': { x: 822, y: 174, flag: '🇯🇵' },
+        'KANAGAWA': { x: 830, y: 172, flag: '🇯🇵' },
+        'AICHI': { x: 826, y: 172, flag: '🇯🇵' },
+        'SAITAMA': { x: 829, y: 168, flag: '🇯🇵' },
+        'CHIBA': { x: 832, y: 171, flag: '🇯🇵' },
+        'HOKKAIDO': { x: 838, y: 140, flag: '🇯🇵' },
+        // 越南各市
+        'HO CHI MINH': { x: 725, y: 242, flag: '🇻🇳' },
+        'HO CHI MINH CITY': { x: 725, y: 242, flag: '🇻🇳' },
+        '胡志明市': { x: 725, y: 242, flag: '🇻🇳' },
+        'HANOI': { x: 722, y: 224, flag: '🇻🇳' },
+        '河内': { x: 722, y: 224, flag: '🇻🇳' },
+        'DA NANG': { x: 728, y: 232, flag: '🇻🇳' },
+        'CAN THO': { x: 724, y: 245, flag: '🇻🇳' },
+        'BINH DUONG': { x: 725, y: 240, flag: '🇻🇳' },
+        // 美国主要州/市
+        'CALIFORNIA': { x: 185, y: 175, flag: '🇺🇸' },
+        '加利福尼亚': { x: 185, y: 175, flag: '🇺🇸' },
+        'LOS ANGELES': { x: 186, y: 180, flag: '🇺🇸' },
+        '洛杉矶': { x: 186, y: 180, flag: '🇺🇸' },
+        'SAN JOSE': { x: 182, y: 172, flag: '🇺🇸' },
+        '圣何塞': { x: 182, y: 172, flag: '🇺🇸' },
+        'SAN FRANCISCO': { x: 182, y: 170, flag: '🇺🇸' },
+        '旧金山': { x: 182, y: 170, flag: '🇺🇸' },
+        'NEW YORK': { x: 265, y: 155, flag: '🇺🇸' },
+        '纽约': { x: 265, y: 155, flag: '🇺🇸' },
+        'BUFFALO': { x: 255, y: 150, flag: '🇺🇸' },
+        'WASHINGTON': { x: 190, y: 135, flag: '🇺🇸' },
+        'WASHINGTON, D.C.': { x: 258, y: 165, flag: '🇺🇸' },
+        '华盛顿': { x: 258, y: 165, flag: '🇺🇸' },
+        'TEXAS': { x: 215, y: 195, flag: '🇺🇸' },
+        '得克萨斯': { x: 215, y: 195, flag: '🇺🇸' },
+        'DALLAS': { x: 218, y: 190, flag: '🇺🇸' },
+        'HOUSTON': { x: 220, y: 200, flag: '🇺🇸' },
+        'FLORIDA': { x: 250, y: 205, flag: '🇺🇸' },
+        '佛罗里达': { x: 250, y: 205, flag: '🇺🇸' },
+        'MIAMI': { x: 252, y: 215, flag: '🇺🇸' },
+        'VIRGINIA': { x: 258, y: 168, flag: '🇺🇸' },
+        'ASHBURN': { x: 258, y: 166, flag: '🇺🇸' },
+        'ILLINOIS': { x: 232, y: 160, flag: '🇺🇸' },
+        'CHICAGO': { x: 232, y: 158, flag: '🇺🇸' },
+        'SOUTH CAROLINA': { x: 252, y: 180, flag: '🇺🇸' },
+        'NORTH CHARLESTON': { x: 254, y: 182, flag: '🇺🇸' },
+        'OHIO': { x: 245, y: 160, flag: '🇺🇸' },
+        'COLUMBUS': { x: 245, y: 160, flag: '🇺🇸' },
+        'OREGON': { x: 182, y: 145, flag: '🇺🇸' },
+        'PORTLAND': { x: 182, y: 145, flag: '🇺🇸' },
+        'NEW JERSEY': { x: 263, y: 158, flag: '🇺🇸' },
+        'GEORGIA': { x: 246, y: 186, flag: '🇺🇸' },
+        'ATLANTA': { x: 246, y: 186, flag: '🇺🇸' },
+        // 欧洲主要城市
+        'LONDON': { x: 470, y: 120, flag: '🇬🇧' },
+        '伦敦': { x: 470, y: 120, flag: '🇬🇧' },
+        'PARIS': { x: 475, y: 145, flag: '🇫🇷' },
+        '巴黎': { x: 475, y: 145, flag: '🇫🇷' },
+        'FRANKFURT': { x: 502, y: 132, flag: '🇩🇪' },
+        '法兰克福': { x: 502, y: 132, flag: '🇩🇪' },
+        'BERLIN': { x: 508, y: 124, flag: '🇩🇪' },
+        '柏林': { x: 508, y: 124, flag: '🇩🇪' },
+        'AMSTERDAM': { x: 485, y: 125, flag: '🇳🇱' },
+        '阿姆斯特丹': { x: 485, y: 125, flag: '🇳🇱' },
+        'SOUTH HOLLAND': { x: 486, y: 127, flag: '🇳🇱' },
+        'ROTTERDAM': { x: 486, y: 128, flag: '🇳🇱' },
+        'DUBLIN': { x: 438, y: 112, flag: '🇮🇪' },
+        '都柏林': { x: 438, y: 112, flag: '🇮🇪' },
+        'MOSCOW': { x: 600, y: 105, flag: '🇷🇺' },
+        '莫斯科': { x: 600, y: 105, flag: '🇷🇺' },
+        'ST. PETERSBURG': { x: 585, y: 92, flag: '🇷🇺' },
+        '圣彼得堡': { x: 585, y: 92, flag: '🇷🇺' },
+        'SOFIA': { x: 545, y: 155, flag: '🇧🇬' },
+        'SOFIA-CAPITAL': { x: 545, y: 155, flag: '🇧🇬' },
+        '索非亚': { x: 545, y: 155, flag: '🇧🇬' },
+        'WARSAW': { x: 525, y: 122, flag: '🇵🇱' },
+        '华沙': { x: 525, y: 122, flag: '🇵🇱' },
+        'MADRID': { x: 450, y: 160, flag: '🇪🇸' },
+        '马德里': { x: 450, y: 160, flag: '🇪🇸' },
+        'ROME': { x: 500, y: 160, flag: '🇮🇹' },
+        '罗马': { x: 500, y: 160, flag: '🇮🇹' },
+        'MILAN': { x: 492, y: 150, flag: '🇮🇹' },
+        '米兰': { x: 492, y: 150, flag: '🇮🇹' },
+        'STOCKHOLM': { x: 518, y: 82, flag: '🇸🇪' },
+        '斯德哥尔摩': { x: 518, y: 82, flag: '🇸🇪' },
+        'ISTANBUL': { x: 565, y: 162, flag: '🇹🇷' },
+        '伊斯坦布尔': { x: 565, y: 162, flag: '🇹🇷' },
+        'KYIV': { x: 560, y: 125, flag: '🇺🇦' },
+        '基辅': { x: 560, y: 125, flag: '🇺🇦' },
+        'SINGAPORE': { x: 720, y: 280, flag: '🇸🇬' },
+        '新加坡': { x: 720, y: 280, flag: '🇸🇬' }
+    };
 
-    function findCountryCoordinate(cName) {
-        if (!cName) return null;
-        for (const [code, info] of Object.entries(COUNTRY_COORDINATES)) {
-            if (cName.includes(info.name) || cName.toUpperCase().includes(code)) {
-                return info;
-            }
-        }
-        // 伪随机均匀散列散点
+    let latestThreatEventsCache = [];
+    let currentThreatMapGranularity = 'country'; // 'country' | 'city' | 'ip'
+    let currentThreatMapCountryFilter = null;   // null 表示全部国家，选中国家时聚焦
+
+    // 字符串哈希辅助计算微小坐标偏移（防止完全同点重合）
+    function getCoordinateJitter(str, radius) {
         let hash = 0;
-        for (let i = 0; i < cName.length; i++) hash = (hash * 31 + cName.charCodeAt(i)) & 0xffffffff;
-        const pseudoX = 140 + Math.abs(hash % 720);
-        const pseudoY = 80 + Math.abs((hash >> 3) % 320);
-        return { x: pseudoX, y: pseudoY, name: cName, flag: '🌐' };
+        const s = str || '';
+        for (let i = 0; i < s.length; i++) hash = (hash * 33 + s.charCodeAt(i)) & 0xffffffff;
+        const angle = Math.abs(hash % 360) * (Math.PI / 180);
+        const dist = ((Math.abs(hash >> 3) % 100) / 100) * radius;
+        return {
+            dx: Math.round(Math.cos(angle) * dist),
+            dy: Math.round(Math.sin(angle) * dist)
+        };
     }
 
+    // 多层级高精度坐标寻址解析器
+    function findFineCoordinate(cName, rName, cityName, ipStr) {
+        const country = (cName || '').trim();
+        const region = (rName || '').trim();
+        const city = (cityName || '').trim();
+        const ip = (ipStr || '').trim();
+
+        // 1. 尝试匹配城市级字典
+        const cityCandidates = [city, region].filter(Boolean);
+        for (const cand of cityCandidates) {
+            const upper = cand.toUpperCase();
+            for (const [k, v] of Object.entries(CITY_COORDINATES)) {
+                if (upper === k.toUpperCase() || upper.includes(k.toUpperCase()) || k.toUpperCase().includes(upper)) {
+                    const jitter = ip ? getCoordinateJitter(ip, 6) : { dx: 0, dy: 0 };
+                    return {
+                        x: v.x + jitter.dx,
+                        y: v.y + jitter.dy,
+                        name: `${cand} (${country || '未知'})`,
+                        cityName: cand,
+                        countryName: country,
+                        flag: v.flag || '📍'
+                    };
+                }
+            }
+        }
+
+        // 2. 匹配国家级字典
+        if (country) {
+            for (const [code, info] of Object.entries(COUNTRY_COORDINATES)) {
+                if (country.includes(info.name) || country.toUpperCase().includes(code)) {
+                    // 若有省份/城市或IP，给予合理范围内的地理分布扰动
+                    const jitterSeed = (region || '') + (city || '') + (ip || '');
+                    const jitter = jitterSeed ? getCoordinateJitter(jitterSeed, 16) : { dx: 0, dy: 0 };
+                    return {
+                        x: info.x + jitter.dx,
+                        y: info.y + jitter.dy,
+                        name: [country, region, city].filter(Boolean).join(' · '),
+                        cityName: city || region,
+                        countryName: info.name,
+                        flag: info.flag || '🌐'
+                    };
+                }
+            }
+        }
+
+        // 3. 散列兜底
+        let hash = 0;
+        const seed = country + region + city + ip;
+        for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) & 0xffffffff;
+        const pseudoX = 140 + Math.abs(hash % 720);
+        const pseudoY = 80 + Math.abs((hash >> 3) % 320);
+        return {
+            x: pseudoX,
+            y: pseudoY,
+            name: [country, region, city].filter(Boolean).join(' · ') || '未知地域',
+            cityName: city || region,
+            countryName: country || '未知',
+            flag: '🌐'
+        };
+    }
+
+    function findCountryCoordinate(cName) {
+        return findFineCoordinate(cName, '', '', '');
+    }
+
+    // 概览卡片小地图渲染 (按高危国家聚合)
     function renderWorldThreatMap(events) {
         latestThreatEventsCache = events || [];
         const svgContainer = document.getElementById('svg-attack-trajectories');
@@ -6909,7 +7146,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const c = (ev.country || '').trim();
             if (c) {
                 if (!countryStats[c]) {
-                    countryStats[c] = { count: 0, sample_ip: ev.ip, ports: new Set() };
+                    countryStats[c] = { count: 0, sample_ip: ev.ip, region: ev.region, city: ev.city, ports: new Set() };
                 }
                 countryStats[c].count++;
                 if (ev.port) countryStats[c].ports.add(ev.port);
@@ -6919,14 +7156,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let svgHtml = '';
         Object.entries(countryStats).forEach(([cName, stat]) => {
             const count = stat.count;
-            const coord = findCountryCoordinate(cName);
+            const coord = findFineCoordinate(cName, stat.region, stat.city, stat.sample_ip);
             const midX = (coord.x + targetX) / 2;
             const midY = Math.min(coord.y, targetY) - 30 - Math.min(65, count * 2.2);
             const pathD = `M ${coord.x} ${coord.y} Q ${midX} ${midY} ${targetX} ${targetY}`;
             const dotR = Math.min(10, 4 + count * 0.8);
 
             svgHtml += `
-            <g style="cursor: pointer;" onclick="event.stopPropagation(); openThreatMapDetailModal();" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
+            <g style="cursor: pointer;" onclick="event.stopPropagation(); openThreatMapDetailModal('${escapeHtml(cName)}');" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
                 <circle cx="${coord.x}" cy="${coord.y}" r="${dotR}" fill="rgba(255, 59, 48, 0.45)">
                     <animate attributeName="r" values="3;${dotR + 5};3" dur="2.2s" repeatCount="indefinite"/>
                     <animate attributeName="opacity" values="0.9;0.25;0.9" dur="2.2s" repeatCount="indefinite"/>
@@ -6935,97 +7172,257 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <path d="${pathD}" fill="none" stroke="url(#attack-beam-gradient)" stroke-width="${Math.min(2.6, 1 + count * 0.25)}" stroke-dasharray="6,4" opacity="0.88">
                     <animate attributeName="stroke-dashoffset" from="100" to="0" dur="2.4s" repeatCount="indefinite"/>
                 </path>
-                <text x="${coord.x}" y="${coord.y - 8}" fill="#ffd60a" font-size="9" font-weight="800" text-anchor="middle" style="text-shadow: 0 1px 3px rgba(0,0,0,0.8);">${escapeHtml(coord.name)} (${count})</text>
+                <text x="${coord.x}" y="${coord.y - 8}" fill="#ffd60a" font-size="9" font-weight="800" text-anchor="middle" style="text-shadow: 0 1px 3px rgba(0,0,0,0.8);">${escapeHtml(coord.name.split(' ')[0])} (${count})</text>
             </g>
             `;
         });
         svgContainer.innerHTML = svgHtml;
     }
 
-    function openThreatMapDetailModal() {
+    // 切换聚合细分维度：国家、省市、独立 IP
+    function setThreatMapGranularity(gran) {
+        currentThreatMapGranularity = gran;
+        ['country', 'city', 'ip'].forEach(g => {
+            const btn = document.getElementById(`btn-map-granularity-${g}`);
+            if (btn) {
+                if (g === gran) {
+                    btn.style.background = 'var(--accent)';
+                    btn.style.color = '#fff';
+                } else {
+                    btn.style.background = 'transparent';
+                    btn.style.color = 'var(--text-sec)';
+                }
+            }
+        });
+        renderThreatMapModalCore();
+    }
+
+    // 清除国家过滤，重置全量
+    function clearThreatMapCountryFilter() {
+        currentThreatMapCountryFilter = null;
+        const filterInd = document.getElementById('modal-map-filter-indicator');
+        if (filterInd) filterInd.style.display = 'none';
+        renderThreatMapModalCore();
+    }
+
+    // 展开全屏巨幕弹窗入口
+    function openThreatMapDetailModal(initialCountryFilter) {
         const modal = document.getElementById('modal-map-detail');
         if (!modal) return;
         modal.style.display = 'flex';
+        if (initialCountryFilter) {
+            currentThreatMapCountryFilter = initialCountryFilter;
+            currentThreatMapGranularity = 'city'; // 聚焦国家时自动展开至城市细分
+            ['country', 'city', 'ip'].forEach(g => {
+                const btn = document.getElementById(`btn-map-granularity-${g}`);
+                if (btn) {
+                    btn.style.background = (g === 'city') ? 'var(--accent)' : 'transparent';
+                    btn.style.color = (g === 'city') ? '#fff' : 'var(--text-sec)';
+                }
+            });
+        }
+        renderThreatMapModalCore();
+    }
 
+    // 核心渲染器：根据选定粒度 (country | city | ip) 动态生成飞线与溯源明细
+    function renderThreatMapModalCore() {
         const svgModalContainer = document.getElementById('modal-svg-attack-trajectories');
         const targetX = 770;
         const targetY = 165;
         const events = latestThreatEventsCache || allEvents || [];
 
-        const countryStats = {};
-        events.forEach(ev => {
-            const c = (ev.country || '').trim();
-            if (c) {
-                if (!countryStats[c]) {
-                    countryStats[c] = { count: 0, sample_ip: ev.ip, ips: new Set(), ports: new Set() };
-                }
-                countryStats[c].count++;
-                if (ev.ip) countryStats[c].ips.add(ev.ip);
-                if (ev.port) countryStats[c].ports.add(ev.port);
+        // 过滤指定国家
+        let filteredEvents = events;
+        if (currentThreatMapCountryFilter) {
+            filteredEvents = events.filter(ev => (ev.country || '').includes(currentThreatMapCountryFilter));
+            const filterInd = document.getElementById('modal-map-filter-indicator');
+            const filterText = document.getElementById('modal-map-filter-text');
+            if (filterInd && filterText) {
+                filterInd.style.display = 'flex';
+                filterText.innerText = `🔍 已按国家/地区聚焦: ${currentThreatMapCountryFilter}`;
             }
+        } else {
+            const filterInd = document.getElementById('modal-map-filter-indicator');
+            if (filterInd) filterInd.style.display = 'none';
+        }
+
+        // 根据维度统计数据
+        const statsMap = {};
+        filteredEvents.forEach(ev => {
+            const country = (ev.country || '').trim() || '未知国家';
+            const region = (ev.region || '').trim();
+            const city = (ev.city || '').trim();
+            const ip = (ev.ip || '').trim();
+            const port = ev.port;
+
+            let key = '';
+            let label = '';
+            let subText = '';
+            let flag = '🌐';
+
+            if (currentThreatMapGranularity === 'country') {
+                key = country;
+                label = country;
+                subText = `${country}`;
+            } else if (currentThreatMapGranularity === 'city') {
+                const cityPart = city || region || '未知城市';
+                key = `${country}__${cityPart}`;
+                label = `${cityPart}`;
+                subText = `${country} · ${cityPart}`;
+            } else { // 'ip'
+                key = ip || '未知IP';
+                label = ip;
+                subText = [country, region, city].filter(Boolean).join(' · ');
+            }
+
+            if (!statsMap[key]) {
+                statsMap[key] = {
+                    key: key,
+                    label: label,
+                    subText: subText,
+                    count: 0,
+                    country: country,
+                    region: region,
+                    city: city,
+                    sample_ip: ip,
+                    ips: new Set(),
+                    ports: new Set(),
+                    isps: new Set()
+                };
+            }
+            statsMap[key].count++;
+            if (ip) statsMap[key].ips.add(ip);
+            if (port) statsMap[key].ports.add(port);
+            if (ev.isp) statsMap[key].isps.add(ev.isp);
         });
 
-        const sortedCountries = Object.entries(countryStats).sort((a, b) => b[1].count - a[1].count);
+        const sortedEntries = Object.values(statsMap).sort((a, b) => b.count - a.count);
 
-        document.getElementById('modal-map-active-badge').innerText = `${sortedCountries.length} 个活跃来源国`;
-        document.getElementById('modal-map-total-countries').innerText = sortedCountries.length;
+        // 更新顶部标签
+        const badge = document.getElementById('modal-map-active-badge');
+        const countBadge = document.getElementById('modal-map-total-countries');
+        const unitName = currentThreatMapGranularity === 'country' ? '国家/地区' : (currentThreatMapGranularity === 'city' ? '城市/节点' : '攻击源 IP');
+        if (badge) badge.innerText = `${sortedEntries.length} 个活跃${unitName}`;
+        if (countBadge) countBadge.innerText = sortedEntries.length;
 
-        // 渲染巨幕 SVG 飞线与发起源
+        // 更新表头文字
+        const entityTh = document.getElementById('modal-col-header-entity');
+        const detailTh = document.getElementById('modal-col-header-detail');
+        if (entityTh) {
+            entityTh.innerText = currentThreatMapGranularity === 'country' ? '来源国家/地区' : (currentThreatMapGranularity === 'city' ? '细分城市/省份' : '溯源 IP 实体');
+        }
+        if (detailTh) {
+            detailTh.innerText = currentThreatMapGranularity === 'ip' ? '归属地域 / 运营商' : '主要命中服务 / 运营商';
+        }
+
+        // 渲染巨幕矢量飞线层（限制最大飞线数，保障高保真动画流畅）
         let svgModalHtml = '';
-        sortedCountries.forEach(([cName, stat]) => {
-            const count = stat.count;
-            const coord = findCountryCoordinate(cName);
+        const maxFlightNodes = Math.min(sortedEntries.length, currentThreatMapGranularity === 'ip' ? 60 : 45);
+        for (let i = 0; i < maxFlightNodes; i++) {
+            const entry = sortedEntries[i];
+            const count = entry.count;
+            const coord = findFineCoordinate(entry.country, entry.region, entry.city, entry.sample_ip);
             const midX = (coord.x + targetX) / 2;
-            const midY = Math.min(coord.y, targetY) - 35 - Math.min(75, count * 2.5);
+            const midY = Math.min(coord.y, targetY) - 30 - Math.min(75, count * 2.2);
             const pathD = `M ${coord.x} ${coord.y} Q ${midX} ${midY} ${targetX} ${targetY}`;
-            const dotR = Math.min(13, 5 + count * 0.9);
+            const dotR = Math.min(12, 4 + count * 0.75);
+
+            const displayTag = currentThreatMapGranularity === 'country' ? (coord.flag || '') + ' ' + entry.label : (coord.flag || '📍') + ' ' + entry.label;
 
             svgModalHtml += `
-            <g id="map-modal-country-${escapeHtml(cName)}" style="cursor: pointer;" onclick="highlightThreatCountry('${escapeHtml(cName)}')" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
+            <g id="map-modal-node-${escapeHtml(entry.key)}" style="cursor: pointer;" onclick="highlightThreatNode('${escapeHtml(entry.key)}')" title="${escapeHtml(coord.name)}: 累计探测 ${count} 次">
                 <circle cx="${coord.x}" cy="${coord.y}" r="${dotR}" fill="rgba(255, 59, 48, 0.4)">
-                    <animate attributeName="r" values="4;${dotR + 7};4" dur="2s" repeatCount="indefinite"/>
+                    <animate attributeName="r" values="3;${dotR + 6};3" dur="2s" repeatCount="indefinite"/>
                     <animate attributeName="opacity" values="0.85;0.2;0.85" dur="2s" repeatCount="indefinite"/>
                 </circle>
-                <circle cx="${coord.x}" cy="${coord.y}" r="4" fill="#ff453a" stroke="#ffffff" stroke-width="1.2"/>
-                <path d="${pathD}" fill="none" stroke="url(#modal-attack-beam-gradient)" stroke-width="${Math.min(3, 1.2 + count * 0.3)}" stroke-dasharray="8,4" opacity="0.9">
+                <circle cx="${coord.x}" cy="${coord.y}" r="3.5" fill="#ff453a" stroke="#ffffff" stroke-width="1.2"/>
+                <path d="${pathD}" fill="none" stroke="url(#modal-attack-beam-gradient)" stroke-width="${Math.min(3, 1 + count * 0.25)}" stroke-dasharray="8,4" opacity="0.9">
                     <animate attributeName="stroke-dashoffset" from="120" to="0" dur="2.2s" repeatCount="indefinite"/>
                 </path>
-                <text x="${coord.x}" y="${coord.y - 10}" fill="#ffd60a" font-size="10" font-weight="800" text-anchor="middle" style="text-shadow: 0 2px 4px rgba(0,0,0,0.9);">${coord.flag || ''} ${escapeHtml(coord.name)} (${count})</text>
+                <text x="${coord.x}" y="${coord.y - 8}" fill="#ffd60a" font-size="9.5" font-weight="800" text-anchor="middle" style="text-shadow: 0 2px 4px rgba(0,0,0,0.95);">${displayTag} (${count})</text>
             </g>
             `;
-        });
+        }
         if (svgModalContainer) svgModalContainer.innerHTML = svgModalHtml;
 
-        // 渲染底部国家明细表格
+        // 渲染右侧明细表格
         const tbody = document.getElementById('modal-map-country-tbody');
         if (!tbody) return;
-        if (sortedCountries.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-sec); padding: 20px;">暂无捕获到地域威胁样本</td></tr>';
+        if (sortedEntries.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 20px;">当前层级下暂无威胁数据</td></tr>';
             return;
         }
 
         let tableHtml = '';
-        sortedCountries.forEach(([cName, stat]) => {
-            const coord = findCountryCoordinate(cName);
-            const portList = Array.from(stat.ports).slice(0, 4).join(', ') || '多端口扫描';
+        sortedEntries.forEach(entry => {
+            const coord = findFineCoordinate(entry.country, entry.region, entry.city, entry.sample_ip);
+            const portList = Array.from(entry.ports).slice(0, 4).join(', ') || '探测扫描';
+            const ispStr = Array.from(entry.isps).filter(Boolean).slice(0, 2).join(' / ') || '';
+
+            let entityColHtml = '';
+            let detailColHtml = '';
+            let actionBtnHtml = '';
+
+            if (currentThreatMapGranularity === 'country') {
+                entityColHtml = `
+                    <div style="font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 4px;">
+                        <span style="font-size: 14px;">${coord.flag || '🌐'}</span>
+                        <span>${escapeHtml(entry.label)}</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">共 ${entry.ips.size} 个独立攻击 IP</div>
+                `;
+                detailColHtml = `
+                    <div style="font-size: 11px; color: var(--text);">${escapeHtml(portList)}</div>
+                    ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
+                `;
+                actionBtnHtml = `
+                    <button class="pill-btn accent" onclick="focusCountryInThreatMap('${escapeHtml(entry.country)}')" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="细分下钻到该国的城市分布">🏙️ 下钻城市</button>
+                    <button class="pill-btn" onclick="closeModals(); filterLogs('${escapeHtml(entry.country)}');" style="padding: 3px 6px; font-size: 11px;" title="查看该国所有日志">📜 日志</button>
+                `;
+            } else if (currentThreatMapGranularity === 'city') {
+                entityColHtml = `
+                    <div style="font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 4px;">
+                        <span style="font-size: 13px;">${coord.flag || '📍'}</span>
+                        <span>${escapeHtml(entry.label)}</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(entry.country)} · ${entry.ips.size} 个IP</div>
+                `;
+                detailColHtml = `
+                    <div style="font-size: 11px; color: var(--text);">${escapeHtml(portList)}</div>
+                    ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
+                `;
+                actionBtnHtml = `
+                    <button class="pill-btn accent" onclick="closeModals(); filterLogs('${escapeHtml(entry.label)}');" style="padding: 3px 8px; font-size: 11px;">🔍 查看日志</button>
+                `;
+            } else { // 'ip'
+                entityColHtml = `
+                    <div style="font-family: monospace; font-size: 12px; font-weight: 700; color: var(--text);">
+                        <span class="ip-text" onclick="showIPDetail('${escapeHtml(entry.sample_ip)}')">${escapeHtml(entry.sample_ip)}</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(entry.subText || entry.country)}</div>
+                `;
+                detailColHtml = `
+                    <div style="font-size: 11px; color: var(--text);">${escapeHtml(portList)}</div>
+                    ${ispStr ? `<div style="font-size: 10px; color: var(--text-sec); margin-top: 2px;">${escapeHtml(ispStr)}</div>` : ''}
+                `;
+                actionBtnHtml = `
+                    <button class="pill-btn danger" onclick="showBanModal('${escapeHtml(entry.sample_ip)}')" style="padding: 3px 8px; font-size: 11px;">🚫 封禁</button>
+                `;
+            }
+
             tableHtml += `
-            <tr id="row-map-country-${escapeHtml(cName)}" style="border-bottom: 1px solid var(--border-subtle); transition: background 0.15s ease;">
-                <td style="padding: 10px 12px; font-weight: 700; color: var(--text);">
-                    <span style="font-size: 14px; margin-right: 4px;">${coord.flag || '🌐'}</span>
-                    <span>${escapeHtml(coord.name)}</span>
+            <tr id="row-map-node-${escapeHtml(entry.key)}" style="border-bottom: 1px solid var(--border-subtle); transition: background 0.15s ease;">
+                <td style="padding: 8px 10px;">
+                    ${entityColHtml}
                 </td>
-                <td style="padding: 10px 12px; font-weight: 800; color: var(--accent); font-size: 13px;">
-                    ${stat.count.toLocaleString()} 次
+                <td style="padding: 8px 10px; font-weight: 800; color: var(--accent); font-size: 13px;">
+                    ${entry.count.toLocaleString()} 次
                 </td>
-                <td style="padding: 10px 12px; font-family: monospace; font-size: 12px; font-weight: 700;">
-                    <span class="ip-text" onclick="showIPDetail('${escapeHtml(stat.sample_ip)}')">${escapeHtml(stat.sample_ip)}</span>
-                    ${stat.ips.size > 1 ? `<span style="font-size: 10px; color: var(--text-sec); margin-left: 4px;">等 ${stat.ips.size} 个IP</span>` : ''}
+                <td style="padding: 8px 10px;">
+                    ${detailColHtml}
                 </td>
-                <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec);">
-                    ${escapeHtml(portList)}
-                </td>
-                <td style="padding: 10px 12px; text-align: right;">
-                    <button class="pill-btn accent" onclick="closeModals(); filterLogs('${escapeHtml(cName)}');" style="padding: 3px 8px; font-size: 11px;">🔍 查看该国日志</button>
+                <td style="padding: 8px 10px; text-align: right; white-space: nowrap;">
+                    ${actionBtnHtml}
                 </td>
             </tr>
             `;
@@ -7033,14 +7430,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = tableHtml;
     }
 
-    function highlightThreatCountry(cName) {
-        showToast(`已定位国家: ${cName}`, '📍');
-        const row = document.getElementById(`row-map-country-${cName}`);
+    // 点击国家一键聚焦并下钻到城市
+    function focusCountryInThreatMap(cName) {
+        currentThreatMapCountryFilter = cName;
+        currentThreatMapGranularity = 'city';
+        ['country', 'city', 'ip'].forEach(g => {
+            const btn = document.getElementById(`btn-map-granularity-${g}`);
+            if (btn) {
+                btn.style.background = (g === 'city') ? 'var(--accent)' : 'transparent';
+                btn.style.color = (g === 'city') ? '#fff' : 'var(--text-sec)';
+            }
+        });
+        showToast(`已聚焦并展开 [${cName}] 城市分布`, '🏙️');
+        renderThreatMapModalCore();
+    }
+
+    // 地图节点点击联动定位列表行
+    function highlightThreatNode(nodeKey) {
+        const row = document.getElementById(`row-map-node-${nodeKey}`);
         if (row) {
             row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            row.style.background = 'rgba(0, 122, 255, 0.2)';
-            setTimeout(() => { row.style.background = 'transparent'; }, 2000);
+            row.style.background = 'rgba(0, 122, 255, 0.22)';
+            setTimeout(() => { row.style.background = 'transparent'; }, 2200);
+            showToast(`已定位: ${nodeKey.replace('__', ' · ')}`, '📍');
         }
+    }
+
+    function highlightThreatCountry(cName) {
+        highlightThreatNode(cName);
     }
 
     async function batchBanAllProbes() {
