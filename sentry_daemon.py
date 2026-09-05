@@ -2277,6 +2277,9 @@ def get_system_ssh_ports():
         pass
     return ports
 
+_DYNAMIC_SSH_IPS_CACHE = set()
+_DYNAMIC_SSH_IPS_LAST_CHECK = 0
+
 def get_active_ssh_client_ips():
     """动态探测当前系统真正已认证登录的管理员 SSH 客户端 IP (防管理员自杀保护机制)
     注意：严禁直接使用原始 TCP ESTABLISHED 状态判断，因为外部爆破者在输入密码握手阶段 (Preauth)
