@@ -3757,20 +3757,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             box.innerHTML = '<div style="color:var(--text-sec); padding:16px 0; font-size:12px;">暂无近期威胁快报</div>';
             return;
         }
-        let html = '';
+        let html = `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border); margin-bottom:2px;">
+            <span style="font-size:11px; font-weight:600; color:var(--text-sec); flex:2;">来源 IP / 地理位置</span>
+            <span style="font-size:11px; font-weight:600; color:var(--text-sec); flex:1.2; text-align:center;">探测端口</span>
+            <span style="font-size:11px; font-weight:600; color:var(--text-sec); flex:0.7; text-align:center;">威胁等级</span>
+            <span style="font-size:11px; font-weight:600; color:var(--text-sec); flex:0.7; text-align:right;">时间</span>
+        </div>`;
         threats.forEach(t => {
             const tagClass = (t.level === '极高危') ? 'danger' : (t.level === '高危' ? 'warning' : 'accent');
             const geoText = formatGeoCN(t);
             html += `
             <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-subtle);">
-                <div>
+                <div style="flex:2; min-width:0;">
                     <span class="ip-text" style="font-size:12px;" onclick="showIPDetail('${t.ip}')" title="点击查看 IP 详情">${t.ip}</span>
                     <span class="geo-subline" style="display:inline-block; vertical-align:middle; margin-left:4px; margin-top:0; max-width:150px;" title="${escapeHtml(geoText)}">${geoText}</span>
-                    <div style="font-size:11px; color:var(--text-sec); margin-top:2px;">探测端口: <b>TCP/${t.port}</b> · ${t.port_name || '未定义'}</div>
                 </div>
-                <div style="text-align:right;">
+                <div style="flex:1.2; text-align:center; font-size:11px; color:var(--text);">
+                    <b>TCP/${t.port}</b> <span style="color:var(--text-sec);">· ${t.port_name || '未定义'}</span>
+                </div>
+                <div style="flex:0.7; text-align:center;">
                     <span class="tag ${tagClass}">${t.level || '高危'}</span>
-                    <div style="font-size:10px; color:var(--text-ter); margin-top:3px;">${t.attack_time.split(' ')[1] || t.attack_time}</div>
+                </div>
+                <div style="flex:0.7; text-align:right; font-size:10px; color:var(--text-ter);">
+                    ${t.attack_time.split(' ')[1] || t.attack_time}
                 </div>
             </div>
             `;
