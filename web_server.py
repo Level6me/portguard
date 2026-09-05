@@ -1023,11 +1023,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">🏷️ 威胁等级分布</div>
-                            <div class="val-sub">极高危 / 高危 / 中危 / 低危</div>
+                            <div class="card-title">🎯 目标端口拦截分布 Top 8</div>
+                            <div class="val-sub">高频受探测端口与服务类型分布</div>
                         </div>
                     </div>
-                    <div style="height: 210px;"><canvas id="analyticsLevelChart"></canvas></div>
+                    <div style="height: 210px;"><canvas id="analyticsPortChart"></canvas></div>
                 </div>
             </div>
 
@@ -2440,7 +2440,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     let analyticsIspChartInstance = null;
     let analyticsCategoryChartInstance = null;
     let analyticsActionChartInstance = null;
-    let analyticsLevelChartInstance = null;
+    let analyticsPortChartInstance = null;
     let analyticsHttpStatusChartInstance = null;
 
     const PAGE_TITLES = {
@@ -2929,18 +2929,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             applyDoughnutInteractive(analyticsActionChartInstance, actionPalette);
         }
 
-        const ctxLevel = document.getElementById('analyticsLevelChart')?.getContext('2d');
-        if (ctxLevel) {
-            const levelPalette = ['#ff3b30', '#ff9500', '#ffd60a', '#30b0c7'];
-            analyticsLevelChartInstance = new Chart(ctxLevel, {
+        const ctxPort = document.getElementById('analyticsPortChart')?.getContext('2d');
+        if (ctxPort) {
+            const portPalette = ['#007aff', '#ff3b30', '#ff9500', '#34c759', '#af52de', '#5856d6', '#30b0c7', '#ffd60a'];
+            analyticsPortChartInstance = new Chart(ctxPort, {
                 type: 'doughnut',
-                data: { labels: [], datasets: [{ data: [], backgroundColor: levelPalette, borderWidth: 0 }] },
+                data: { labels: [], datasets: [{ data: [], backgroundColor: portPalette, borderWidth: 0 }] },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     plugins: { legend: { position: doughnutLegendPos, labels: doughnutLegendLabels } }
                 }
             });
-            applyDoughnutInteractive(analyticsLevelChartInstance, levelPalette);
+            applyDoughnutInteractive(analyticsPortChartInstance, portPalette);
         }
 
         const ctxHttp = document.getElementById('analyticsHttpStatusChart')?.getContext('2d');
@@ -2966,7 +2966,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             analyticsIspChartInstance,
             analyticsCategoryChartInstance,
             analyticsActionChartInstance,
-            analyticsLevelChartInstance,
+            analyticsPortChartInstance,
             analyticsHttpStatusChartInstance
         ].forEach(inst => {
             if (inst) {
@@ -2979,7 +2979,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         analyticsIspChartInstance = null;
         analyticsCategoryChartInstance = null;
         analyticsActionChartInstance = null;
-        analyticsLevelChartInstance = null;
+        analyticsPortChartInstance = null;
         analyticsHttpStatusChartInstance = null;
     }
 
@@ -3101,13 +3101,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 analyticsActionChartInstance.update();
             }
 
-            // 8. Levels
-            if (data.threat_level_distribution && analyticsLevelChartInstance && data.threat_level_distribution.length > 0) {
-                analyticsLevelChartInstance.data.labels = data.threat_level_distribution.map(l => `${l.level} (${l.count})`);
-                analyticsLevelChartInstance.data.datasets[0].data = data.threat_level_distribution.map(l => l.count);
-                analyticsLevelChartInstance._selectedCategoryIndex = -1;
-                analyticsLevelChartInstance.resize();
-                analyticsLevelChartInstance.update();
+            // 8. Port Distribution (目标端口分析)
+            if (data.port_distribution && analyticsPortChartInstance && data.port_distribution.length > 0) {
+                analyticsPortChartInstance.data.labels = data.port_distribution.map(p => `${p.port} (${p.name || '探测'}) - ${p.count}次`);
+                analyticsPortChartInstance.data.datasets[0].data = data.port_distribution.map(p => p.count);
+                analyticsPortChartInstance._selectedCategoryIndex = -1;
+                analyticsPortChartInstance.resize();
+                analyticsPortChartInstance.update();
             }
 
             // 9. HTTP Status Codes (带自动自愈与resize)
@@ -6663,7 +6663,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             [
                 trendChartInstance, portChartInstance, analyticsTrendChartInstance,
                 analyticsHourlyChartInstance, analyticsGeoChartInstance, analyticsIspChartInstance,
-                analyticsCategoryChartInstance, analyticsActionChartInstance, analyticsLevelChartInstance,
+                analyticsCategoryChartInstance, analyticsActionChartInstance, analyticsPortChartInstance,
                 analyticsHttpStatusChartInstance
             ].forEach(chart => {
                 if (chart && (chart._selectedCategoryIndex >= 0 || chart._selectedDatasetIndex >= 0 || chart._selectedPointIndex >= 0)) {
