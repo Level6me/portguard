@@ -3490,10 +3490,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (data.defense_paused !== undefined) {
                 updateDefensePauseUI(data.defense_paused);
             }
-            document.getElementById('stat-total').innerText = data.total_banned;
-            document.getElementById('stat-today').innerText = data.today_events;
-            document.getElementById('stat-traps').innerText = data.active_traps;
-            document.getElementById('stat-white').innerText = data.whitelist_count;
+            if (document.getElementById('stat-total')) document.getElementById('stat-total').innerText = (data.total_banned ?? '--').toLocaleString();
+            if (document.getElementById('stat-today')) document.getElementById('stat-today').innerText = (data.today_events ?? '--').toLocaleString();
+            if (document.getElementById('stat-unique-ips')) document.getElementById('stat-unique-ips').innerText = (data.unique_attackers ?? data.total_banned ?? '--').toLocaleString();
+            if (document.getElementById('stat-cluster-nodes')) document.getElementById('stat-cluster-nodes').innerText = (data.cluster_nodes_count ?? 1).toLocaleString();
+            if (document.getElementById('stat-traps')) document.getElementById('stat-traps').innerText = data.active_traps ?? '--';
+            if (document.getElementById('stat-white')) document.getElementById('stat-white').innerText = data.whitelist_count ?? '--';
 
             if (data.hourly_trend && trendChartInstance) {
                 trendChartInstance.data.labels = data.hourly_trend.labels;
@@ -6908,6 +6910,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     labels.append(hour_label)
                     data_points.append(c.fetchone()[0])
                     
+                c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
+                unique_attackers = c.fetchone()[0]
+
                 cfg = load_config()
                 conn.close()
                 
@@ -6915,12 +6920,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 active_traps = sum(1 for t in raw_traps if (t.get("enabled", True) if isinstance(t, dict) else True))
                 whitelist_count = len(cfg.get("whitelist", []))
                 hidden_ips_cnt = len(get_hidden_ips_set())
+                cluster_nodes_count = max(1, len(cfg.get("cluster_sync", {}).get("cluster_nodes", [])) + 1)
                 
                 self._send_json({
                     "total_banned": total_banned,
                     "today_events": today_events,
+                    "unique_attackers": unique_attackers,
                     "active_traps": active_traps,
                     "whitelist_count": whitelist_count,
+                    "cluster_nodes_count": cluster_nodes_count,
                     "hidden_count": hidden_ips_cnt,
                     "defense_paused": bool(cfg.get("defense_paused", False)),
                     "port_distribution": port_dist,
