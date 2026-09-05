@@ -3245,7 +3245,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <tr>
                     <td>
                         <div style="font-weight: 700; font-family: monospace; color: var(--text);">
-                            <span class="ip-text" onclick="showIPDetail('${escapeHtml(att.ip)}')" style="cursor: pointer; text-decoration: underline; color: var(--accent);" title="点击查看 IP 详情与全景画像">${escapeHtml(att.ip)}</span>
+                            <span class="ip-text" onclick="showIPDetail('${escapeHtml(att.ip)}')" style="cursor: pointer; text-decoration: none; color: var(--accent);" title="点击查看 IP 详情与全景画像">${escapeHtml(att.ip)}</span>
                         </div>
                         <div class="geo-subline" title="${escapeHtml(geoSub)}">${escapeHtml(geoSub)}</div>
                     </td>
