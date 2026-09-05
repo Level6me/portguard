@@ -774,8 +774,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 10px;
-            font-size: 13px;
+            margin-bottom: 7px;
+            font-size: 12px;
         }
         .rank-bar-bg {
             flex: 1;
@@ -3570,7 +3570,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function renderGeoRank(geoList) {
         const box = document.getElementById('geo-rank-box');
         if (!geoList || geoList.length === 0) {
-            box.innerHTML = '<div style="color:var(--text-sec); padding:16px 0; font-size:13px;">暂无足够地域样本</div>';
+            box.innerHTML = '<div style="color:var(--text-sec); padding:16px 0; font-size:12px;">暂无足够地域样本</div>';
             return;
         }
         const max = Math.max(...geoList.map(g => g.count), 1);
@@ -3580,9 +3580,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const countryCN = COUNTRY_CN_MAP[g.country] || g.country || '公网节点';
             html += `
             <div class="rank-item">
-                <span style="width: 100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;">🌐 ${countryCN}</span>
+                <span style="width: 100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;">🌐 ${countryCN}</span>
                 <div class="rank-bar-bg"><div class="rank-bar-fill" style="width: ${pct}%"></div></div>
-                <span style="font-weight:700; width: 32px; text-align:right; font-variant-numeric:tabular-nums;">${g.count}</span>
+                <span style="font-weight:600; width: 32px; text-align:right; font-variant-numeric:tabular-nums;">${g.count}</span>
             </div>
             `;
         });
@@ -3754,7 +3754,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function renderRecentThreats(threats) {
         const box = document.getElementById('recent-threats-box');
         if (!threats || threats.length === 0) {
-            box.innerHTML = '<div style="color:var(--text-sec); padding:16px 0; font-size:13px;">暂无近期威胁快报</div>';
+            box.innerHTML = '<div style="color:var(--text-sec); padding:16px 0; font-size:12px;">暂无近期威胁快报</div>';
             return;
         }
         let html = '';
@@ -3762,9 +3762,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const tagClass = (t.level === '极高危') ? 'danger' : (t.level === '高危' ? 'warning' : 'accent');
             const geoText = formatGeoCN(t);
             html += `
-            <div style="display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border-subtle);">
+            <div style="display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border-subtle);">
                 <div>
-                    <span class="ip-text" onclick="showIPDetail('${t.ip}')" title="点击查看 IP 详情">${t.ip}</span>
+                    <span class="ip-text" style="font-size:12px;" onclick="showIPDetail('${t.ip}')" title="点击查看 IP 详情">${t.ip}</span>
                     <span class="geo-subline" style="display:inline-block; vertical-align:middle; margin-left:4px; margin-top:0; max-width:150px;" title="${escapeHtml(geoText)}">${geoText}</span>
                     <div style="font-size:11px; color:var(--text-sec); margin-top:2px;">探测端口: <b>TCP/${t.port}</b> · ${t.port_name || '未定义'}</div>
                 </div>
