@@ -1097,6 +1097,8 @@ def heal_cluster_geo_history():
             conn.commit()
             conn.close()
 
+            unresolvable_cache = {}  # 记录近期解析失败的 IP 及时间戳，避免死循环紧轮询
+
             while True:
                 try:
                     conn = get_db()
@@ -1115,13 +1117,20 @@ def heal_cluster_geo_history():
 
                     conn.close()
 
-                    target_ips = list(set(event_ips + bl_ips + pal_ips))
+                    now = time.time()
+                    # 过滤掉近期已尝试解析且失败的 IP（30 分钟冷却期）
+                    target_ips = [
+                        ip for ip in set(event_ips + bl_ips + pal_ips)
+                        if (now - unresolvable_cache.get(ip, 0)) > 1800
+                    ]
+
                     if not target_ips:
-                        # 当前无待修复记录，休眠 30 秒后进行下一轮轻量巡检
+                        # 当前无待修复记录或所有记录处于冷却中，休眠 30 秒后进行下一轮轻量巡检
                         time.sleep(30.0)
                         continue
 
-                    for ip in target_ips:
+                    # 单批次最多处理 50 个，避免单次循环阻塞过长
+                    for ip in target_ips[:50]:
                         geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip)
                         if not geo or not geo.get("country") or geo.get("country") in ("集群联防", "未知地域", "分析中...", "", None):
                             geo = resolve_ip_geo(ip)
@@ -1139,6 +1148,17 @@ def heal_cluster_geo_history():
                                       (c_val, r_val, ci_val, isp_val, ip))
                             u_conn.commit()
                             u_conn.close()
+                            if ip in unresolvable_cache:
+                                del unresolvable_cache[ip]
+                        else:
+                            unresolvable_cache[ip] = now
+                        time.sleep(0.02)
+
+                    if len(unresolvable_cache) > 2000:
+                        unresolvable_cache = {k: v for k, v in unresolvable_cache.items() if (now - v) <= 1800}
+
+                    # 每轮批次处理结束后休眠 10 秒，防止紧轮询跑满 CPU
+                    time.sleep(10.0)
                 except Exception:
                     time.sleep(10.0)
         except Exception:
