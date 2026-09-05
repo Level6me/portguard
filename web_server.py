@@ -30,7 +30,7 @@ from sentry_daemon import (
     cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, resolve_ip_geo_local, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
-    ban_ip_firewall, init_firewall_ipset, verify_cluster_token, generate_cluster_token, ban_ip,
+    ban_ip_firewall, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
     normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker
 )
@@ -7596,20 +7596,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 save_config(cfg)
 
                 if is_paused:
-                    run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
-                    try:
-                        conn = get_db()
-                        c = conn.cursor()
-                        c.execute("SELECT ip FROM blacklist")
-                        for row in c.fetchall():
-                            b_ip = row[0]
-                            if b_ip:
-                                run_firewall_cmd("iptables", "-D", "INPUT", "-s", b_ip, "-j", "DROP")
-                        conn.close()
-                    except Exception:
-                        pass
-                    msg = "PortGuard 防御拦截已暂停（系统进入观察模式，Web控制台正常运行）。"
+                    flush_firewall_blocks()
+                    msg = "PortGuard 防御拦截已暂停（系统进入观察模式，已排空防火墙与黑洞路由，Web控制台正常运行）。"
                 else:
+                    init_firewall_ipset()
                     msg = "PortGuard 防御拦截已恢复（安全防护与实时阻断已重新生效）。"
 
                 self._send_json({"success": True, "paused": is_paused, "msg": msg})

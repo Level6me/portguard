@@ -389,6 +389,28 @@ def init_firewall_ipset():
         return False
 
 
+def flush_firewall_blocks():
+    """彻底排空内核所有封禁拦截：清空黑洞路由、ipset 黑名单集合以及 iptables INPUT 单独规则"""
+    try:
+        run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
+        run_firewall_cmd("ip", "-6", "route", "flush", "type", "blackhole")
+        if is_ipset_available():
+            subprocess.run(["ipset", "flush", "portguard_blacklist_v4"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["ipset", "flush", "portguard_blacklist_v6"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT ip FROM blacklist")
+        for row in c.fetchall():
+            b_ip = row["ip"]
+            if b_ip:
+                addr_obj = ipaddress.ip_address(b_ip)
+                fw = "ip6tables" if addr_obj.version == 6 else "iptables"
+                run_firewall_cmd(fw, "-D", "INPUT", "-s", b_ip, "-j", "DROP")
+        conn.close()
+    except Exception:
+        pass
+
+
 def ban_ip_firewall(ip):
     """下发内核拦截：优先写入 ipset 集合并下发黑洞路由，降级兼容原生 iptables。"""
     valid_ip = validate_ip(ip)
@@ -488,7 +510,7 @@ def run_firewall_cmd(*args):
 
 
 def get_local_ips():
-    """获取本机所有 IP 地址集合（包括回环、公网及局域网 IP）"""
+    """获取本机所有 IP 地址集合（包括回环、公网及局域网/Docker/虚拟网卡 IP）"""
     ips = {"127.0.0.1", "0.0.0.0", "::1"}
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -503,25 +525,36 @@ def get_local_ips():
             ips.add(ip)
     except Exception:
         pass
+    try:
+        out = subprocess.check_output("ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null", shell=True, text=True)
+        for line in out.splitlines():
+            m = re.search(r'inet6?\s+([0-9a-fA-F\.\:]+)', line)
+            if m:
+                clean_ip = m.group(1).split('/')[0].strip()
+                if clean_ip:
+                    ips.add(clean_ip)
+    except Exception:
+        pass
     return ips
 
 
 class ParsedPacket(tuple):
     """兼具 3 元组兼容性与隐蔽扫描属性扩展的数据包解析结果"""
-    def __new__(cls, src_ip, dst_port, proto_str, stealth_type=None):
+    def __new__(cls, src_ip, dst_port, proto_str, stealth_type=None, dst_ip=None):
         return super(ParsedPacket, cls).__new__(cls, (src_ip, dst_port, proto_str))
 
-    def __init__(self, src_ip, dst_port, proto_str, stealth_type=None):
+    def __init__(self, src_ip, dst_port, proto_str, stealth_type=None, dst_ip=None):
         self.src_ip = src_ip
         self.dst_port = dst_port
         self.proto = proto_str
         self.stealth_type = stealth_type
+        self.dst_ip = dst_ip
 
 
 def parse_packet(raw_data):
     """解析以太网帧 / SLL 帧 / 原始 IP 报文 (IPv4 / IPv6) 中的 TCP/UDP 报文与隐蔽畸形扫描标志位。
 
-    返回 ParsedPacket(src_ip, dst_port, proto_str, stealth_type) 或 None。
+    返回 ParsedPacket(src_ip, dst_port, proto_str, stealth_type, dst_ip) 或 None。
     """
     try:
         if not raw_data or len(raw_data) < 20:
@@ -548,6 +581,7 @@ def parse_packet(raw_data):
             if ihl < 20 or len(raw_data) < offset + ihl + 4:
                 return None
             src_ip = socket.inet_ntoa(ip_hdr[12:16])
+            dst_ip = socket.inet_ntoa(ip_hdr[16:20])
         elif version == 6:
             if len(raw_data) < offset + 40:
                 return None
@@ -557,6 +591,7 @@ def parse_packet(raw_data):
             if len(raw_data) < offset + ihl + 4:
                 return None
             src_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[8:24])
+            dst_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[24:40])
         else:
             return None
 
@@ -579,9 +614,9 @@ def parse_packet(raw_data):
             elif (tcp_flags & 0x06) == 0x06:  # SYN(2) + RST(4)
                 stealth_type = "SYN_RST_SCAN"
             elif (tcp_flags & 0x02) and not (tcp_flags & 0x10):
-                stealth_type = None  # 正常标准 TCP SYN 连接探测
+                stealth_type = None  # 正常标准 TCP SYN 入站请求探测 (SYN=1, ACK=0)
             else:
-                # 过滤已建立连接的数据流与纯 ACK
+                # 过滤出站握手回包 (SYN-ACK: 0x12)、已建立连接的数据流 (ACK/PSH-ACK)
                 return None
 
         l4_hdr = raw_data[offset + ihl:offset + ihl + 4]
@@ -599,7 +634,7 @@ def parse_packet(raw_data):
             if dst_port >= 1024:
                 return None
 
-        return ParsedPacket(src_ip, dst_port, proto_str, stealth_type=stealth_type)
+        return ParsedPacket(src_ip, dst_port, proto_str, stealth_type=stealth_type, dst_ip=dst_ip)
     except Exception:
         return None
 
@@ -3259,8 +3294,15 @@ class GlobalPortSniffer:
                         continue
                     src_ip, dst_port, proto_str = parsed
                     stealth_type = getattr(parsed, 'stealth_type', None)
+                    dst_ip = getattr(parsed, 'dst_ip', None)
 
-                    # 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
+                    # 1. 严格方向判定：数据包的目的 IP (dst_ip) 必须是本机拥有的网卡 IP 或全局广播地址
+                    # 避免系统主动向外发起连接时的外部回包被逆向判为恶意探测
+                    if dst_ip and dst_ip not in self.local_ips and not dst_ip.startswith("255.") and not dst_ip.startswith("224.") and not dst_ip.startswith("ff02"):
+                        # 如果目的 IP 不是本机网卡，说明是本机路由转发或出站相关报文，绝对忽略
+                        continue
+
+                    # 2. 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
                     if (src_ip in self.local_ips
                             or src_ip.startswith("127.")
                             or src_ip == "0.0.0.0"
@@ -3329,35 +3371,7 @@ class GlobalPortSniffer:
             return
         
         def _async_write(act, d):
-            try:
-                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                now_ts = int(time.time())
-                conn = get_db()
-                c = conn.cursor()
-                c.execute("""
-                INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-                VALUES (?, ?, ?, ?, '分析中...', '', '', '', ?, ?, ?)
-                """, (src_ip, dst_port, proto, d, act, now_str, now_ts))
-                new_id = c.lastrowid
-                conn.commit()
-                conn.close()
-                
-                # 异步解析地理位置
-                def _geo_backfill(record_id, ip_addr):
-                    try:
-                        g = resolve_ip_geo(ip_addr)
-                        c2 = get_db()
-                        cur = c2.cursor()
-                        cur.execute("""
-                        UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?
-                        """, (g.get("country", "公网节点"), g.get("region", ""), g.get("city", ""), g.get("isp", ""), record_id))
-                        c2.commit()
-                        c2.close()
-                    except Exception:
-                        pass
-                _EXECUTOR.submit(_geo_backfill, new_id, src_ip)
-            except Exception:
-                pass
+            log_port_access_entry(src_ip, dst_port, port_name=d, action=act)
 
         # 1. 优先白名单放行
         if ip_in_whitelist(src_ip, whitelist):
