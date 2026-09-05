@@ -7151,24 +7151,27 @@ class RequestHandler(BaseHTTPRequestHandler):
             pass
 
     def _send_response_data(self, data_bytes, content_type="application/json; charset=utf-8", status=200):
-        self.send_response(status)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
-        
-        accept_encoding = self.headers.get('Accept-Encoding', '')
-        if 'gzip' in accept_encoding and len(data_bytes) > 256:
-            compressed = gzip.compress(data_bytes, compresslevel=5)
-            self.send_header('Content-Encoding', 'gzip')
-            self.send_header('Content-Length', str(len(compressed)))
-            self.end_headers()
-            self.wfile.write(compressed)
-        else:
-            self.send_header('Content-Length', str(len(data_bytes)))
-            self.end_headers()
-            self.wfile.write(data_bytes)
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            
+            accept_encoding = self.headers.get('Accept-Encoding', '')
+            if 'gzip' in accept_encoding and len(data_bytes) > 256:
+                compressed = gzip.compress(data_bytes, compresslevel=5)
+                self.send_header('Content-Encoding', 'gzip')
+                self.send_header('Content-Length', str(len(compressed)))
+                self.end_headers()
+                self.wfile.write(compressed)
+            else:
+                self.send_header('Content-Length', str(len(data_bytes)))
+                self.end_headers()
+                self.wfile.write(data_bytes)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send_json(self, data, status=200):
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
@@ -7180,22 +7183,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             _RAW_HTML_CACHE = html.encode('utf-8')
             _GZIP_HTML_CACHE = gzip.compress(_RAW_HTML_CACHE, compresslevel=6)
         
-        accept_encoding = self.headers.get('Accept-Encoding', '')
-        self.send_response(status)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
-        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
-        
-        if 'gzip' in accept_encoding:
-            self.send_header('Content-Encoding', 'gzip')
-            self.send_header('Content-Length', str(len(_GZIP_HTML_CACHE)))
-            self.end_headers()
-            self.wfile.write(_GZIP_HTML_CACHE)
-        else:
-            self.send_header('Content-Length', str(len(_RAW_HTML_CACHE)))
-            self.end_headers()
-            self.wfile.write(_RAW_HTML_CACHE)
+        try:
+            accept_encoding = self.headers.get('Accept-Encoding', '')
+            self.send_response(status)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
+            self.send_header('Pragma', 'no-cache')
+            self.send_header('Expires', '0')
+            
+            if 'gzip' in accept_encoding:
+                self.send_header('Content-Encoding', 'gzip')
+                self.send_header('Content-Length', str(len(_GZIP_HTML_CACHE)))
+                self.end_headers()
+                self.wfile.write(_GZIP_HTML_CACHE)
+            else:
+                self.send_header('Content-Length', str(len(_RAW_HTML_CACHE)))
+                self.end_headers()
+                self.wfile.write(_RAW_HTML_CACHE)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_HEAD(self):
         self.send_response(200)
