@@ -6519,15 +6519,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const res = await fetch(`/api/attacker/timeline?ip=${encodeURIComponent(ip)}`);
             const data = await res.json();
 
-            document.getElementById('timeline-geo').innerText = data.country || '公网节点';
-            document.getElementById('timeline-isp').innerText = (data.region || '') + ' ' + (data.isp || '');
-            document.getElementById('timeline-stats').innerText = `${data.total_probes || 0} 次探测 · 涉及 ${(data.ports_hit || []).length} 个端口`;
+            const geoCountry = data.country || (data.geo && data.geo.country) || '公网节点';
+            const geoRegion = data.region || (data.geo && data.geo.region) || '';
+            const geoIsp = data.isp || (data.geo && data.geo.isp) || '';
+            document.getElementById('timeline-geo').innerText = geoCountry;
+            document.getElementById('timeline-isp').innerText = `${geoRegion} ${geoIsp}`.trim() || '公网网络';
+
+            const totalProbes = data.total_probes !== undefined ? data.total_probes : (data.event_count || 0);
+            const portsHit = data.ports_hit || (data.port_footprints || []).map(f => f.port) || [];
+            const uniquePorts = [...new Set(portsHit.filter(Boolean))];
+            document.getElementById('timeline-stats').innerText = `${totalProbes} 次探测 · 涉及 ${uniquePorts.length} 个端口`;
             document.getElementById('timeline-times').innerText = `${data.first_seen || '--'} / ${data.last_seen || '--'}`;
 
             const bannedTag = document.getElementById('timeline-banned-tag');
             if (bannedTag) {
-                bannedTag.className = data.is_banned ? 'tag danger' : 'tag warning';
-                bannedTag.innerText = data.is_banned ? '已在内核黑名单' : '未封禁 (观察中)';
+                const isBanned = data.is_banned !== undefined ? Boolean(data.is_banned) : Boolean(data.ban_record);
+                bannedTag.className = isBanned ? 'tag danger' : 'tag warning';
+                bannedTag.innerText = isBanned ? '🚫 已在内核黑名单 (已阻断)' : '👀 未封禁 (观察中)';
             }
 
             // 威胁画像标签
@@ -7467,11 +7475,66 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                 ban_record = c.fetchone()
                 ban_dict = dict(ban_record) if ban_record else None
 
-                # 3. 查找所有端口访问探测足迹 (distinct ports)
+                # 3. 统计总探测次数及首见/末见时间
+                c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM events WHERE ip = ?", (att_ip,))
+                ev_stats = c.fetchone()
+                total_events = ev_stats[0] if ev_stats and ev_stats[0] else 0
+
+                c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM port_access_logs WHERE ip = ?", (att_ip,))
+                pal_stats = c.fetchone()
+                total_pal = pal_stats[0] if pal_stats and pal_stats[0] else 0
+
+                total_probes = max(total_events, total_pal, len(events_list))
+
+                min_ts = None
+                max_ts = None
+                if ev_stats and ev_stats[1]:
+                    min_ts = ev_stats[1]
+                if pal_stats and pal_stats[1]:
+                    min_ts = min(min_ts, pal_stats[1]) if min_ts else pal_stats[1]
+
+                if ev_stats and ev_stats[2]:
+                    max_ts = ev_stats[2]
+                if pal_stats and pal_stats[2]:
+                    max_ts = max(max_ts, pal_stats[2]) if max_ts else pal_stats[2]
+
+                first_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min_ts)) if min_ts else "--"
+                last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(max_ts)) if max_ts else "--"
+
+                # 4. 查找所有端口访问探测足迹 (distinct ports)
                 c.execute("SELECT DISTINCT port, port_name, action FROM port_access_logs WHERE ip = ? ORDER BY id DESC", (att_ip,))
                 footprints = [dict(r) for r in c.fetchall()]
 
-                # 4. 统计同 C 段 (/24) 活跃攻击威胁源
+                c.execute("SELECT DISTINCT port FROM events WHERE ip = ? AND port IS NOT NULL", (att_ip,))
+                ports_ev = [r[0] for r in c.fetchall() if r[0]]
+                ports_pal = [f["port"] for f in footprints if f.get("port")]
+                ports_hit = sorted(list(set(ports_ev + ports_pal)))
+
+                # 5. 提取捕获的恶意载荷与木马 URL
+                extracted_payloads = []
+                for ev in events_list:
+                    pname = ev.get("port_name") or ""
+                    if "[提取木马下载源:" in pname:
+                        try:
+                            m = re.search(r"\[提取木马下载源:\s*([^\]]+)\]", pname)
+                            if m:
+                                for u in m.group(1).split(","):
+                                    u_c = u.strip()
+                                    if u_c and u_c not in extracted_payloads:
+                                        extracted_payloads.append(u_c)
+                        except Exception:
+                            pass
+                    elif "[捕获载荷:" in pname:
+                        try:
+                            m = re.search(r"\[捕获载荷:\s*([^\]]+)\]", pname)
+                            if m:
+                                p_c = m.group(1).strip()
+                                if p_c and p_c not in extracted_payloads:
+                                    extracted_payloads.append(p_c)
+                        except Exception:
+                            pass
+
+                # 6. 统计同 C 段 (/24) 活跃攻击威胁源
                 c_subnet_ips = []
                 try:
                     if "." in att_ip:
@@ -7489,9 +7552,19 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                 self._send_json({
                     "ip": att_ip,
                     "geo": geo,
+                    "country": geo.get("country") or "公网节点",
+                    "region": geo.get("region") or "",
+                    "city": geo.get("city") or "",
+                    "isp": geo.get("isp") or "",
                     "threat_tags": threat_tags,
                     "ban_record": ban_dict,
-                    "event_count": len(events_list),
+                    "is_banned": bool(ban_dict),
+                    "total_probes": total_probes,
+                    "ports_hit": ports_hit,
+                    "first_seen": first_seen,
+                    "last_seen": last_seen,
+                    "extracted_payloads": extracted_payloads,
+                    "event_count": total_probes,
                     "events": events_list,
                     "port_footprints": footprints,
                     "subnet_c_peers": c_subnet_ips,
