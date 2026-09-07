@@ -778,7 +778,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             justify-content: space-between;
             margin-bottom: 7px;
             font-size: 12px;
+            border-radius: 6px;
+            padding: 3px 6px;
+            transition: background 0.15s ease;
         }
+        .rank-item:last-child {
+            margin-bottom: 0;
+        }
+        .rank-item:hover {
+            background: var(--card-sec);
+        }
+        .rank-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            margin-right: 7px;
+            flex-shrink: 0;
+        }
+        .rank-num.top1 { background: #ef4444; color: #fff; }
+        .rank-num.top2 { background: #f97316; color: #fff; }
+        .rank-num.top3 { background: #eab308; color: #fff; }
+        .rank-num.normal { background: rgba(120, 120, 128, 0.14); color: var(--text-sec); }
         .rank-bar-bg {
             flex: 1;
             height: 6px;
@@ -791,6 +816,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             height: 100%;
             background: var(--accent);
             border-radius: 4px;
+            transition: width 0.3s ease;
         }
     </style>
 </head>
@@ -913,13 +939,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="grid-2">
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">🌍 威胁来源地域排行</div>
+                        <div>
+                            <div class="card-title">🌍 威胁来源地域排行 Top 10</div>
+                            <div class="val-sub">按拦截威胁源归属地分布</div>
+                        </div>
+                        <button class="action-btn" onclick="switchOverviewSubTab('analysis')" title="查看多维空间分布图谱">多维分析</button>
                     </div>
                     <div id="geo-rank-box">正在统计地域流量...</div>
                 </div>
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title">⚡ 实时拦截事件</div>
+                        <div>
+                            <div class="card-title">⚡ 实时拦截事件</div>
+                            <div class="val-sub">最新捕获的端口与探针威胁</div>
+                        </div>
                         <button class="action-btn" onclick="switchTab('logs')">查看全部日志</button>
                     </div>
                     <div id="recent-threats-box">正在加载最新事件...</div>
@@ -2420,6 +2453,52 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "Indonesia": "印度尼西亚", "Philippines": "菲律宾", "Vietnam": "越南", "Thailand": "泰国",
         "Australia": "澳大利亚", "New Zealand": "新西兰", "South Africa": "南非", "Egypt": "埃及"
     };
+    const COUNTRY_FLAG_MAP = {
+        "美国": "🇺🇸", "United States": "🇺🇸", "US": "🇺🇸",
+        "德国": "🇩🇪", "Germany": "🇩🇪", "DE": "🇩🇪",
+        "英国": "🇬🇧", "United Kingdom": "🇬🇧", "GB": "🇬🇧",
+        "中国": "🇨🇳", "China": "🇨🇳", "CN": "🇨🇳",
+        "印度": "🇮🇳", "India": "🇮🇳", "IN": "🇮🇳",
+        "巴西": "🇧🇷", "Brazil": "🇧🇷", "BR": "🇧🇷",
+        "加拿大": "🇨🇦", "Canada": "🇨🇦", "CA": "🇨🇦",
+        "法国": "🇫🇷", "France": "🇫🇷", "FR": "🇫🇷",
+        "新加坡": "🇸🇬", "Singapore": "🇸🇬", "SG": "🇸🇬",
+        "日本": "🇯🇵", "Japan": "🇯🇵", "JP": "🇯🇵",
+        "荷兰": "🇳🇱", "The Netherlands": "🇳🇱", "Netherlands": "🇳🇱", "NL": "🇳🇱",
+        "波兰": "🇵🇱", "Poland": "🇵🇱", "PL": "🇵🇱",
+        "芬兰": "🇫🇮", "Finland": "🇫🇮", "FI": "🇫🇮",
+        "澳大利亚": "🇦🇺", "澳大利亞": "🇦🇺", "Australia": "🇦🇺", "AU": "🇦🇺",
+        "印度尼西亚": "🇮🇩", "印尼": "🇮🇩", "Indonesia": "🇮🇩", "ID": "🇮🇩",
+        "俄罗斯联邦": "🇷🇺", "俄罗斯": "🇷🇺", "Russia": "🇷🇺", "RU": "🇷🇺",
+        "香港": "🇭🇰", "中国香港": "🇭🇰", "Hong Kong": "🇭🇰", "HK": "🇭🇰",
+        "台湾": "🇹🇼", "中国台湾": "🇹🇼", "Taiwan": "🇹🇼", "TW": "🇹🇼",
+        "韩国": "🇰🇷", "South Korea": "🇰🇷", "Korea": "🇰🇷", "KR": "🇰🇷",
+        "乌克兰": "🇺🇦", "Ukraine": "🇺🇦", "UA": "🇺🇦",
+        "意大利": "🇮🇹", "Italy": "🇮🇹", "IT": "🇮🇹",
+        "西班牙": "🇪🇸", "Spain": "🇪🇸", "ES": "🇪🇸",
+        "越南": "🇻🇳", "Vietnam": "🇻🇳", "VN": "🇻🇳",
+        "泰国": "🇹🇭", "Thailand": "🇹🇭", "TH": "🇹🇭",
+        "马来西亚": "🇲🇾", "Malaysia": "🇲🇾", "MY": "🇲🇾",
+        "南非": "🇿🇦", "South Africa": "🇿🇦", "ZA": "🇿🇦",
+        "墨西哥": "🇲🇽", "Mexico": "🇲🇽", "MX": "🇲🇽",
+        "爱尔兰": "🇮🇪", "Ireland": "🇮🇪", "IE": "🇮🇪",
+        "瑞典": "🇸🇪", "Sweden": "🇸🇪", "SE": "🇸🇪",
+        "瑞士": "🇨🇭", "Switzerland": "🇨🇭", "CH": "🇨🇭",
+        "阿根廷": "🇦🇷", "Argentina": "🇦🇷", "AR": "🇦🇷",
+        "哥伦比亚": "🇨🇴", "Colombia": "🇨🇴", "CO": "🇨🇴",
+        "智利": "🇨🇱", "Chile": "🇨🇱", "CL": "🇨🇱",
+        "土耳其": "🇹🇷", "Turkey": "🇹🇷", "TR": "🇹🇷",
+        "巴基斯坦": "🇵🇰", "Pakistan": "🇵🇰", "PK": "🇵🇰",
+        "伊朗": "🇮🇷", "Iran": "🇮🇷", "IR": "🇮🇷",
+        "比利时": "🇧🇪", "Belgium": "🇧🇪", "BE": "🇧🇪",
+        "奥地利": "🇦🇹", "Austria": "🇦🇹", "AT": "🇦🇹",
+        "挪威": "🇳🇴", "Norway": "🇳🇴", "NO": "🇳🇴",
+        "丹麦": "🇩🇰", "Denmark": "🇩🇰", "DK": "🇩🇰",
+        "保加利亚": "🇧🇬", "Bulgaria": "🇧🇬", "BG": "🇧🇬",
+        "罗马尼亚": "🇷🇴", "Romania": "🇷🇴", "RO": "🇷🇴",
+        "希腊": "🇬🇷", "Greece": "🇬🇷", "GR": "🇬🇷",
+        "阿联酋": "🇦🇪", "阿拉伯联合酋长国": "🇦🇪", "United Arab Emirates": "🇦🇪", "AE": "🇦🇪"
+    };
 
     function formatGeoCN(item) {
         if (!item) return '🌐 公网节点';
@@ -3623,14 +3702,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         const max = Math.max(...geoList.map(g => g.count), 1);
         let html = '';
-        geoList.forEach(g => {
+        geoList.forEach((g, idx) => {
             const pct = ((g.count / max) * 100).toFixed(0);
             const countryCN = COUNTRY_CN_MAP[g.country] || g.country || '公网节点';
+            const flag = COUNTRY_FLAG_MAP[countryCN] || COUNTRY_FLAG_MAP[g.country] || '🌐';
+            const rankNum = idx + 1;
+            const rankCls = rankNum === 1 ? 'top1' : (rankNum === 2 ? 'top2' : (rankNum === 3 ? 'top3' : 'normal'));
             html += `
-            <div class="rank-item">
-                <span style="width: 100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;">🌐 ${countryCN}</span>
+            <div class="rank-item" title="${escapeHtml(countryCN)}: 捕获拦截 ${g.count.toLocaleString()} 次">
+                <span class="rank-num ${rankCls}">${rankNum}</span>
+                <span style="width: 105px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500;">${flag} ${escapeHtml(countryCN)}</span>
                 <div class="rank-bar-bg"><div class="rank-bar-fill" style="width: ${pct}%"></div></div>
-                <span style="font-weight:600; width: 32px; text-align:right; font-variant-numeric:tabular-nums;">${g.count}</span>
+                <span style="font-weight:600; min-width: 44px; text-align:right; font-variant-numeric:tabular-nums;">${g.count.toLocaleString()}</span>
             </div>
             `;
         });
@@ -7121,14 +7204,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 """)
                 port_dist = [{"port": row["port"], "name": row["port_name"], "count": row["cnt"]} for row in c.fetchall()]
                 
-                # 国家排行 Top 5
+                # 国家排行 Top 10
                 c.execute("""
                 SELECT country, COUNT(*) as cnt 
                 FROM events 
-                WHERE country IS NOT NULL AND country != '' AND ip NOT IN (SELECT ip FROM hidden_ips)
+                WHERE country IS NOT NULL AND country != '' 
+                  AND country NOT IN ('分析中...', '未知地域', 'Localhost', '本地回环')
+                  AND ip NOT IN (SELECT ip FROM hidden_ips)
                 GROUP BY country 
                 ORDER BY cnt DESC 
-                LIMIT 5
+                LIMIT 10
                 """)
                 geo_rank = [{"country": row["country"], "count": row["cnt"]} for row in c.fetchall()]
                 
