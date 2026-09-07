@@ -1248,6 +1248,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- 黑名单搜索与过滤工具栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                    <div class="search-box" style="flex: 1; max-width: 420px;">
+                        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" id="blacklist-search-input" placeholder="搜索封禁 IP / 来源节点 / 归属地 / 拦截原因 / 标签..." oninput="onBlacklistSearch()">
+                    </div>
+                    <div id="blacklist-search-summary" style="font-size: 11px; color: var(--text-sec); font-weight: 600;"></div>
+                </div>
+
                 <div class="table-wrap">
                     <table>
                         <thead>
@@ -1314,6 +1323,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- 白名单搜索与过滤工具栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
+                    <div class="search-box" style="flex: 1; max-width: 420px;">
+                        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input type="text" id="whitelist-search-input" placeholder="搜索白名单 IP / CIDR 网段 / 备注说明..." oninput="onWhitelistSearch()">
+                    </div>
+                    <div id="whitelist-search-summary" style="font-size: 11px; color: var(--text-sec); font-weight: 600;"></div>
                 </div>
 
                 <div class="table-wrap">
@@ -3420,6 +3438,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         showToast('态势分析完整数据集 (JSON) 导出成功', '📥');
     }
 
+    function fetchBlacklist() {
+        return fetch('/api/blacklist').then(res => res.json()).then(data => {
+            allBlacklist = data;
+            renderBlacklistTable();
+        }).catch(err => {
+            console.error('Failed to fetch blacklist:', err);
+        });
+    }
+
+    function fetchWhitelist() {
+        return fetch('/api/whitelist').then(res => res.json()).then(data => {
+            allWhitelist = data;
+            renderWhitelistTable();
+        }).catch(err => {
+            console.error('Failed to fetch whitelist:', err);
+        });
+    }
+
     let currentIpListSubTab = 'blacklist';
     function switchIpListSubTab(subTab, btn) {
         currentIpListSubTab = subTab;
@@ -4094,8 +4130,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         tbody.innerHTML = html;
     }
 
+    let filteredBlacklist = [];
+    let blacklistSearchKeyword = '';
+
+    function onBlacklistSearch() {
+        const input = document.getElementById('blacklist-search-input');
+        blacklistSearchKeyword = (input ? input.value : '').trim().toLowerCase();
+        blacklistPage = 1;
+        renderBlacklistTable();
+    }
+
     function changeBlacklistPage(delta) {
-        const total = allBlacklist ? allBlacklist.length : 0;
+        const total = filteredBlacklist ? filteredBlacklist.length : (allBlacklist ? allBlacklist.length : 0);
         const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
         const target = blacklistPage + delta;
         if (target >= 1 && target <= totalPages) {
@@ -4107,16 +4153,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function renderBlacklistTable() {
         const tbody = document.getElementById('blacklist-tbody');
-        const list = allBlacklist || [];
+        const rawList = allBlacklist || [];
+        
+        let list = rawList;
+        if (blacklistSearchKeyword) {
+            list = rawList.filter(b => {
+                const ip = (b.ip || '').toLowerCase();
+                const node = (b.source_node || '').toLowerCase();
+                const reason = (b.reason || '').toLowerCase();
+                const banTime = (b.ban_time || '').toLowerCase();
+                const tags = Array.isArray(b.threat_tags) ? b.threat_tags.join(' ').toLowerCase() : '';
+                const geoText = formatGeoCN(b).toLowerCase();
+                
+                return ip.includes(blacklistSearchKeyword) ||
+                       node.includes(blacklistSearchKeyword) ||
+                       reason.includes(blacklistSearchKeyword) ||
+                       banTime.includes(blacklistSearchKeyword) ||
+                       tags.includes(blacklistSearchKeyword) ||
+                       geoText.includes(blacklistSearchKeyword);
+            });
+        }
+        filteredBlacklist = list;
+
         const totalCount = list.length;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
         if (blacklistPage > totalPages) blacklistPage = totalPages;
         if (blacklistPage < 1) blacklistPage = 1;
 
+        const summaryEl = document.getElementById('blacklist-search-summary');
+        if (summaryEl) {
+            if (blacklistSearchKeyword) {
+                summaryEl.innerHTML = `已筛选出 <b style="color:var(--accent);">${totalCount}</b> / ${rawList.length} 条`;
+            } else {
+                summaryEl.innerHTML = `共 ${rawList.length} 条黑名单记录`;
+            }
+        }
+
         renderPaginationUI(totalCount, blacklistPage, PAGE_SIZE, 'blacklist-total-cnt', 'blacklist-page-info', 'btn-blacklist-prev', 'btn-blacklist-next', 'blacklist-page-nums', 'setBlacklistPage');
 
         if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-sec); padding: 24px;">当前内核黑名单池为空</td></tr>';
+            if (blacklistSearchKeyword) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">未找到匹配 "<b>${escapeHtml(blacklistSearchKeyword)}</b>" 的黑名单条目</td></tr>`;
+            } else {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-sec); padding: 30px;">当前内核黑名单池为空</td></tr>';
+            }
             return;
         }
 
@@ -4921,8 +5001,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         });
     }
 
+    let filteredWhitelist = [];
+    let whitelistSearchKeyword = '';
+
+    function onWhitelistSearch() {
+        const input = document.getElementById('whitelist-search-input');
+        whitelistSearchKeyword = (input ? input.value : '').trim().toLowerCase();
+        whitelistPage = 1;
+        renderWhitelistTable();
+    }
+
     function changeWhitelistPage(delta) {
-        const total = allWhitelist ? allWhitelist.length : 0;
+        const total = filteredWhitelist ? filteredWhitelist.length : (allWhitelist ? allWhitelist.length : 0);
         const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
         const target = whitelistPage + delta;
         if (target >= 1 && target <= totalPages) {
@@ -4934,16 +5024,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     function renderWhitelistTable() {
         const tbody = document.getElementById('whitelist-tbody');
-        const list = allWhitelist || [];
+        const rawList = allWhitelist || [];
+
+        let list = rawList;
+        if (whitelistSearchKeyword) {
+            list = rawList.filter(w => {
+                const ipStr = (typeof w === 'object' && w !== null) ? (w.ip || '') : String(w);
+                const remark = (typeof w === 'object' && w !== null) ? (w.remark || '') : '';
+                return ipStr.toLowerCase().includes(whitelistSearchKeyword) ||
+                       remark.toLowerCase().includes(whitelistSearchKeyword);
+            });
+        }
+        filteredWhitelist = list;
+
         const totalCount = list.length;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
         if (whitelistPage > totalPages) whitelistPage = totalPages;
         if (whitelistPage < 1) whitelistPage = 1;
 
+        const summaryEl = document.getElementById('whitelist-search-summary');
+        if (summaryEl) {
+            if (whitelistSearchKeyword) {
+                summaryEl.innerHTML = `已筛选出 <b style="color:var(--accent);">${totalCount}</b> / ${rawList.length} 条`;
+            } else {
+                summaryEl.innerHTML = `共 ${rawList.length} 条白名单记录`;
+            }
+        }
+
         renderPaginationUI(totalCount, whitelistPage, PAGE_SIZE, 'whitelist-total-cnt', 'whitelist-page-info', 'btn-whitelist-prev', 'btn-whitelist-next', 'whitelist-page-nums', 'setWhitelistPage');
 
         if (totalCount === 0) {
-            tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 24px;">当前无白名单记录</td></tr>';
+            if (whitelistSearchKeyword) {
+                tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">未找到匹配 "<b>${escapeHtml(whitelistSearchKeyword)}</b>" 的白名单条目</td></tr>`;
+            } else {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">当前无白名单记录</td></tr>';
+            }
             return;
         }
 
