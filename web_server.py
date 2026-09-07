@@ -2450,8 +2450,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "China": "中国", "Japan": "日本", "South Korea": "韩国", "North Korea": "朝鲜",
         "Hong Kong": "中国香港", "Taiwan": "中国台湾", "Macau": "中国澳门",
         "India": "印度", "Pakistan": "巴基斯坦", "Singapore": "新加坡", "Malaysia": "马来西亚",
-        "Indonesia": "印度尼西亚", "Philippines": "菲律宾", "Vietnam": "越南", "Thailand": "泰国",
-        "Australia": "澳大利亚", "New Zealand": "新西兰", "South Africa": "南非", "Egypt": "埃及"
+        "Indonesia": "印度尼西亚", "Philippines": "菲律宾", "Vietnam": "越南", "Viet Nam": "越南", "Thailand": "泰国",
+        "Australia": "澳大利亚", "New Zealand": "新西兰", "South Africa": "南非", "Egypt": "埃及",
+        "Bangladesh": "孟加拉国", "Brunei Darussalam": "文莱", "Cambodia": "柬埔寨", "Iraq": "伊拉克",
+        "Jordan": "约旦", "Laos": "老挝", "Mauritius": "毛里求斯", "Nigeria": "尼日利亚",
+        "Tunisia": "突尼斯", "Türkiye": "土耳其", "Venezuela": "委内瑞拉", "Reserved": "专用节点"
     };
     const COUNTRY_FLAG_MAP = {
         "美国": "🇺🇸", "United States": "🇺🇸", "US": "🇺🇸",
@@ -2476,7 +2479,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "乌克兰": "🇺🇦", "Ukraine": "🇺🇦", "UA": "🇺🇦",
         "意大利": "🇮🇹", "Italy": "🇮🇹", "IT": "🇮🇹",
         "西班牙": "🇪🇸", "Spain": "🇪🇸", "ES": "🇪🇸",
-        "越南": "🇻🇳", "Vietnam": "🇻🇳", "VN": "🇻🇳",
+        "越南": "🇻🇳", "Vietnam": "🇻🇳", "Viet Nam": "🇻🇳", "VN": "🇻🇳",
         "泰国": "🇹🇭", "Thailand": "🇹🇭", "TH": "🇹🇭",
         "马来西亚": "🇲🇾", "Malaysia": "🇲🇾", "MY": "🇲🇾",
         "南非": "🇿🇦", "South Africa": "🇿🇦", "ZA": "🇿🇦",
@@ -2487,7 +2490,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "阿根廷": "🇦🇷", "Argentina": "🇦🇷", "AR": "🇦🇷",
         "哥伦比亚": "🇨🇴", "Colombia": "🇨🇴", "CO": "🇨🇴",
         "智利": "🇨🇱", "Chile": "🇨🇱", "CL": "🇨🇱",
-        "土耳其": "🇹🇷", "Turkey": "🇹🇷", "TR": "🇹🇷",
+        "土耳其": "🇹🇷", "Turkey": "🇹🇷", "Türkiye": "🇹🇷", "TR": "🇹🇷",
         "巴基斯坦": "🇵🇰", "Pakistan": "🇵🇰", "PK": "🇵🇰",
         "伊朗": "🇮🇷", "Iran": "🇮🇷", "IR": "🇮🇷",
         "比利时": "🇧🇪", "Belgium": "🇧🇪", "BE": "🇧🇪",
@@ -2497,7 +2500,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         "保加利亚": "🇧🇬", "Bulgaria": "🇧🇬", "BG": "🇧🇬",
         "罗马尼亚": "🇷🇴", "Romania": "🇷🇴", "RO": "🇷🇴",
         "希腊": "🇬🇷", "Greece": "🇬🇷", "GR": "🇬🇷",
-        "阿联酋": "🇦🇪", "阿拉伯联合酋长国": "🇦🇪", "United Arab Emirates": "🇦🇪", "AE": "🇦🇪"
+        "阿联酋": "🇦🇪", "阿拉伯联合酋长国": "🇦🇪", "United Arab Emirates": "🇦🇪", "AE": "🇦🇪",
+        "孟加拉国": "🇧🇩", "Bangladesh": "🇧🇩", "BD": "🇧🇩",
+        "文莱": "🇧🇳", "Brunei Darussalam": "🇧🇳", "BN": "🇧🇳",
+        "柬埔寨": "🇰🇭", "Cambodia": "🇰🇭", "KH": "🇰🇭",
+        "伊拉克": "🇮🇶", "Iraq": "🇮🇶", "IQ": "🇮🇶",
+        "约旦": "🇯🇴", "Jordan": "🇯🇴", "JO": "🇯🇴",
+        "老挝": "🇱🇦", "Laos": "🇱🇦", "LA": "🇱🇦",
+        "尼日利亚": "🇳🇬", "Nigeria": "🇳🇬", "NG": "🇳🇬",
+        "突尼斯": "🇹🇳", "Tunisia": "🇹🇳", "TN": "🇹🇳",
+        "委内瑞拉": "🇻🇪", "Venezuela": "🇻🇪", "VE": "🇻🇪"
     };
 
     function formatGeoCN(item) {
