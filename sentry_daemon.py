@@ -2230,7 +2230,7 @@ def rollback_config_snapshot(filename):
         return False, f"回滚失败: {e}"
 
 def check_c2_compromise_connections():
-    """反向连线检测 (Compromise Assessment)：定时审计本机向外发起的所有出站连接，检测是否存在内网主机失陷或木马反弹连接 C2 威胁"""
+    """反向连线检测 (Compromise Assessment)：定时审计本机所有活跃 TCP 连接，检测是否存在内网主机失陷、恶意反弹 C2 或黑名单异常连线"""
     alerts = []
     try:
         conn = get_db()
@@ -2242,7 +2242,33 @@ def check_c2_compromise_connections():
         if not black_dict:
             return alerts
 
-        # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的出站 ESTABLISHED 连接 (状态 01)
+        # 扫描并建立 socket inode -> (pid, comm) 快速映射
+        sock_proc_map = {}
+        for p in glob.glob("/proc/[0-9]*"):
+            pid = os.path.basename(p)
+            comm = ""
+            try:
+                with open(os.path.join(p, "comm"), "r") as cf:
+                    comm = cf.read().strip()
+            except Exception:
+                pass
+            fd_dir = os.path.join(p, "fd")
+            if os.path.isdir(fd_dir):
+                try:
+                    for fd in os.listdir(fd_dir):
+                        try:
+                            t = os.readlink(os.path.join(fd_dir, fd))
+                            if t.startswith("socket:["):
+                                inode = t[8:-1]
+                                sock_proc_map[inode] = {"pid": pid, "process": comm}
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        active_system_ports = get_active_system_ports()
+
+        # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的 ESTABLISHED 连接 (状态 01)
         for proc_file, is_v6 in [("/proc/net/tcp", False), ("/proc/net/tcp6", True)]:
             if not os.path.exists(proc_file):
                 continue
@@ -2250,14 +2276,20 @@ def check_c2_compromise_connections():
                 lines = f.readlines()[1:]
             for line in lines:
                 parts = line.strip().split()
-                if len(parts) < 4:
+                if len(parts) < 10:
                     continue
                 state = parts[3]
                 if state != "01": # 仅检查处于已建立连线状态的 TCP 活跃连接
                     continue
+                loc_address = parts[1]
                 rem_address = parts[2]
+                inode = parts[9]
                 try:
                     if not is_v6:
+                        loc_hex, loc_port_hex = loc_address.split(":")
+                        local_ip = socket.inet_ntoa(struct.pack("<L", int(loc_hex, 16)))
+                        local_port = int(loc_port_hex, 16)
+
                         ip_hex, port_hex = rem_address.split(":")
                         remote_ip = socket.inet_ntoa(struct.pack("<L", int(ip_hex, 16)))
                         remote_port = int(port_hex, 16)
@@ -2265,13 +2297,34 @@ def check_c2_compromise_connections():
                         continue # 重点监控 IPv4 外连
                     
                     if remote_ip in black_dict:
+                        proc_info = sock_proc_map.get(inode, {"pid": "--", "process": "未知进程"})
+                        is_inbound = local_port in active_system_ports
+                        direction = "INBOUND" if is_inbound else "OUTBOUND"
+                        direction_desc = f"入站连接 (对端访问本机监听端口 {local_port})" if is_inbound else f"出站反连 (本机主动连向外部端口 {remote_port})"
+                        
+                        geo = _GEO_CACHE.get(remote_ip) or resolve_ip_geo_local(remote_ip) or {}
+                        country = geo.get("country") or "公网节点"
+                        city = geo.get("city") or ""
+                        isp = geo.get("isp") or ""
+                        geo_desc = f"{country} {city} ({isp})".strip() if (country or isp) else "公网未知"
+
                         alerts.append({
                             "remote_ip": remote_ip,
                             "remote_port": remote_port,
+                            "local_ip": local_ip,
+                            "local_port": local_port,
+                            "direction": direction,
+                            "direction_desc": direction_desc,
+                            "pid": proc_info.get("pid", "--"),
+                            "process": proc_info.get("process", "未知进程"),
                             "reason": black_dict[remote_ip],
+                            "country": country,
+                            "city": city,
+                            "isp": isp,
+                            "geo_desc": geo_desc,
                             "time": time.strftime("%Y-%m-%d %H:%M:%S")
                         })
-                        print(f"[SECURITY ALERT] 发现可疑内网外联或失陷信标！本机正在与恶意 C2 节点通信: {remote_ip}:{remote_port}")
+                        print(f"[SECURITY ALERT] 发现黑名单活跃连接！{direction}: {local_ip}:{local_port} <-> {remote_ip}:{remote_port} (PID: {proc_info.get('pid')}, 进程: {proc_info.get('process')})")
                 except Exception:
                     pass
     except Exception:

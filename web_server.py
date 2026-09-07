@@ -727,7 +727,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             display: flex !important;
         }
         /* 子弹窗置于全屏态势地图之上，确保顺畅点击交互 */
-        #modal-ip-detail, #modal-attacker-timeline, #modal-ban {
+        #modal-ip-detail, #modal-attacker-timeline, #modal-c2-details, #modal-ban {
             z-index: 2200 !important;
         }
         .modal-sheet {
@@ -830,7 +830,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </div>
                 <!-- 态势概览子页常驻：C2 出站失陷感知徽标与即时检测 -->
                 <div id="c2-global-bar" style="display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                    <div id="c2-health-badge" style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3);" title="反向检测本机是否存在连接境外/恶意 C2 僵尸网络或失陷木马的异常出站">
+                    <div id="c2-health-badge" onclick="openC2DetailModal()" style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 700; background: rgba(52, 199, 89, 0.12); color: var(--success); border: 1px solid rgba(52, 199, 89, 0.3); cursor: pointer; user-select: none; transition: all 0.2s;" title="点击查看 C2 连线与异常连接审计明细">
                         <span class="status-dot" style="width: 6px; height: 6px; background: var(--success);"></span>
                         <span id="c2-status-text">C2: 安全</span>
                     </div>
@@ -2228,6 +2228,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;">
             <button class="pill-btn" onclick="closeModals()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: C2 反向连线与异常连接审计详情 -->
+<div class="modal-overlay" id="modal-c2-details">
+    <div class="modal-sheet" style="max-width: 680px; width: 92vw; max-height: 90vh; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
+            <h3 style="font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; margin: 0;">
+                <span id="c2-modal-title-icon">🚨</span>
+                <span id="c2-modal-title">C2 远控信标与网络连线审计</span>
+            </h3>
+            <button onclick="closeModals()" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+
+        <div id="c2-modal-summary" style="margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 1.6; flex-shrink: 0;">
+            <!-- 动态填充概要说明 -->
+        </div>
+
+        <div style="font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+            <span>📋 实时连接明细与进程溯源</span>
+            <span id="c2-modal-count" style="font-size: 11px; color: var(--text-sec);">共 0 条</span>
+        </div>
+
+        <div style="flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 10px; min-height: 120px; max-height: 420px;">
+            <div id="c2-alerts-container" style="display: flex; flex-direction: column; gap: 10px;">
+                <div style="color: var(--text-sec); text-align: center; padding: 24px;">暂无告警记录</div>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; flex-wrap: wrap; gap: 8px; flex-shrink: 0;">
+            <div style="font-size: 11px; color: var(--text-sec);">
+                💡 提示：若是您信任的业务（如 FRP/代理/私有同步），可点击“放行白名单”消除告警。
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="pill-btn" onclick="checkC2CompromiseStatus(true)" style="font-size: 12px;">🔄 重新审计</button>
+                <button class="pill-btn" onclick="closeModals()" style="font-size: 12px;">关闭</button>
+            </div>
         </div>
     </div>
 </div>
@@ -6634,7 +6672,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    // ================== 新增：C2 信标失陷反向检测 ==================
+    // ================== 新增：C2 信标失陷反向检测与弹窗审计 ==================
+    let lastC2Alerts = [];
+
     async function checkC2CompromiseStatus(showToastMsg) {
         const badge = document.getElementById('c2-health-badge');
         const text = document.getElementById('c2-status-text');
@@ -6642,23 +6682,135 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const res = await fetch('/api/compromise/check');
             const data = await res.json();
             const alerts = data.compromised_alerts || [];
+            lastC2Alerts = alerts;
             if (badge && text) {
                 if (alerts.length === 0) {
                     badge.style.background = 'rgba(52, 199, 89, 0.12)';
                     badge.style.color = 'var(--success)';
                     badge.style.borderColor = 'rgba(52, 199, 89, 0.3)';
-                    text.innerText = 'C2 远控信标: 未失陷 (安全)';
+                    badge.style.cursor = 'pointer';
+                    text.innerText = 'C2: 安全';
                     if (showToastMsg) showToast('未检测到本机与已知恶意 C2 的异常反向连线！', '🟢');
                 } else {
                     badge.style.background = 'rgba(255, 59, 48, 0.2)';
                     badge.style.color = 'var(--danger)';
                     badge.style.borderColor = 'var(--danger)';
-                    text.innerText = `🚨 警告: 发现 ${alerts.length} 个 C2 异常出站连接!`;
-                    if (showToastMsg) showToast(`发现 ${alerts.length} 个与恶意 C2 节点的出站连接，请立即排查！`, '🚨');
+                    badge.style.cursor = 'pointer';
+                    text.innerText = `🚨 警告: 发现 ${alerts.length} 个 C2 异常连线! (点击查看)`;
+                    if (showToastMsg) showToast(`发现 ${alerts.length} 个与黑名单节点的活跃连线，请点击红标排查！`, '🚨');
                 }
+            }
+            const modal = document.getElementById('modal-c2-details');
+            if (modal && (modal.style.display === 'flex' || modal.classList.contains('active'))) {
+                renderC2DetailModalContent();
             }
         } catch (e) {
             console.error('C2 检查失败:', e);
+        }
+    }
+
+    async function openC2DetailModal() {
+        closeModals();
+        const modal = document.getElementById('modal-c2-details');
+        if (modal) {
+            modal.style.display = 'flex';
+        }
+        renderC2DetailModalContent();
+        // 自动拉取最新实时状态
+        checkC2CompromiseStatus(false);
+    }
+
+    function renderC2DetailModalContent() {
+        const container = document.getElementById('c2-alerts-container');
+        const summary = document.getElementById('c2-modal-summary');
+        const countSpan = document.getElementById('c2-modal-count');
+        if (!container) return;
+
+        const count = lastC2Alerts ? lastC2Alerts.length : 0;
+        if (countSpan) countSpan.innerText = `共 ${count} 个活跃连接`;
+
+        if (count === 0) {
+            if (summary) {
+                summary.style.background = 'rgba(52, 199, 89, 0.1)';
+                summary.style.border = '1px solid rgba(52, 199, 89, 0.25)';
+                summary.style.color = 'var(--success)';
+                summary.innerHTML = `<strong>🟢 状态安全</strong>：当前系统内核未检测到任何与黑名单/C2 远控节点的活跃 TCP 连接。`;
+            }
+
+            container.innerHTML = `
+                <div style="text-align: center; padding: 32px 16px; color: var(--text-sec);">
+                    <div style="font-size: 32px; margin-bottom: 8px;">🛡️</div>
+                    <div style="font-size: 13px; font-weight: 600; color: var(--text);">系统网络连线干净安全</div>
+                    <div style="font-size: 11px; margin-top: 4px;">无任何出站木马信标反弹或恶意连线</div>
+                </div>
+            `;
+            return;
+        }
+
+        if (summary) {
+            summary.style.background = 'rgba(255, 59, 48, 0.1)';
+            summary.style.border = '1px solid rgba(255, 59, 48, 0.3)';
+            summary.style.color = 'var(--danger)';
+            summary.innerHTML = `<strong>🚨 发现 ${count} 个命中黑名单的活跃连接！</strong><br><span style="font-size: 11px; opacity: 0.9;">系统内核正在与黑名单内的远端 IP 进行 TCP 通信。若该连接为您自行配置的合法代理、穿透(如 FRP)或同步业务，可点击“放行白名单”；若非业务预期，请核对 PID 进程排查木马。</span>`;
+        }
+
+        let html = '';
+        lastC2Alerts.forEach((item) => {
+            const isOut = item.direction === 'OUTBOUND';
+            const badgeBg = isOut ? 'rgba(255, 69, 58, 0.15)' : 'rgba(255, 159, 10, 0.15)';
+            const badgeColor = isOut ? '#ff453a' : '#ff9f0a';
+            const badgeText = isOut ? '出站反连 (OUTBOUND)' : '入站访问 (INBOUND)';
+            const geoText = item.geo_desc || [item.country, item.city, item.isp ? '(' + item.isp + ')' : ''].filter(Boolean).join(' ') || '公网未知';
+            
+            html += `
+            <div style="background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--text);">${escapeHtml(item.remote_ip)}:${item.remote_port}</span>
+                        <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: ${badgeBg}; color: ${badgeColor}; font-weight: 600;">${badgeText}</span>
+                    </div>
+                    <div style="display: flex; gap: 6px;">
+                        <button class="pill-btn" onclick="openAttackerTimelineModal('${escapeHtml(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">🔍 查看画像</button>
+                        <button class="pill-btn accent" onclick="quickAddWhiteFromC2('${escapeHtml(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">✅ 放行白名单</button>
+                    </div>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px; font-size: 11px; color: var(--text-sec); background: var(--card-sec); padding: 8px; border-radius: 6px;">
+                    <div><strong>关联系统进程:</strong> <span style="color: var(--text); font-family: monospace; font-weight: 600;">${escapeHtml(item.process || '未知')} (PID: ${escapeHtml(item.pid || '--')})</span></div>
+                    <div><strong>本机通信端点:</strong> <span style="color: var(--text); font-family: monospace;">${escapeHtml(item.local_ip || '本机')}:${item.local_port || '--'}</span></div>
+                    <div><strong>节点地理归属:</strong> <span style="color: var(--text);">${escapeHtml(geoText)}</span></div>
+                    <div><strong>审计拦截原因:</strong> <span style="color: var(--danger);">${escapeHtml(item.reason || '触发黑名单规则')}</span></div>
+                </div>
+
+                <div style="font-size: 10px; color: var(--text-sec); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px;">
+                    <span>方向描述: ${escapeHtml(item.direction_desc || '')}</span>
+                    <span>检出时间: ${escapeHtml(item.time || '--')}</span>
+                </div>
+            </div>`;
+        });
+        container.innerHTML = html;
+    }
+
+    async function quickAddWhiteFromC2(ip) {
+        if (!confirm(`确定将 IP [${ip}] 移出黑名单并添加到信任白名单中吗？\n添加后该 IP 的所有出入站连接将不再告警且直接放行。`)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/whitelist/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ip: ip, remark: 'C2 异常连线审计快速放行信任业务' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`IP ${ip} 已加入白名单放行！`, '🎉');
+                await checkC2CompromiseStatus(false);
+                fetchData(false);
+            } else {
+                showToast(data.msg || '添加白名单失败', '⚠️');
+            }
+        } catch (e) {
+            showToast('请求异常: ' + e, '⚠️');
         }
     }
 
