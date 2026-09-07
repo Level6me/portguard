@@ -324,6 +324,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .pill-btn.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
         .pill-btn.danger { background: var(--danger-bg); color: var(--danger); border-color: rgba(255, 59, 48, 0.3); }
         .pill-btn.danger:hover { background: var(--danger); color: #fff; }
+        .pill-btn.success { background: var(--success-bg); color: var(--success); border-color: rgba(48, 209, 88, 0.3); }
+        .pill-btn.success:hover { background: var(--success); color: #fff; }
 
         /* Grid Layouts */
         .grid-4 {
@@ -1776,7 +1778,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问审计</button>
-                <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 Web 访问日志 (HTTP/HTTPS)</button>
+                <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 Web 访问日志</button>
             </div>
         </div>
 
@@ -2204,15 +2206,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <span style="color: var(--text-sec); font-size: 12px;">当前处置状态:</span>
                     <div style="margin-top: 4px;" id="ip-detail-status">--</div>
                 </div>
+                <div style="grid-column: span 2;">
+                    <span style="color: var(--text-sec); font-size: 12px;">封禁原因:</span>
+                    <div style="font-weight: 600; color: var(--text); margin-top: 3px; word-break: break-all;" id="ip-detail-reason">-</div>
+                </div>
             </div>
         </div>
 
-        <div style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
-            <button class="pill-btn" onclick="closeModals()">关闭</button>
-            <button class="pill-btn accent" onclick="openAttackerTimelineModal(currentDetailIP)" id="btn-ip-detail-timeline" style="font-weight: 700;">⏱️ 全景画像时间线</button>
-            <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white">🛡️ 加入白名单</button>
-            <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban">🚫 封禁此 IP</button>
-            <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在控制台各视图中过滤此 IP 的所有日志记录与统计">🙈 过滤此 IP 日志</button>
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
+            <button class="pill-btn accent" onclick="openAttackerTimelineModal(currentDetailIP)" id="btn-ip-detail-timeline" style="font-weight: 700; justify-content: center; padding: 9px 12px; font-size: 13px;">⏱️ 全景画像</button>
+            <button class="pill-btn" onclick="addCurrentDetailIPToWhite()" id="btn-ip-detail-white" style="justify-content: center; padding: 9px 12px; font-size: 13px;">🛡️ 加入白名单</button>
+            <button class="pill-btn danger" onclick="toggleCurrentDetailIPBan()" id="btn-ip-detail-ban" style="justify-content: center; padding: 9px 12px; font-size: 13px;">🚫 封禁此 IP</button>
+            <button class="pill-btn" onclick="toggleCurrentDetailIPHide()" id="btn-ip-detail-hide" style="justify-content: center; padding: 9px 12px; font-size: 13px; color: var(--warning); border-color: rgba(255, 149, 0, 0.4);" title="在控制台各视图中过滤此 IP 的所有日志记录与统计">🙈 过滤此 IP</button>
         </div>
     </div>
 </div>
@@ -3794,16 +3799,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 document.getElementById('ip-detail-country').innerText = cCN;
                 document.getElementById('ip-detail-region-city').innerText = (geo.region || geo.city) ? `${geo.region || ''} ${geo.city || ''}`.trim() : '未知城市';
                 document.getElementById('ip-detail-isp').innerText = geo.isp || '未知运营商 / 本地或专用网络';
+                if (geo.is_banned !== undefined) {
+                    const rEl = document.getElementById('ip-detail-reason');
+                    if (rEl) {
+                        if (geo.is_banned) {
+                            rEl.innerText = geo.ban_reason || (bannedItem && bannedItem.reason) || '自动诱捕阻断';
+                            rEl.style.color = 'var(--text)';
+                        } else {
+                            rEl.innerText = '-';
+                            rEl.style.color = 'var(--text-sec)';
+                        }
+                    }
+                }
             }
         }).catch(() => {});
         
         const level = currentDetailMeta.level || '高危';
         document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${level === '极高危' ? 'danger' : (level === '高危' ? 'warning' : 'accent')}">${level}</span>`;
         
-        const isBanned = allBlacklist && allBlacklist.some(b => b.ip === ip);
+        const bannedItem = allBlacklist && allBlacklist.find(b => b.ip === ip);
+        const isBanned = !!bannedItem;
         const isWhite = allWhitelist && allWhitelist.some(w => w.ip === ip);
         const isHidden = allHiddenIPs && allHiddenIPs.some(h => h.ip === ip);
         
+        const reasonEl = document.getElementById('ip-detail-reason');
+        if (reasonEl) {
+            if (isBanned) {
+                const banReason = (bannedItem && bannedItem.reason) || (currentDetailMeta && currentDetailMeta.reason) || '自动诱捕阻断';
+                reasonEl.innerText = banReason;
+                reasonEl.style.color = 'var(--text)';
+            } else {
+                reasonEl.innerText = '-';
+                reasonEl.style.color = 'var(--text-sec)';
+            }
+        }
+
         let statusHtml = '<span class="tag warning">● 未封禁 (正常)</span>';
         if (isBanned) {
             statusHtml = '<span class="tag danger">🚫 内核黑名单 (已阻断)</span>';
@@ -3818,7 +3848,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const banBtn = document.getElementById('btn-ip-detail-ban');
         if (banBtn) {
             if (isBanned) {
-                banBtn.innerText = '🔓 从黑名单解封';
+                banBtn.innerText = '🔓 黑名单解封';
                 banBtn.className = 'pill-btn success';
             } else {
                 banBtn.innerText = '🚫 封禁此 IP';
@@ -3829,12 +3859,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const hideBtn = document.getElementById('btn-ip-detail-hide');
         if (hideBtn) {
             if (isHidden) {
-                hideBtn.innerText = '👁️ 恢复显示此 IP 日志';
+                hideBtn.innerText = '👁️ 取消过滤';
                 hideBtn.className = 'pill-btn success';
                 hideBtn.style.color = '';
                 hideBtn.style.borderColor = '';
             } else {
-                hideBtn.innerText = '🙈 过滤此 IP 日志';
+                hideBtn.innerText = '🙈 过滤此 IP';
                 hideBtn.className = 'pill-btn';
                 hideBtn.style.color = 'var(--warning)';
                 hideBtn.style.borderColor = 'rgba(255, 149, 0, 0.4)';
@@ -8010,6 +8040,20 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     return
                 geo = resolve_ip_geo(ip)
                 geo["threat_tags"] = get_ip_threat_tags(ip, geo)
+                try:
+                    conn = get_db()
+                    c = conn.cursor()
+                    c.execute("SELECT reason, ban_time FROM blacklist WHERE ip = ? LIMIT 1", (ip,))
+                    b_row = c.fetchone()
+                    conn.close()
+                    if b_row:
+                        geo["is_banned"] = True
+                        geo["ban_reason"] = b_row["reason"] or ""
+                    else:
+                        geo["is_banned"] = False
+                        geo["ban_reason"] = ""
+                except Exception:
+                    pass
                 self._send_json(geo)
                 return
 
