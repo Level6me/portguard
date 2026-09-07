@@ -307,11 +307,17 @@ def is_idc_hosting_ip(ip_str, geo_dict=None):
             return True
     return False
 
+_THREAT_TAGS_CACHE = {}
+_THREAT_TAGS_LOCK = threading.Lock()
+
 def get_ip_threat_tags(ip_str, geo_dict=None):
     """威胁情报标签与信誉综合研判：返回 IP 的多维信誉指纹标签列表（如 Tor匿名节点、空间测绘、云机房IDC等）"""
-    tags = []
     if not ip_str or ip_str in ("127.0.0.1", "::1", "localhost") or ip_str.startswith("127."):
-        return tags
+        return []
+    with _THREAT_TAGS_LOCK:
+        if ip_str in _THREAT_TAGS_CACHE:
+            return _THREAT_TAGS_CACHE[ip_str]
+    tags = []
     try:
         ip_obj = ipaddress.ip_address(ip_str)
         # 1. 检查 Tor 出口节点
@@ -347,6 +353,8 @@ def get_ip_threat_tags(ip_str, geo_dict=None):
         if not any("云机房" in t for t in tags):
             tags.append("☁️ 数据中心/IDC")
 
+    with _THREAT_TAGS_LOCK:
+        _THREAT_TAGS_CACHE[ip_str] = tags
     return tags
 
 DEFAULT_CONFIG["http_traps"] = DEFAULT_HTTP_TRAPS
@@ -1042,6 +1050,8 @@ def init_db():
     )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_hidden_ip ON hidden_ips(ip)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ip ON access_logs(ip, id DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_ts ON blacklist(timestamp DESC)")
 
     # 自动列自适应补充（迁移旧库）
     try:
@@ -1913,6 +1923,9 @@ _WEB_PORT_LOG_CACHE = {}
 def log_access_entry(ip, method, path, status_code=200, user_agent=""):
     try:
         if ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127."):
+            return
+        # 严格过滤控制台内部轮询与静态资源，避免管理轮询高频写入产生锁竞争与无用日志膨胀
+        if path and (path.startswith("/api/") or path in ("/favicon.ico", "/robots.txt")):
             return
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
@@ -2871,8 +2884,17 @@ def format_isp_name(raw_isp):
             return v
     return clean_isp
 
+_GEO_CACHE = {}
+_GEO_CACHE_LOCK = threading.Lock()
+
 def resolve_ip_geo_local(ip):
     """双引擎融合本地极速解析：MaxMind GeoLite2 (City+ASN) 全球高精 + IP2Region 国内省市 (0ms 延时)"""
+    if not ip or ip in ("127.0.0.1", "::1", "localhost") or ip.startswith("127."):
+        return {"country": "本地回环", "region": "", "city": "", "isp": "Localhost"}
+    with _GEO_CACHE_LOCK:
+        if ip in _GEO_CACHE and _GEO_CACHE[ip].get("country") not in ("未知地域", "公网节点", "分析中...", "", "None", None):
+            return _GEO_CACHE[ip]
+
     city_reader, asn_reader = get_mmdb_readers()
     xdb_searcher = get_xdb_searcher()
 
@@ -2938,16 +2960,16 @@ def resolve_ip_geo_local(ip):
         elif mm_asn_org: isp = format_isp_name(mm_asn_org)
 
     if country or region or city or isp:
-        return {
+        res = {
             "country": country or "公网节点",
             "region": region,
             "city": city,
             "isp": isp
         }
+        with _GEO_CACHE_LOCK:
+            _GEO_CACHE[ip] = res
+        return res
     return None
-
-_GEO_CACHE = {}
-_GEO_CACHE_LOCK = threading.Lock()
 
 def resolve_ip_geo(ip):
     # 结果缓存：同一 IP 且解析成功过只查一次，降低外部 API 压力

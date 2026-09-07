@@ -3493,7 +3493,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
         autoRefreshTimer = setInterval(() => {
             if (isAutoRefreshEnabled) {
-                fetchData(false);
+                fetchData(false, true);
             }
         }, 5000);
     }
@@ -3509,7 +3509,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (icon) icon.innerText = '⏱️';
             if (label) label.innerText = '5s 实时';
             showToast('已开启 5 秒自动实时刷新', '⚡');
-            fetchData(false);
+            fetchData(false, false);
             startAutoRefresh();
         } else {
             if (btn) btn.className = 'pill-btn';
@@ -3523,7 +3523,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
     }
 
-    function fetchData(showNotice = false) {
+    function fetchData(showNotice = false, isPeriodic = false) {
+        // 1. 核心态势指标与图表（高频实时刷新）
         fetch('/api/stats').then(res => res.json()).then(data => {
             if (data.defense_paused !== undefined) {
                 updateDefensePauseUI(data.defense_paused);
@@ -3553,6 +3554,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (showNotice) showToast('态势数据已同步最新');
         });
 
+        // 2. 实时拦截事件日志（高频实时刷新）
         fetch('/api/events').then(res => res.json()).then(events => {
             allEvents = events;
             document.getElementById('cnt-log-all').innerText = events.length;
@@ -3562,35 +3564,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         checkC2CompromiseStatus(false);
 
-        fetch('/api/blacklist').then(res => res.json()).then(data => {
-            allBlacklist = data;
-            renderBlacklistTable();
-        });
+        // 3. 黑名单数据：仅在首次加载、非轮询或当前处于黑白名单页面时刷新，避免后台无谓高频拉取
+        if (!isPeriodic || currentTabKey === 'iplists' || allBlacklist.length === 0) {
+            fetch('/api/blacklist').then(res => res.json()).then(data => {
+                allBlacklist = data;
+                renderBlacklistTable();
+            });
+        }
 
-        fetch('/api/traps').then(res => res.json()).then(data => {
-            allTraps = data;
-            if (currentTrapTab === 'port') renderTrapsTable();
-        });
+        // 4. 静态规则与配置数据：仅在首次全量加载或显式刷新时拉取，避免 5 秒定时器产生网络洪峰
+        if (!isPeriodic) {
+            fetch('/api/traps').then(res => res.json()).then(data => {
+                allTraps = data;
+                if (currentTrapTab === 'port') renderTrapsTable();
+            });
 
-        fetch('/api/business_ports').then(res => res.json()).then(data => {
-            allBusinessPorts = data;
-            if (currentTrapTab === 'biz') renderTrapsTable();
-        }).catch(() => {});
+            fetch('/api/business_ports').then(res => res.json()).then(data => {
+                allBusinessPorts = data;
+                if (currentTrapTab === 'biz') renderTrapsTable();
+            }).catch(() => {});
 
-        fetch('/api/http_traps').then(res => res.json()).then(data => {
-            allHttpTraps = data;
-            if (currentTrapTab === 'req') renderTrapsTable();
-        });
+            fetch('/api/http_traps').then(res => res.json()).then(data => {
+                allHttpTraps = data;
+                if (currentTrapTab === 'req') renderTrapsTable();
+            });
 
-        fetch('/api/whitelist').then(res => res.json()).then(data => {
-            allWhitelist = data;
-            renderWhitelistTable();
-        });
+            fetch('/api/whitelist').then(res => res.json()).then(data => {
+                allWhitelist = data;
+                renderWhitelistTable();
+            });
 
-        fetch('/api/hidden-ips').then(res => res.json()).then(data => {
-            allHiddenIPs = data || [];
-            updateHiddenBadge(allHiddenIPs.length);
-        }).catch(() => {});
+            fetch('/api/hidden-ips').then(res => res.json()).then(data => {
+                allHiddenIPs = data || [];
+                updateHiddenBadge(allHiddenIPs.length);
+            }).catch(() => {});
+        }
 
         if (currentTabKey === 'access-logs') {
             fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
@@ -6921,6 +6929,17 @@ try:
 except Exception:
     pass
 
+# 黑名单全局极速内存缓存（毫秒级响应，防全量离线库二次计算卡顿）
+_BLACKLIST_CACHE = None
+_BLACKLIST_CACHE_TIME = 0.0
+_BLACKLIST_CACHE_LOCK = threading.Lock()
+
+def invalidate_blacklist_cache():
+    global _BLACKLIST_CACHE, _BLACKLIST_CACHE_TIME
+    with _BLACKLIST_CACHE_LOCK:
+        _BLACKLIST_CACHE = None
+        _BLACKLIST_CACHE_TIME = 0.0
+
 class RequestHandler(BaseHTTPRequestHandler):
     def send_response(self, code, message=None):
         # 在响应层统一记录访问日志：真实状态码、覆盖 GET/POST/HEAD/OPTIONS/404/400 等全部请求
@@ -7736,6 +7755,17 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                 return
 
             if path == "/api/blacklist":
+                global _BLACKLIST_CACHE, _BLACKLIST_CACHE_TIME
+                now_mono = time.monotonic()
+                with _BLACKLIST_CACHE_LOCK:
+                    if _BLACKLIST_CACHE is not None and (now_mono - _BLACKLIST_CACHE_TIME) < 5.0:
+                        cached_data = _BLACKLIST_CACHE
+                    else:
+                        cached_data = None
+                if cached_data is not None:
+                    self._send_json(cached_data)
+                    return
+
                 conn = get_db()
                 c = conn.cursor()
                 c.execute("SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
@@ -7760,6 +7790,9 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                         r["city"] = geo.get("city") or r.get("city", "")
                         r["isp"] = geo.get("isp") or r.get("isp", "")
                     r["threat_tags"] = get_ip_threat_tags(ip_k, geo)
+                with _BLACKLIST_CACHE_LOCK:
+                    _BLACKLIST_CACHE = rows
+                    _BLACKLIST_CACHE_TIME = now_mono
                 self._send_json(rows)
                 return
 
@@ -7912,6 +7945,7 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                 unban_ip_core(ip, status_event="UNBANNED", source_node=f"手动解封({node_name})")
                 # 广播解封至全网集群协同节点
                 broadcast_cluster_unban(ip)
+                invalidate_blacklist_cache()
                 self._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}（已同步全网集群协同解封）"})
                 return
 
@@ -8512,6 +8546,7 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     return
 
                 ban_ip(ip, reason=reason, category="manual", level="极高危")
+                invalidate_blacklist_cache()
                 self._send_json({"success": True, "msg": f"已成功永久封禁 IP: {ip}（已下发内核防火墙并同步集群协同阻断）"})
                 return
 
