@@ -2025,7 +2025,12 @@ def _batch_log_worker():
             time.sleep(0.5)
 
 
+_CONFIG_CACHE = None
+_CONFIG_CACHE_MTIME = 0.0
+_CONFIG_LOCK = threading.Lock()
+
 def load_config():
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
     try:
         dir_name = os.path.dirname(CONFIG_PATH)
         if dir_name and not os.path.exists(dir_name):
@@ -2033,12 +2038,28 @@ def load_config():
         if not os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
-            return DEFAULT_CONFIG
+            with _CONFIG_LOCK:
+                _CONFIG_CACHE = dict(DEFAULT_CONFIG)
+                _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
+            return dict(_CONFIG_CACHE)
+
+        mtime = os.path.getmtime(CONFIG_PATH)
+        with _CONFIG_LOCK:
+            if _CONFIG_CACHE is not None and mtime == _CONFIG_CACHE_MTIME:
+                return dict(_CONFIG_CACHE)
+
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             cfg = json.load(f)
-            return {**DEFAULT_CONFIG, **cfg}
+            merged = {**DEFAULT_CONFIG, **cfg}
+        with _CONFIG_LOCK:
+            _CONFIG_CACHE = merged
+            _CONFIG_CACHE_MTIME = mtime
+        return dict(merged)
     except Exception:
-        return DEFAULT_CONFIG
+        with _CONFIG_LOCK:
+            if _CONFIG_CACHE is not None:
+                return dict(_CONFIG_CACHE)
+        return dict(DEFAULT_CONFIG)
 
 
 def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
@@ -2204,6 +2225,13 @@ def save_config(cfg):
 
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
+        try:
+            mtime = os.path.getmtime(CONFIG_PATH)
+            with _CONFIG_LOCK:
+                _CONFIG_CACHE = {**DEFAULT_CONFIG, **cfg}
+                _CONFIG_CACHE_MTIME = mtime
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -2380,8 +2408,8 @@ def get_active_ssh_client_ips():
     
     # 1. 从 who 命令读取真正已登录终端的客户端 IP
     try:
-        out = subprocess.check_output("who 2>/dev/null || true", shell=True, text=True)
-        for line in out.splitlines():
+        res = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+        for line in res.stdout.splitlines():
             m = re.search(r'\(([\d\w\.\:]+)\)', line)
             if m:
                 clean_ip = m.group(1).split(':')[0].strip('[]').replace('::ffff:', '')
@@ -2401,16 +2429,18 @@ def get_active_ssh_client_ips():
     except Exception:
         pass
 
-    # 3. 跨进程检测已登录用户 (针对 systemd-logind 会话)
+    # 3. 跨进程检测已登录用户 (针对 systemd-logind 会话，避免 shell=True 注入隐患)
     try:
-        out = subprocess.check_output("loginctl list-sessions --no-legend 2>/dev/null || true", shell=True, text=True)
-        for line in out.splitlines():
+        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+        for line in res.stdout.splitlines():
             parts = line.split()
             if parts:
                 s_id = parts[0]
-                s_info = subprocess.check_output(f"loginctl show-session {s_id} -p RemoteHost 2>/dev/null || true", shell=True, text=True)
-                if "RemoteHost=" in s_info:
-                    r_host = s_info.split("RemoteHost=", 1)[1].strip()
+                if not s_id.isalnum():
+                    continue
+                s_res = subprocess.run(["loginctl", "show-session", s_id, "-p", "RemoteHost"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+                if "RemoteHost=" in s_res.stdout:
+                    r_host = s_res.stdout.split("RemoteHost=", 1)[1].strip()
                     if r_host and not r_host.startswith("127."):
                         ips.add(r_host.replace('::ffff:', ''))
     except Exception:
@@ -2420,12 +2450,46 @@ def get_active_ssh_client_ips():
     _DYNAMIC_SSH_IPS_LAST_CHECK = now
     return ips
 
+_DEFAULT_GATEWAY_CACHE = None
+_DEFAULT_GATEWAY_LAST_CHECK = 0.0
+
+def get_default_gateway():
+    """动态通过 /proc/net/route 毫秒级提取默认路由网关 IP (防自锁保护，绝不误封上一级路由交换机)"""
+    global _DEFAULT_GATEWAY_CACHE, _DEFAULT_GATEWAY_LAST_CHECK
+    now = time.time()
+    if _DEFAULT_GATEWAY_CACHE is not None and (now - _DEFAULT_GATEWAY_LAST_CHECK < 60.0):
+        return _DEFAULT_GATEWAY_CACHE
+
+    gw = None
+    try:
+        if os.path.exists("/proc/net/route"):
+            with open("/proc/net/route", "r") as f:
+                lines = f.readlines()
+            for line in lines[1:]:
+                parts = line.strip().split()
+                if len(parts) >= 3 and parts[1] == "00000000":
+                    gw_hex = parts[2]
+                    if gw_hex != "00000000":
+                        gw = socket.inet_ntoa(struct.pack("<L", int(gw_hex, 16)))
+                        break
+    except Exception:
+        pass
+
+    _DEFAULT_GATEWAY_CACHE = gw
+    _DEFAULT_GATEWAY_LAST_CHECK = now
+    return gw
+
 def ip_in_whitelist(ip, whitelist_items=None):
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
 
     # 基础设施与公共 CDN 保护：公网权威 DNS (1.1.1.1 / 8.8.8.8 等) 及 Cloudflare 节点永久放行，严禁任何机制误拉黑
     if is_infrastructure_or_cdn_ip(ip):
+        return True
+
+    # 核心防自锁盾：宿主机默认路由网关绝对放行，禁止任何误封上一级路由交换机的行为
+    gw = get_default_gateway()
+    if gw and ip == gw:
         return True
 
     # 核心防自锁盾：只要当前是正在连接服务器的管理员活跃 SSH 会话，内核级永久放行！
@@ -3065,6 +3129,12 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
         print(f"[SKIP] 非法 IP 输入被拒绝: {ip!r}")
         return
     ip = valid_ip
+
+    # 核心防自锁盾：禁止封禁宿主机默认路由网关
+    gw = get_default_gateway()
+    if gw and ip == gw:
+        print(f"[GATEWAY] 核心防自锁触发：禁止封禁宿主机默认网关 IP: {ip}")
+        return
     
     # 0. 暂停防御模式检查 (如果管理员暂停了拦截服务，绝不下发任何黑洞/防火墙封禁，仅记录日志)
     if cfg.get("defense_paused", False) or cfg.get("paused", False):
@@ -3230,17 +3300,18 @@ def get_active_system_ports():
         if _SYSTEM_PORTS_CACHE and (now - _SYSTEM_PORTS_CACHE_TIME < 30.0):
             return _SYSTEM_PORTS_CACHE
 
-        ports_map = dict(KNOWN_SYSTEM_SERVICES)
+        ports_map = {}
         try:
             cfg = load_config()
-            web_p = int(cfg.get("web_port", 9099))
+            web_p = int(cfg.get("web_port", 9099) or 9099)
             ports_map[web_p] = "PortGuard Web控制台"
             custom_biz = cfg.get("business_ports", [])
             for bp in custom_biz:
                 if isinstance(bp, int):
-                    ports_map[bp] = f"自定义业务端口 ({bp})"
+                    ports_map[bp] = KNOWN_SYSTEM_SERVICES.get(bp, f"自定义业务端口 ({bp})")
                 elif isinstance(bp, dict) and "port" in bp:
-                    ports_map[int(bp["port"])] = bp.get("name", f"自定义业务 ({bp['port']})")
+                    p = int(bp["port"])
+                    ports_map[p] = bp.get("name", KNOWN_SYSTEM_SERVICES.get(p, f"自定义业务 ({p})"))
         except Exception:
             pass
 
@@ -3908,6 +3979,27 @@ class GlobalPortSniffer:
 
             action = "BUSINESS"
             desc = f"业务访问: {biz_name} (端口 {dst_port})"
+            _EXECUTOR.submit(_async_write, action, desc)
+            return
+
+        # 3. 系统内核实际 LISTEN 监听的活跃业务端口自动放行（绝不误判为未开放端口探测 PROBE 或多端口扫描）
+        is_zero_trust_all = bool(cfg.get("trap_all_ports", False) and cfg.get("trap_business_ports", False))
+        if dst_port in active_ports_map and not is_zero_trust_all:
+            svc_name = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, f"系统服务 ({dst_port})"))
+            if is_survey_scanner_ip(src_ip):
+                action = "INTERCEPTED"
+                desc = f"测绘扫描拦截: 探测系统监听端口 {dst_port} ({svc_name})"
+                port_info = {
+                    "name": desc,
+                    "category": "survey",
+                    "level": "高危",
+                    "is_business": False
+                }
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                return
+
+            action = "BUSINESS"
+            desc = f"业务访问: {svc_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
             return
 

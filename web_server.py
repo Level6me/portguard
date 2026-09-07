@@ -7,6 +7,8 @@ import sqlite3
 import subprocess
 import re
 import threading
+import socket
+import ipaddress
 try:
     from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 except ImportError:
@@ -3844,10 +3846,36 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         if (nextBtn) nextBtn.disabled = (currentPage >= totalPages);
         const numsEl = document.getElementById(numsElId);
         if (numsEl) {
+            let pages = [];
+            if (totalPages <= 7) {
+                for (let i = 1; i <= totalPages; i++) pages.push(i);
+            } else {
+                pages.push(1);
+                let start = Math.max(2, currentPage - 1);
+                let end = Math.min(totalPages - 1, currentPage + 1);
+
+                if (currentPage <= 3) {
+                    start = 2;
+                    end = 4;
+                } else if (currentPage >= totalPages - 2) {
+                    start = totalPages - 3;
+                    end = totalPages - 1;
+                }
+
+                if (start > 2) pages.push('...');
+                for (let i = start; i <= end; i++) pages.push(i);
+                if (end < totalPages - 1) pages.push('...');
+                pages.push(totalPages);
+            }
+
             let html = '';
-            for (let p = Math.max(1, currentPage - 2); p <= Math.min(totalPages, currentPage + 2); p++) {
-                const active = (p === currentPage);
-                html += `<button class="pill-btn ${active ? 'accent' : ''}" onclick="${changePageFnName}(${p})" style="padding: 4px 10px; font-size: 11px; font-weight: 700; ${active ? 'background: var(--accent); color: #fff;' : ''}">${p}</button>`;
+            for (const item of pages) {
+                if (item === '...') {
+                    html += `<span style="padding: 4px 6px; font-size: 11px; opacity: 0.5;">...</span>`;
+                } else {
+                    const active = (item === currentPage);
+                    html += `<button class="pill-btn ${active ? 'accent' : ''}" onclick="${changePageFnName}(${item})" style="padding: 4px 10px; font-size: 11px; font-weight: 700; ${active ? 'background: var(--accent); color: #fff;' : ''}">${item}</button>`;
+                }
             }
             numsEl.innerHTML = html;
         }
@@ -6956,7 +6984,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status)
             self.send_header('Content-Type', content_type)
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get('Origin', '')
+            host = self.headers.get('Host', '')
+            if origin:
+                parsed_origin = urlparse(origin)
+                origin_host = parsed_origin.netloc.split(':')[0]
+                req_host = host.split(':')[0] if host else ''
+                if origin_host in (req_host, 'localhost', '127.0.0.1', '::1') or not req_host:
+                    self.send_header('Access-Control-Allow-Origin', origin)
+                    self.send_header('Access-Control-Allow-Credentials', 'true')
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                    self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, X-Cluster-Token')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('X-Frame-Options', 'SAMEORIGIN')
+            self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -6989,6 +7030,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             accept_encoding = self.headers.get('Accept-Encoding', '')
             self.send_response(status)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('X-Frame-Options', 'SAMEORIGIN')
+            self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
@@ -7004,6 +7048,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(_RAW_HTML_CACHE)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def do_OPTIONS(self):
+        self._send_response_data(b"", status=204)
 
     def do_HEAD(self):
         self.send_response(200)
@@ -8265,6 +8312,35 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                 if not secret:
                     self._send_json({"success": False, "msg": "通信密钥不能为空"}, status=400)
                     return
+
+                # SSRF 安全防御校验：阻断云厂商元数据及敏感内网地址探测
+                try:
+                    parsed_node = urlparse(node_url)
+                    if parsed_node.scheme not in ('http', 'https'):
+                        self._send_json({"success": False, "msg": "协议不合法，仅支持 http:// 或 https:// 协议"}, status=400)
+                        return
+                    host_part = parsed_node.hostname
+                    if not host_part:
+                        self._send_json({"success": False, "msg": "节点地址格式错误"}, status=400)
+                        return
+
+                    resolved_addrs = socket.getaddrinfo(host_part, None)
+                    for item in resolved_addrs:
+                        ip_str = item[4][0]
+                        ip_obj = ipaddress.ip_address(ip_str)
+                        if ip_obj.is_link_local:
+                            self._send_json({"success": False, "msg": f"安全拦截：禁止探测云元数据/链路本地地址 ({ip_str})"}, status=403)
+                            return
+                        if ip_obj.is_loopback:
+                            self._send_json({"success": False, "msg": f"安全拦截：禁止访问本地回环地址 ({ip_str})"}, status=403)
+                            return
+                        if ip_obj.is_unspecified:
+                            self._send_json({"success": False, "msg": f"安全拦截：禁止访问未指定地址 ({ip_str})"}, status=403)
+                            return
+                except Exception as ex:
+                    self._send_json({"success": False, "msg": f"节点主机名解析异常: {ex}"}, status=400)
+                    return
+
                 token = generate_cluster_token("ping", secret)
                 t0 = time.time()
                 try:

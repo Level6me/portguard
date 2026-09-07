@@ -571,6 +571,49 @@ class IsTrapPortTest(unittest.TestCase):
         conn.close()
 
 
+class OptimizationAndHardeningTest(unittest.TestCase):
+    def test_default_gateway_protection(self):
+        from sentry_daemon import get_default_gateway, ip_in_whitelist, ban_ip, get_db
+        gw = get_default_gateway()
+        if gw:
+            self.assertTrue(ip_in_whitelist(gw))
+            with mock.patch("sentry_daemon.ban_ip_firewall") as mock_fw:
+                ban_ip(gw)
+                mock_fw.assert_not_called()
+
+        # 测试模拟网关防自锁
+        with mock.patch("sentry_daemon.get_default_gateway", return_value="192.168.99.1"):
+            self.assertTrue(ip_in_whitelist("192.168.99.1"))
+            with mock.patch("sentry_daemon.ban_ip_firewall") as mock_fw2:
+                ban_ip("192.168.99.1")
+                mock_fw2.assert_not_called()
+
+    def test_active_system_ports_auto_exemption(self):
+        from sentry_daemon import GlobalPortSniffer, init_db
+        init_db()
+        sniffer = GlobalPortSniffer()
+        test_ip = "198.51.100.77"
+        
+        with mock.patch("sentry_daemon.get_active_system_ports", return_value={443: "HTTPS 网站", 4212: "Trojan 代理"}), \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban, \
+             mock.patch("sentry_daemon.log_port_access_entry") as mock_log:
+            # 访问系统内核实际监听但未在 business_ports 显式配置的 4212
+            sniffer._handle_port_access(test_ip, 4212, "TCP")
+            time.sleep(0.05)
+            mock_ban.assert_not_called()
+            mock_log.assert_called_once()
+            args, kwargs = mock_log.call_args
+            self.assertEqual(kwargs.get("action"), "BUSINESS")
+            self.assertIn("Trojan 代理", kwargs.get("port_name"))
+
+    def test_config_cache_performance(self):
+        from sentry_daemon import load_config, save_config, CONFIG_PATH
+        cfg1 = load_config()
+        self.assertIsInstance(cfg1, dict)
+        cfg2 = load_config()
+        self.assertEqual(cfg1, cfg2)
+
+
 if __name__ == "__main__":
     unittest.main()
 
