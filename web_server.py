@@ -3815,13 +3815,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         }).catch(() => {});
         
-        const level = currentDetailMeta.level || '高危';
-        document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${level === '极高危' ? 'danger' : (level === '高危' ? 'warning' : 'accent')}">${level}</span>`;
-        
         const bannedItem = allBlacklist && allBlacklist.find(b => b.ip === ip);
         const isBanned = !!bannedItem;
         const isWhite = allWhitelist && allWhitelist.some(w => w.ip === ip);
         const isHidden = allHiddenIPs && allHiddenIPs.some(h => h.ip === ip);
+        const isWhiteAction = currentDetailMeta && (currentDetailMeta.action === 'WHITELIST' || currentDetailMeta.action === 'BUSINESS');
+        
+        let level = currentDetailMeta.level;
+        if (!level) {
+            if (isBanned) {
+                level = (bannedItem && bannedItem.level) || '高危';
+            } else if (isWhite || (currentDetailMeta && currentDetailMeta.action === 'WHITELIST')) {
+                level = '信任';
+            } else if (currentDetailMeta && currentDetailMeta.action === 'BUSINESS') {
+                level = '正常';
+            } else {
+                level = '正常';
+            }
+        }
+        
+        let tagClass = 'accent';
+        if (level === '极高危') tagClass = 'danger';
+        else if (level === '高危') tagClass = 'warning';
+        else if (level === '信任' || level === '正常' || level === '低危') tagClass = 'success';
+        
+        document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${tagClass}">${level}</span>`;
         
         const reasonEl = document.getElementById('ip-detail-reason');
         if (reasonEl) {
@@ -3838,8 +3856,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let statusHtml = '<span class="tag warning">● 未封禁 (正常)</span>';
         if (isBanned) {
             statusHtml = '<span class="tag danger">🚫 内核黑名单 (已阻断)</span>';
-        } else if (isWhite) {
-            statusHtml = '<span class="tag success">🛡️ 信任白名单 (已放行)</span>';
+        } else if (isWhite || (currentDetailMeta && currentDetailMeta.action === 'WHITELIST')) {
+            statusHtml = '<span class="tag success">🛡️ 信任白名单 / CDN 保护 (已放行)</span>';
         }
         if (isHidden) {
             statusHtml += ' <span class="tag" style="background: rgba(255, 149, 0, 0.15); color: var(--warning); border: 1px solid rgba(255, 149, 0, 0.3);">🙈 日志已隐藏</span>';
