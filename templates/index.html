@@ -800,7 +800,6 @@
                     <button class="segment-btn" id="filter-range-30d" onclick="changeAnalyticsRange('30d', this)">30天</button>
                     <button class="segment-btn" id="filter-range-all" onclick="changeAnalyticsRange('all', this)">全部</button>
                 </div>
-                <div id="analytics-global-date-range" style="font-size: 11px; color: var(--text-sec); font-weight: 600; padding: 4px 10px; background: var(--card-sec); border-radius: 8px; border: 1px solid var(--border-subtle); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">📅 加载周期中...</div>
                 <button class="pill-btn accent" onclick="window.open('/api/report/export', '_blank')" style="flex-shrink: 0;" title="一键生成并打印/下载专业安全审计报告 (支持保存为 PDF)">
                     <span>📋</span>
                     <span class="btn-text-full">审计报告</span>
@@ -937,18 +936,10 @@
                     <div style="height: 220px;"><canvas id="analyticsTrendChart"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px;">
+                    <div class="card-header">
                         <div>
-                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                                <div class="card-title">⏰ 24 小时攻击活跃时段分布</div>
-                                <span class="tag accent" id="hourly-chart-date-badge" style="font-size: 11px; font-weight: 700;">📅 加载中...</span>
-                            </div>
+                            <div class="card-title">⏰ 24 小时攻击活跃时段分布</div>
                             <div class="val-sub" id="hourly-chart-date-sub">按每日 00:00~23:00 统计攻击时段分布</div>
-                        </div>
-                        <div id="hourly-subview-controls" style="display: flex; gap: 4px; align-items: center;">
-                            <button class="pill-btn accent" id="btn-hourly-24h" onclick="changeAnalyticsHourlyMode('24h', this)" style="padding: 3px 8px; font-size: 11px; font-weight: 700;">近24H</button>
-                            <button class="pill-btn" id="btn-hourly-today" onclick="changeAnalyticsHourlyMode('today', this)" style="padding: 3px 8px; font-size: 11px;">今日</button>
-                            <button class="pill-btn" id="btn-hourly-yesterday" onclick="changeAnalyticsHourlyMode('yesterday', this)" style="padding: 3px 8px; font-size: 11px;">昨日</button>
                         </div>
                     </div>
                     <div style="height: 220px;"><canvas id="analyticsHourlyChart"></canvas></div>
@@ -2537,8 +2528,6 @@
 
     let currentOverviewSubTab = 'overview';
     let currentAnalyticsRange = '7d';
-    let currentAnalyticsHourlyMode = '';
-    let currentHourlyDistCache = [];
     let currentTrendFullLabels = [];
     let trendChartFullLabels = [];
     let currentWebDiagTab = 'path';
@@ -2995,23 +2984,7 @@
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            callbacks: {
-                                title: function(items) {
-                                    if (!items.length) return '';
-                                    const idx = items[0].dataIndex;
-                                    const h = (currentHourlyDistCache && currentHourlyDistCache[idx]);
-                                    if (h && h.full_label) return `📅 ${h.full_label}`;
-                                    return items[0].label;
-                                },
-                                label: function(item) {
-                                    return ` 攻击触碰频次: ${Number(item.raw || 0).toLocaleString()} 次`;
-                                }
-                            }
-                        }
-                    },
+                    plugins: { legend: { display: false } },
                     scales: {
                         x: { grid: { display: false }, ticks: { color: textColor, font: { size: 9 }, maxRotation: 0 } },
                         y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
@@ -3183,70 +3156,27 @@
             fetchAnalyticsData(false);
         }
     }
-
     function changeAnalyticsRange(range, btn) {
         currentAnalyticsRange = range;
-        currentAnalyticsHourlyMode = '';
         ['24h', '7d', '30d', 'all'].forEach(r => {
             const b = document.getElementById(`filter-range-${r}`);
             if (b) b.classList.remove('active');
         });
         if (btn) btn.classList.add('active');
-
-        const hControls = document.getElementById('hourly-subview-controls');
-        if (hControls) {
-            hControls.style.display = (range === '24h') ? 'flex' : 'none';
-        }
-        ['24h', 'today', 'yesterday'].forEach(m => {
-            const b = document.getElementById(`btn-hourly-${m}`);
-            if (b) {
-                if (m === '24h') {
-                    b.classList.add('accent');
-                    b.style.fontWeight = '700';
-                } else {
-                    b.classList.remove('accent');
-                    b.style.fontWeight = 'normal';
-                }
-            }
-        });
         fetchAnalyticsData(true);
     }
 
-    function changeAnalyticsHourlyMode(mode, btn) {
-        currentAnalyticsHourlyMode = mode;
-        ['24h', 'today', 'yesterday'].forEach(m => {
-            const b = document.getElementById(`btn-hourly-${m}`);
-            if (b) {
-                b.classList.remove('accent');
-                b.style.fontWeight = 'normal';
-            }
-        });
-        if (btn) {
-            btn.classList.add('accent');
-            btn.style.fontWeight = '700';
-        }
-        fetchAnalyticsData(false);
-    }
-
     function fetchAnalyticsData(showNotice = false) {
-        let url = `/api/analytics?range=${currentAnalyticsRange}`;
-        if (currentAnalyticsHourlyMode) {
-            url += `&hourly_mode=${currentAnalyticsHourlyMode}`;
-        }
-        fetch(url).then(res => res.json()).then(data => {
+        fetch(`/api/analytics?range=${currentAnalyticsRange}`).then(res => res.json()).then(data => {
             analyticsDataCache = data;
             
             // 0. Date Info & Headers
-            if (data.date_info) {
-                const di = data.date_info;
-                const hBadge = document.getElementById('hourly-chart-date-badge');
-                if (hBadge) hBadge.innerText = di.hourly_badge || di.date_badge;
+            if (data.date_info && data.date_info.date_display) {
+                const dateDisplay = data.date_info.date_display;
                 const hSub = document.getElementById('hourly-chart-date-sub');
-                if (hSub) hSub.innerText = di.hourly_sub || di.date_sub;
+                if (hSub) hSub.innerText = `按每日 00:00~23:00 统计攻击时段分布 (统计日期: ${dateDisplay})`;
                 const tSub = document.getElementById('analytics-trend-sub');
-                if (tSub) tSub.innerText = `安全拦截 vs 端口探测 vs Web访问 对比 · ${di.date_display}`;
-                const globalRange = document.getElementById('analytics-global-date-range');
-                if (globalRange) globalRange.innerText = di.date_badge;
+                if (tSub) tSub.innerText = `安全拦截 vs 端口探测 vs Web访问 对比 (统计日期: ${dateDisplay})`;
             }
 
             // 1. KPI Cards
@@ -3282,14 +3212,8 @@
 
             // 3. Hourly Distribution Chart
             if (data.hourly_distribution && analyticsHourlyChartInstance) {
-                currentHourlyDistCache = data.hourly_distribution || [];
                 analyticsHourlyChartInstance.data.labels = data.hourly_distribution.map(h => h.hour);
                 analyticsHourlyChartInstance.data.datasets[0].data = data.hourly_distribution.map(h => h.count);
-                analyticsHourlyChartInstance._defaultBarPalette = (idx) => {
-                    const h = data.hourly_distribution[idx];
-                    if (h && h.is_yesterday) return '#ff9500'; // 橙色标注昨日时段
-                    return '#ff3b30'; // 红色标注今日时段
-                };
                 analyticsHourlyChartInstance._selectedCategoryIndex = -1;
                 analyticsHourlyChartInstance.resize();
                 analyticsHourlyChartInstance.update();

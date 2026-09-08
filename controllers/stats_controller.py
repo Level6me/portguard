@@ -158,7 +158,6 @@ def handle_report_export(req, parsed):
 def handle_analytics(req, parsed):
     query_params = parse_qs(parsed.query)
     range_param = query_params.get("range", ["7d"])[0]
-    hourly_mode = query_params.get("hourly_mode", [""])[0]
     now_ts = int(time.time())
     now_dt = time.localtime(now_ts)
     today_str = time.strftime("%Y-%m-%d", now_dt)
@@ -166,7 +165,6 @@ def handle_analytics(req, parsed):
     yesterday_dt = time.localtime(today_midnight - 3600)
     yesterday_str = time.strftime("%Y-%m-%d", yesterday_dt)
     yesterday_midnight = today_midnight - 86400
-    current_hour = now_dt.tm_hour
 
     end_ts = now_ts
 
@@ -268,59 +266,9 @@ def handle_analytics(req, parsed):
         c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
         web_trend.append(c.fetchone()[0])
 
-    if hourly_mode == "today":
-        h_cutoff = today_midnight
-        h_end = now_ts
-        h_badge = f"📅 {today_str} (今日)"
-        h_sub = f"统计时段：{today_str} 00:00 ~ {time.strftime('%H:%M', now_dt)} · 今日各时段分布"
-    elif hourly_mode == "yesterday":
-        h_cutoff = yesterday_midnight
-        h_end = today_midnight
-        h_badge = f"📅 {yesterday_str} (昨日)"
-        h_sub = f"统计时段：{yesterday_str} 00:00 ~ 23:59 · 昨日全天各时段分布"
-    elif hourly_mode == "24h" or (not hourly_mode and range_param == "24h"):
-        h_cutoff = now_ts - 86400
-        h_end = now_ts
-        h_badge = f"📅 {yesterday_str[5:]} ~ {today_str[5:]} (近24H)"
-        start_hm_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(h_cutoff))
-        end_hm_str = time.strftime("%Y-%m-%d %H:%M", now_dt)
-        h_sub = f"统计范围：{start_hm_str} ~ {end_hm_str} (深红: 今日 / 橙色: 昨日)"
-    else:
-        h_cutoff = cutoff_ts
-        h_end = end_ts
-        h_badge = date_badge
-        h_sub = f"按每日 00:00~23:00 统计各时段累计分布 ({date_display})"
-
-    c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (h_cutoff, h_end))
+    c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (cutoff_ts, end_ts))
     hourly_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
-
-    effective_hourly_mode = hourly_mode or ("24h" if range_param == "24h" else range_param)
-    hourly_dist = []
-    for h in range(24):
-        cnt = hourly_map.get(f"{h:02d}", 0)
-        is_yesterday = False
-        if effective_hourly_mode == "24h":
-            is_yesterday = (h > current_hour)
-            item_date = yesterday_str if is_yesterday else today_str
-            day_tag = "昨日" if is_yesterday else "今日"
-        elif effective_hourly_mode == "yesterday":
-            item_date = yesterday_str
-            day_tag = "昨日"
-        elif effective_hourly_mode == "today":
-            item_date = today_str
-            day_tag = "今日"
-        else:
-            item_date = date_display
-            day_tag = "全周期"
-
-        hourly_dist.append({
-            "hour": f"{h:02d}:00",
-            "count": cnt,
-            "date": item_date,
-            "day_tag": day_tag,
-            "is_yesterday": is_yesterday,
-            "full_label": f"{item_date} {h:02d}:00 ({day_tag})" if day_tag in ("今日", "昨日") else f"{h:02d}:00 ({day_tag}累计)"
-        })
+    hourly_dist = [{"hour": f"{h:02d}:00", "count": hourly_map.get(f"{h:02d}", 0)} for h in range(24)]
 
     c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY country ORDER BY cnt DESC LIMIT 8", (cutoff_ts, end_ts))
     geo_countries = [{"country": row[0], "count": row[1]} for row in c.fetchall()]
@@ -494,13 +442,7 @@ def handle_analytics(req, parsed):
             "end_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(end_ts)),
             "date_badge": date_badge,
             "date_sub": date_sub,
-            "date_display": date_display,
-            "today": today_str,
-            "yesterday": yesterday_str,
-            "current_hour": current_hour,
-            "hourly_badge": h_badge,
-            "hourly_sub": h_sub,
-            "hourly_mode": effective_hourly_mode
+            "date_display": date_display
         },
         "kpis": {
             "total_probes": total_probes,
