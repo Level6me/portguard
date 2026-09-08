@@ -405,7 +405,7 @@ def _ensure_ipset_timeout_set(set_name, is_ipv6=False):
             create_args = ["hash:ip", "family", "inet6", "maxelem", "1000000", "timeout", "2147483"]
         
         # 探测现有 set 是否支持 timeout
-        probe = subprocess.run(["ipset", "list", set_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        probe = subprocess.run(["ipset", "list", set_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
         if probe.returncode == 0:
             if "timeout" in probe.stdout:
                 return True
@@ -528,6 +528,32 @@ def flush_firewall_blocks():
         pass
 
 
+_BLACKLIST_IPS_CACHE = None
+_BLACKLIST_IPS_CACHE_TIME = 0.0
+_BLACKLIST_IPS_LOCK = threading.Lock()
+
+def get_blacklisted_ips_set():
+    """获取内存级快速黑名单 IP 集合（5秒缓存），用于网络层嗅探毫秒级阻断与排除"""
+    global _BLACKLIST_IPS_CACHE, _BLACKLIST_IPS_CACHE_TIME
+    now = time.time()
+    if _BLACKLIST_IPS_CACHE is not None and (now - _BLACKLIST_IPS_CACHE_TIME < 5.0):
+        return _BLACKLIST_IPS_CACHE
+    with _BLACKLIST_IPS_LOCK:
+        if _BLACKLIST_IPS_CACHE is not None and (now - _BLACKLIST_IPS_CACHE_TIME < 5.0):
+            return _BLACKLIST_IPS_CACHE
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("SELECT ip FROM blacklist")
+            _BLACKLIST_IPS_CACHE = {row[0] for row in c.fetchall() if row[0]}
+            _BLACKLIST_IPS_CACHE_TIME = now
+            conn.close()
+        except Exception:
+            if _BLACKLIST_IPS_CACHE is None:
+                _BLACKLIST_IPS_CACHE = set()
+        return _BLACKLIST_IPS_CACHE
+
+
 def ban_ip_firewall(ip, expire_seconds=None):
     """下发内核拦截：优先写入带 timeout 的 ipset 集合并下发黑洞路由，内核自动到期老化，降级兼容原生 iptables。"""
     valid_ip = validate_ip(ip)
@@ -644,7 +670,7 @@ def get_local_ips():
     except Exception:
         pass
     try:
-        out = subprocess.check_output("ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null", shell=True, text=True)
+        out = subprocess.check_output("ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null", shell=True, universal_newlines=True)
         for line in out.splitlines():
             m = re.search(r'inet6?\s+([0-9a-fA-F\.\:]+)', line)
             if m:
@@ -2002,8 +2028,11 @@ def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
         conn.commit()
         conn.close()
 
-        # 重置威胁评分
+        # 重置威胁评分与黑名单内存缓存
         _THREAT_ENGINE.reset_score(ip)
+        if _BLACKLIST_IPS_CACHE is not None:
+            with _BLACKLIST_IPS_LOCK:
+                _BLACKLIST_IPS_CACHE.discard(ip)
         return True
     except Exception:
         return False
@@ -2284,7 +2313,7 @@ def get_active_ssh_client_ips():
     
     # 1. 从 who 命令读取真正已登录终端的客户端 IP
     try:
-        res = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+        res = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
         for line in res.stdout.splitlines():
             m = re.search(r'\(([\d\w\.\:]+)\)', line)
             if m:
@@ -2307,14 +2336,14 @@ def get_active_ssh_client_ips():
 
     # 3. 跨进程检测已登录用户 (针对 systemd-logind 会话，避免 shell=True 注入隐患)
     try:
-        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
         for line in res.stdout.splitlines():
             parts = line.split()
             if parts:
                 s_id = parts[0]
                 if not s_id.isalnum():
                     continue
-                s_res = subprocess.run(["loginctl", "show-session", s_id, "-p", "RemoteHost"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+                s_res = subprocess.run(["loginctl", "show-session", s_id, "-p", "RemoteHost"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
                 if "RemoteHost=" in s_res.stdout:
                     r_host = s_res.stdout.split("RemoteHost=", 1)[1].strip()
                     if r_host and not r_host.startswith("127."):
@@ -2561,7 +2590,11 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     """, (ip, ban_reason, geo_country, event_level, now_str, now_ts, ban_expire, node_name))
     conn.commit()
     conn.close()
-    
+
+    if _BLACKLIST_IPS_CACHE is not None:
+        with _BLACKLIST_IPS_LOCK:
+            _BLACKLIST_IPS_CACHE.add(ip)
+
     # 5. 向集群联防节点异步广播黑名单情报
     broadcast_cluster_ban(ip, ban_reason, event_level, port=port_val, proto="TCP", category=event_category)
 
@@ -2582,6 +2615,58 @@ KNOWN_SYSTEM_SERVICES = {
     9000: "Portainer 控制台",
     9443: "Portainer HTTPS 管理"
 }
+
+def is_trap_port(port, cfg=None):
+    """判定指定端口是否属于已配置的诱捕蜜罐端口。正常业务列表中的端口拥有最高优先级，100% 绝对避让。"""
+    try:
+        port = int(port)
+    except Exception:
+        return None
+    if cfg is None:
+        cfg = load_config()
+    web_port = int(cfg.get("web_port", 9099) or 9099)
+    cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
+    if port == web_port or (cluster_port > 0 and port == cluster_port):
+        return None
+    
+    # 1. 判定是否属于用户在列表中配置的正常业务端口 (P2 优先级高于蜜罐策略)
+    biz_ports = set()
+    for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
+        if isinstance(bp, int):
+            biz_ports.add(bp)
+        elif isinstance(bp, dict) and "port" in bp:
+            try:
+                biz_ports.add(int(bp["port"]))
+            except Exception:
+                pass
+                
+    # 正常业务端口（如 80, 443, 4212 trojan 等）100% 绝对不作为蜜罐！
+    if port in biz_ports:
+        return None
+
+    # 2. 检查是否命中蜜罐诱饵规则
+    try:
+        raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
+        matching_rules = []
+        for item in raw_traps:
+            norm = normalize_trap_item(item)
+            if not norm or not norm.get("enabled", True):
+                continue
+            sp = int(norm.get("port_start", norm.get("port")))
+            ep = int(norm.get("port_end", norm.get("port")))
+            if sp <= port <= ep:
+                span = ep - sp
+                matching_rules.append((span, norm))
+
+        if matching_rules:
+            # 跨度最小的精细规则优先
+            matching_rules.sort(key=lambda x: x[0])
+            return matching_rules[0][1]
+
+    except Exception:
+        pass
+
+    return None
 
 def get_active_system_ports():
     global _SYSTEM_PORTS_CACHE, _SYSTEM_PORTS_CACHE_TIME
@@ -2620,6 +2705,9 @@ def get_active_system_ports():
                             local_addr = parts[1]
                             hex_port = local_addr.split(":")[-1]
                             port_num = int(hex_port, 16)
+                            # 严格过滤所有蜜罐诱捕端口与已绑定的蜜罐探针套接字，杜绝蜜罐端口被误识别为系统服务
+                            if is_trap_port(port_num, cfg) or (trap_instance and (port_num in getattr(trap_instance, "trap_map", {}) or port_num in [p for s, p in getattr(trap_instance, "sockets", {}).values()])):
+                                continue
                             if port_num not in ports_map:
                                 ports_map[port_num] = KNOWN_SYSTEM_SERVICES.get(port_num, "系统监听服务")
             except Exception:
@@ -2986,57 +3074,6 @@ class TrapServer:
             except Exception as e:
                 time.sleep(0.5)
 
-def is_trap_port(port, cfg=None):
-    """判定指定端口是否属于已配置的诱捕蜜罐端口。正常业务列表中的端口拥有最高优先级，100% 绝对避让。"""
-    try:
-        port = int(port)
-    except Exception:
-        return None
-    if cfg is None:
-        cfg = load_config()
-    web_port = int(cfg.get("web_port", 9099) or 9099)
-    cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
-    if port == web_port or (cluster_port > 0 and port == cluster_port):
-        return None
-    
-    # 1. 判定是否属于用户在列表中配置的正常业务端口 (P2 优先级高于蜜罐策略)
-    biz_ports = set()
-    for bp in cfg.get("business_ports", DEFAULT_CONFIG.get("business_ports", [])):
-        if isinstance(bp, int):
-            biz_ports.add(bp)
-        elif isinstance(bp, dict) and "port" in bp:
-            try:
-                biz_ports.add(int(bp["port"]))
-            except Exception:
-                pass
-                
-    # 正常业务端口（如 80, 443, 4212 trojan 等）100% 绝对不作为蜜罐！
-    if port in biz_ports:
-        return None
-
-    # 2. 检查是否命中蜜罐诱饵规则
-    try:
-        raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
-        matching_rules = []
-        for item in raw_traps:
-            norm = normalize_trap_item(item)
-            if not norm or not norm.get("enabled", True):
-                continue
-            sp = int(norm.get("port_start", norm.get("port")))
-            ep = int(norm.get("port_end", norm.get("port")))
-            if sp <= port <= ep:
-                span = ep - sp
-                matching_rules.append((span, norm))
-
-        if matching_rules:
-            # 跨度最小的精细规则优先
-            matching_rules.sort(key=lambda x: x[0])
-            return matching_rules[0][1]
-
-    except Exception:
-        pass
-
-    return None
 
 _SCAN_RECORDS_LOCK = threading.Lock()
 _SCAN_RECORDS = {}  # ip -> list of (timestamp, dst_port)
@@ -3231,6 +3268,11 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
+        # 1.5 严格屏蔽已被封禁的黑名单 IP 嗅探流量：防止已拉黑恶意 IP 的残余网络包被误判记录为正常业务
+        blacklisted_set = get_blacklisted_ips_set()
+        if src_ip in blacklisted_set:
+            return
+
         # 2. Web 控制台端口保护
         web_port = int(cfg.get("web_port", 9099) or 9099)
         if dst_port == web_port:
@@ -3266,7 +3308,7 @@ class GlobalPortSniffer:
                     "level": "高危",
                     "is_business": False
                 }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
                 return
 
             # 2. 检查是否为云厂商/IDC机房探针 (仅在该业务端口开启了 block_idc 时生效，公共 CDN 如 Cloudflare 节点除外)
@@ -3279,7 +3321,7 @@ class GlobalPortSniffer:
                     "level": "中危",
                     "is_business": False
                 }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
                 return
 
             action = "BUSINESS"
@@ -3287,7 +3329,21 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(_async_write, action, desc)
             return
 
-        # 3. 系统内核实际 LISTEN 监听的活跃业务端口自动放行（绝不误判为未开放端口探测 PROBE 或多端口扫描）
+        # 3. 检查是否命中显式配置的防御诱捕蜜罐规则 (P3 优先级，蜜罐探针端口一律秒级诱捕拦截)
+        if trap_meta and trap_meta.get("enabled", True):
+            action = "INTERCEPTED"
+            trap_name = trap_meta.get("name") or trap_meta.get("description") or f"TCP/{dst_port}"
+            desc = f"探测蜜罐端口 {dst_port} ({trap_name})" if not str(trap_name).startswith("探测蜜罐端口") else str(trap_name)
+            port_info = {
+                "name": desc,
+                "category": trap_meta.get("category", "honeypot"),
+                "level": trap_meta.get("level", "高危"),
+                "is_business": False
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
+            return
+
+        # 4. 系统内核实际 LISTEN 监听的未配置活跃系统端口放行（如非标 SSH 端口等，绝不误判为未开放端口探测 PROBE 或多端口扫描）
         is_zero_trust_all = bool(cfg.get("trap_all_ports", False) and cfg.get("trap_business_ports", False))
         if dst_port in active_ports_map and not is_zero_trust_all:
             svc_name = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, f"系统服务 ({dst_port})"))
@@ -3300,25 +3356,12 @@ class GlobalPortSniffer:
                     "level": "高危",
                     "is_business": False
                 }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
                 return
 
             action = "BUSINESS"
             desc = f"业务访问: {svc_name} (端口 {dst_port})"
             _EXECUTOR.submit(_async_write, action, desc)
-            return
-
-        # 4. 检查是否命中显式配置的防御端口规则 (P3 优先级，针对非业务端口)
-        if trap_meta and trap_meta.get("enabled", True):
-            action = "INTERCEPTED"
-            desc = trap_meta.get("name") or trap_meta.get("description") or f"端口防御规则 (端口 {dst_port})"
-            port_info = {
-                "name": desc,
-                "category": trap_meta.get("category", "honeypot"),
-                "level": trap_meta.get("level", "高危"),
-                "is_business": False
-            }
-            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
         # 5. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
