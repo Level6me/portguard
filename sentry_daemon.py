@@ -3637,8 +3637,10 @@ class TrapServer:
         if sample_urls_found:
             reason_text += f" [提取木马下载源: {', '.join(sample_urls_found[:2])}]"
         elif payload_captured:
-            clean_p = " ".join(payload_captured.split())[:70]
-            reason_text += f" [捕获载荷: {clean_p}]"
+            printable_p = "".join(c for c in payload_captured if 32 <= ord(c) <= 126 or '\u4e00' <= c <= '\u9fff')
+            clean_p = " ".join(printable_p.split())[:35]
+            if clean_p:
+                reason_text += f" [捕获载荷: {clean_p}]"
 
         print(f"[ALERT] 捕获真实攻击: IP {client_ip} 触发蜜罐 {port} - {reason_text}")
         _THREAT_ENGINE.add_score(client_ip, 100)

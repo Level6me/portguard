@@ -552,6 +552,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             text-overflow: ellipsis;
             cursor: default;
         }
+        .reason-cell {
+            display: inline-block;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+        @media (max-width: 768px) {
+            .reason-cell {
+                max-width: 160px;
+            }
+        }
 
         /* Tags & Badges */
         .tag {
@@ -2432,6 +2445,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     function csvEscape(s) {
         return String(s == null ? '' : s).replace(/"/g, '""');
     }
+    function formatReasonDisplay(reason, maxLen = 28) {
+        if (!reason) return '自动诱捕阻断';
+        let str = String(reason).trim();
+        // 剥离末尾技术细节后缀，例如 [捕获载荷: ...] 或 [提取木马下载源: ...]
+        let clean = str.replace(/\s*\[(?:捕获载荷|提取木马下载源|载荷|Payload|木马源):[\s\S]*?(?:\]|$)/gi, '').trim();
+        if (!clean) clean = str;
+        if (clean.length > maxLen) {
+            return clean.slice(0, maxLen) + '...';
+        }
+        return clean;
+    }
 
     function getUATagInfo(ua) {
         if (!ua || ua === '-' || ua === 'null' || ua === 'None' || ua === 'undefined' || ua === 'Unknown') {
@@ -4189,7 +4213,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td>${portBadge}</td>
-                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
+                <td><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; max-width:180px;" title="${escapeHtml(e.port_name || '自定义诱饵')}">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
                 <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
                 <td>${statusBadge}</td>
                 <td>
@@ -4319,7 +4343,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                 </td>
                 <td>${nodeBadge}</td>
-                <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(b.reason || '自动诱捕阻断')}</span></td>
+                <td title="${escapeHtml(b.reason || '自动诱捕阻断')}"><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4;">${escapeHtml(formatReasonDisplay(b.reason || '自动诱捕阻断', 28))}</span></td>
                 <td><span class="tag danger" style="font-size:11px; font-weight:700;">ipset + blackhole</span></td>
                 <td>${formatTwoLineTime(b.ban_time)}</td>
                 <td>
@@ -5309,7 +5333,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
                     </td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
-                    <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(l.port_name || '网络连接')}</span></td>
+                    <td><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; max-width:180px;" title="${escapeHtml(l.port_name || '网络连接')}">${escapeHtml(l.port_name || '网络连接')}</span></td>
                     <td>${actionTag}</td>
                 </tr>
                 `;
