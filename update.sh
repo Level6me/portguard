@@ -123,13 +123,16 @@ download_file_safe() {
     return 1
 }
 
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/web_server.py" "web_server.py" 50000 || true
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" "sentry_daemon.py" 30000 || true
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
-mkdir -p "templates"
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/index.html" "templates/index.html" 50000 || true
-download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/report.html" "templates/report.html" 1000 || true
+echo -e "正在获取最新代码架构与控制器组件..."
+ARCHIVE_URL="${GH_PROXY}https://github.com/Level6me/portguard/archive/${REF_TARGET}.tar.gz"
+if curl -fsSL --connect-timeout 8 "$ARCHIVE_URL" | tar -xzf - --strip-components=1 2>/dev/null; then
+    echo -e "${GREEN}[✓] 完整架构组件包获取成功${NC}"
+else
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/web_server.py" "web_server.py" 20000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" "sentry_daemon.py" 30000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
+fi
 
 if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！正在撤销本次更新。${NC}"
@@ -139,7 +142,7 @@ fi
 
 # 预编译语法完整性验证
 if command -v python3 >/dev/null 2>&1; then
-    if ! python3 -m py_compile web_server.py sentry_daemon.py >/dev/null 2>&1; then
+    if ! python3 -m py_compile web_server.py sentry_daemon.py 2>/dev/null; then
         echo -e "${RED}[ERROR] 下载的核心代码文件存在语法损坏，终止覆盖更新！${NC}"
         rm -rf "$TMP_UPDATE_DIR"
         exit 1
@@ -188,15 +191,12 @@ chmod 644 "$INSTALL_DIR/sentry_daemon.py"
 cp -f chart.min.js "$INSTALL_DIR/chart.min.js"
 chmod 644 "$INSTALL_DIR/chart.min.js"
 
-mkdir -p "$INSTALL_DIR/templates"
-if [ -f "templates/index.html" ]; then
-    cp -f templates/index.html "$INSTALL_DIR/templates/index.html"
-    chmod 644 "$INSTALL_DIR/templates/index.html"
-fi
-if [ -f "templates/report.html" ]; then
-    cp -f templates/report.html "$INSTALL_DIR/templates/report.html"
-    chmod 644 "$INSTALL_DIR/templates/report.html"
-fi
+for d in templates controllers geo collectors core cluster; do
+    if [ -d "$d" ]; then
+        mkdir -p "$INSTALL_DIR/$d"
+        cp -rf "$d"/* "$INSTALL_DIR/$d/" 2>/dev/null || true
+    fi
+done
 
 if [ -s uninstall.sh ]; then
     cp -f uninstall.sh "$INSTALL_DIR/uninstall.sh"

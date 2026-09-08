@@ -2,22 +2,23 @@
 import os
 import base64
 import gzip
+import tarfile
+import io
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def get_gz_b64(filename):
-    path = os.path.join(BASE_DIR, filename)
-    with open(path, 'rb') as f:
-        compressed = gzip.compress(f.read(), 9)
-        return base64.b64encode(compressed).decode('utf-8')
+tar_buf = io.BytesIO()
+with tarfile.open(fileobj=tar_buf, mode="w:gz") as tar:
+    for item in [
+        "web_server.py", "sentry_daemon.py", "chart.min.js",
+        "uninstall.sh", "update.sh", "templates", "controllers",
+        "geo", "collectors", "core", "cluster"
+    ]:
+        p = os.path.join(BASE_DIR, item)
+        if os.path.exists(p):
+            tar.add(p, arcname=item, filter=lambda ti: None if ("__pycache__" in ti.name or ti.name.endswith(".pyc")) else ti)
 
-web_b64 = get_gz_b64('web_server.py')
-daemon_b64 = get_gz_b64('sentry_daemon.py')
-uninstall_b64 = get_gz_b64('uninstall.sh')
-update_b64 = get_gz_b64('update.sh')
-chart_b64 = get_gz_b64('chart.min.js')
-index_html_b64 = get_gz_b64('templates/index.html')
-report_html_b64 = get_gz_b64('templates/report.html')
+payload_b64 = base64.b64encode(tar_buf.getvalue()).decode("utf-8")
 
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
@@ -306,36 +307,13 @@ fi
 echo -e "\n${BLUE}[3/6] 正在释放核心防御模块至 ${INSTALL_DIR} (Gzip高速解包)...${NC}"
 mkdir -p "${INSTALL_DIR}"
 
-# 释放 web_server.py
-echo "__WEB_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/web_server.py"
-chmod 644 "${INSTALL_DIR}/web_server.py"
-
-# 释放 sentry_daemon.py
-echo "__DAEMON_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/sentry_daemon.py"
-chmod 644 "${INSTALL_DIR}/sentry_daemon.py"
-
-# 释放 uninstall.sh
-echo "__UNINSTALL_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/uninstall.sh"
-chmod 755 "${INSTALL_DIR}/uninstall.sh"
-
-# 释放 update.sh
-echo "__UPDATE_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/update.sh"
-chmod 755 "${INSTALL_DIR}/update.sh"
-
-# 释放 chart.min.js
-echo "__CHART_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/chart.min.js"
-chmod 644 "${INSTALL_DIR}/chart.min.js"
-
-# 释放 templates/index.html 与 templates/report.html
-mkdir -p "${INSTALL_DIR}/templates"
-echo "__INDEX_HTML_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/templates/index.html"
-chmod 644 "${INSTALL_DIR}/templates/index.html"
-
-echo "__REPORT_HTML_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/templates/report.html"
-chmod 644 "${INSTALL_DIR}/templates/report.html"
+# 原子解包核心防御模块、控制器架构与模板资源
+echo "__PAYLOAD_B64__" | base64 -d | tar -xzf - -C "${INSTALL_DIR}"
+chmod 755 "${INSTALL_DIR}/uninstall.sh" "${INSTALL_DIR}/update.sh" 2>/dev/null || true
+chmod 644 "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" "${INSTALL_DIR}/chart.min.js" 2>/dev/null || true
 
 # 验证核心程序文件解包完整性
-if ! python3 -m py_compile "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" >/dev/null 2>&1; then
+if ! python3 -m py_compile "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" "${INSTALL_DIR}/controllers"/*.py "${INSTALL_DIR}/geo"/*.py "${INSTALL_DIR}/collectors"/*.py >/dev/null 2>&1; then
     echo -e "${RED}[ERROR] 解包的核心 Python 代码校验失败，请检查系统 gzip/base64 支持！${NC}"
     exit 1
 fi
@@ -584,13 +562,7 @@ echo -e "  一键完全卸载: ${RED}curl -fsSL https://raw.githubusercontent.co
 echo -e "${CYAN}================================================================${NC}\n"
 '''
 
-final_content = (template.replace("__WEB_B64__", web_b64)
-                 .replace("__DAEMON_B64__", daemon_b64)
-                 .replace("__UNINSTALL_B64__", uninstall_b64)
-                 .replace("__UPDATE_B64__", update_b64)
-                 .replace("__CHART_B64__", chart_b64)
-                 .replace("__INDEX_HTML_B64__", index_html_b64)
-                 .replace("__REPORT_HTML_B64__", report_html_b64))
+final_content = template.replace("__PAYLOAD_B64__", payload_b64)
 
 with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)
