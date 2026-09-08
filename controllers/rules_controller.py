@@ -5,7 +5,7 @@ import re
 from urllib.parse import parse_qs
 from sentry_daemon import (
     get_db, load_config, save_config, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
-    DEFAULT_HTTP_TRAPS, normalize_trap_item, trap_instance,
+    DEFAULT_HTTP_TRAPS, get_http_traps, normalize_trap_item, trap_instance,
     get_all_business_ports_info
 )
 from controllers.base import parse_loose_json_or_lines

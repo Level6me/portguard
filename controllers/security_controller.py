@@ -4,6 +4,7 @@ import time
 import re
 import sqlite3
 import ipaddress
+import subprocess
 import threading
 from urllib.parse import parse_qs
 from sentry_daemon import (
@@ -11,11 +12,13 @@ from sentry_daemon import (
     ban_ip_firewall, broadcast_cluster_ban, broadcast_cluster_unban,
     broadcast_cluster_whitelist, resolve_ip_geo, resolve_ip_geo_local,
     get_ip_threat_tags, get_hidden_ips, get_hidden_ips_set,
-    add_hidden_ip, remove_hidden_ip, clear_hidden_ips, _GEO_CACHE
+    add_hidden_ip, remove_hidden_ip, clear_hidden_ips, _GEO_CACHE,
+    DEFAULT_CONFIG, run_firewall_cmd, ip_in_whitelist, _EXECUTOR
 )
 from controllers.base import (
     invalidate_blacklist_cache, get_blacklist_cache, set_blacklist_cache,
-    parse_loose_json_or_lines
+    parse_loose_json_or_lines, _BLACKLIST_CACHE_LOCK, _BLACKLIST_CACHE,
+    _BLACKLIST_CACHE_TIME
 )
 
 def handle_hidden_ips(req, parsed):
@@ -273,7 +276,7 @@ def handle_ban(req, parsed, req_data):
     ip = valid_ip
 
     # 防自锁与白名单保护：当前控制台客户端、活跃SSH管理会话及安全白名单严禁封禁
-    client_ip = getattr(self, "client_address", ("", 0))[0]
+    client_ip = getattr(req, "client_address", ("", 0))[0]
     if ip == client_ip:
         req._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 为当前登录控制台的客户端地址，触发管理员防自锁保护！"}, status=400)
         return

@@ -14,3 +14,4 @@ config.json
 logs/
 *.log
 portguard_traps_recommended.json
+snapshots/

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from urllib.parse import parse_qs
-from sentry_daemon import get_db, _GEO_CACHE
+from sentry_daemon import (
+    get_db, _GEO_CACHE, get_ip_threat_tags, _EXECUTOR,
+    resolve_ip_geo, resolve_ip_geo_local
+)
 
 def handle_events(req, parsed):
     conn = get_db()

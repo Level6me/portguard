@@ -2,15 +2,17 @@
 import json
 import time
 import socket
+import ipaddress
 import urllib.request
 import urllib.error
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 from sentry_daemon import (
     get_db, load_config, save_config, normalize_cluster_node,
     verify_cluster_token, generate_cluster_token, resolve_ip_geo,
     resolve_ip_geo_local, ban_ip_firewall, unban_ip_core,
     broadcast_cluster_ban, broadcast_cluster_unban, broadcast_cluster_whitelist,
-    sync_cluster_mesh_state, get_hidden_ips_set
+    sync_cluster_mesh_state, get_hidden_ips_set, validate_ip, ip_in_whitelist,
+    _EXECUTOR
 )
 from controllers.base import invalidate_blacklist_cache
 
@@ -629,13 +631,13 @@ def handle_cluster_nodes_test_single(req, parsed, req_data):
     node_name = "远程节点"
     try:
         target = f"http://{ip_raw}:{port}/api/cluster/ping"
-        req = urllib.request.Request(target, data=b"{}", headers={
+        http_req = urllib.request.Request(target, data=b"{}", headers={
             "Content-Type": "application/json",
             "X-Cluster-Token": token,
             "User-Agent": "PortGuardMesh/2.0"
         })
         t0 = time.time()
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        with urllib.request.urlopen(http_req, timeout=3.0) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             if res_data.get("success"):
                 status = "online"
