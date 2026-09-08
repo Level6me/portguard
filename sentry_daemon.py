@@ -130,7 +130,7 @@ DEFAULT_CONFIG = {
     "trap_threshold": 2,
     "trap_window_seconds": 30,
     "enable_port_scan_defense": True,
-    "port_scan_threshold": 3,
+    "port_scan_threshold": 1,
     "port_scan_window_seconds": 15,
     "trap_business_ports": False,
     "trap_all_unopened_ports": False,
@@ -3756,7 +3756,7 @@ def check_port_scan_attack(src_ip, dst_port, cfg):
         return False
     
     window = int(cfg.get("port_scan_window_seconds", 15) or 15)
-    threshold = int(cfg.get("port_scan_threshold", 3) or 3)
+    threshold = int(cfg.get("port_scan_threshold", 1) or 1)
     now = time.time()
     cutoff = now - window
 
@@ -4019,7 +4019,8 @@ class GlobalPortSniffer:
         # 5. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
         if check_port_scan_attack(src_ip, dst_port, cfg):
             action = "INTERCEPTED"
-            desc = f"多端口扫描探测 (目标端口 {dst_port})"
+            threshold = int(cfg.get("port_scan_threshold", 1) or 1)
+            desc = f"未开放端口扫描探测 (目标端口 {dst_port})" if threshold <= 1 else f"多端口扫描探测 (目标端口 {dst_port})"
             port_info = {
                 "name": desc,
                 "category": "scan",

@@ -1587,8 +1587,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         <div>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">多端口扫描判定阈值</label>
                             <select id="setting-policy-scan-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
+                                <option value="1" selected>探测 ≥1 个未开放端口 (即刻封禁/最高灵敏度)</option>
                                 <option value="2">探测 ≥2 个未开放端口 (高灵敏度)</option>
-                                <option value="3" selected>探测 ≥3 个未开放端口 (标准推荐)</option>
+                                <option value="3">探测 ≥3 个未开放端口 (标准模式)</option>
                                 <option value="5">探测 ≥5 个未开放端口 (宽松模式)</option>
                             </select>
                         </div>
@@ -5988,7 +5989,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 nodeInput.value = String(data.node_name || '本机节点');
             }
             if (document.getElementById('setting-policy-scan-threshold')) {
-                document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold || 3);
+                document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold !== undefined ? data.port_scan_threshold : 1);
             }
             if (document.getElementById('setting-policy-scan-window')) {
                 document.getElementById('setting-policy-scan-window').value = String(data.port_scan_window_seconds || 15);
@@ -6389,7 +6390,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     async function saveIntegratedPolicySettings() {
         const nodeName = document.getElementById('setting-policy-node-name')?.value.trim() || '本机节点';
-        const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '3');
+        const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '1');
         const scanWindow = parseInt(document.getElementById('setting-policy-scan-window')?.value || '15');
         const trapThreshold = parseInt(document.getElementById('setting-policy-trap-threshold')?.value || '2');
         const trapWindow = parseInt(document.getElementById('setting-policy-trap-window')?.value || '30');
@@ -7813,7 +7814,7 @@ code {{ font-family: monospace; background: #eff6ff; padding: 2px 5px; border-ra
                     "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
                     "defense_mode": cfg.get("defense_mode", "standard"),
                     "enable_port_scan_defense": bool(cfg.get("enable_port_scan_defense", True)),
-                    "port_scan_threshold": int(cfg.get("port_scan_threshold", 3) or 3),
+                    "port_scan_threshold": int(cfg.get("port_scan_threshold", 1) or 1),
                     "port_scan_window_seconds": int(cfg.get("port_scan_window_seconds", 15) or 15),
                     "trap_all_ports": bool(cfg.get("trap_all_ports", False)),
                     "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", False)),

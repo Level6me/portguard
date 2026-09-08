@@ -415,7 +415,7 @@ cfg = {
   ],
   'defense_mode': 'standard',
   'enable_port_scan_defense': True,
-  'port_scan_threshold': 3,
+  'port_scan_threshold': 1,
   'port_scan_window_seconds': 15,
   'ban_action_iptables': True,
   'ban_action_blackhole': True,

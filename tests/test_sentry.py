@@ -364,11 +364,38 @@ class IsTrapPortTest(unittest.TestCase):
                 "trap_ports": [],
                 "trap_business_ports": False,
                 "trap_all_unopened_ports": False,
-                "trap_all_ports": False
+                "trap_all_ports": False,
+                "enable_port_scan_defense": False
             }
             sniffer._handle_port_access("203.0.113.89", 54322, "TCP")
             time.sleep(0.05)
             mock_ban2.assert_not_called()
+
+    def test_port_scan_threshold_one_instant_ban(self):
+        from sentry_daemon import GlobalPortSniffer, init_db
+        init_db()
+        sniffer = GlobalPortSniffer()
+
+        # 当 port_scan_threshold 为 1 时，探测任意未开放端口 1 次即刻触发 ban_ip 阻断
+        with mock.patch("sentry_daemon.load_config") as mock_cfg, \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban:
+            mock_cfg.return_value = {
+                "whitelist": [],
+                "trap_ports": [],
+                "trap_business_ports": False,
+                "trap_all_unopened_ports": False,
+                "trap_all_ports": False,
+                "enable_port_scan_defense": True,
+                "port_scan_threshold": 1,
+                "port_scan_window_seconds": 15
+            }
+            sniffer._handle_port_access("203.0.113.99", 54323, "TCP")
+            time.sleep(0.05)
+            mock_ban.assert_called_once()
+            args, _ = mock_ban.call_args
+            self.assertEqual(args[0], "203.0.113.99")
+            self.assertEqual(args[1], 54323)
+            self.assertIn("未开放端口", args[2]["name"])
 
     def test_trap_all_ports_zero_trust(self):
         from sentry_daemon import GlobalPortSniffer, init_db
