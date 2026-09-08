@@ -938,7 +938,7 @@
                 <div class="card">
                     <div class="card-header">
                         <div>
-                            <div class="card-title">⏰ 24 小时攻击活跃时段分布</div>
+                            <div class="card-title" id="hourly-chart-title">⏰ 攻击活跃时段分布</div>
                             <div class="val-sub" id="hourly-chart-date-sub">按每日 00:00~23:00 统计攻击时段分布</div>
                         </div>
                     </div>
@@ -3173,6 +3173,14 @@
             // 0. Date Info & Headers
             if (data.date_info && data.date_info.date_display) {
                 const dateDisplay = data.date_info.date_display;
+                const rangeTitles = {
+                    '24h': '⏰ 近 24 小时攻击活跃时段分布',
+                    '7d': '⏰ 近 7 天攻击活跃时段分布',
+                    '30d': '⏰ 近 30 天攻击活跃时段分布',
+                    'all': '⏰ 历史全量攻击活跃时段累计分布'
+                };
+                const hTitle = document.getElementById('hourly-chart-title');
+                if (hTitle) hTitle.innerText = rangeTitles[currentAnalyticsRange] || '⏰ 攻击活跃时段分布';
                 const hSub = document.getElementById('hourly-chart-date-sub');
                 if (hSub) hSub.innerText = `按每日 00:00~23:00 统计攻击时段分布 (统计日期: ${dateDisplay})`;
                 const tSub = document.getElementById('analytics-trend-sub');
