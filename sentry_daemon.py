@@ -3918,8 +3918,18 @@ class GlobalPortSniffer:
         def _async_write(act, d):
             log_port_access_entry(src_ip, dst_port, port_name=d, action=act)
 
-        # 1. 优先白名单放行
-        if ip_in_whitelist(src_ip, whitelist):
+        # 1. 优先检查用户手动配置的显式白名单与本地防自锁
+        is_user_white = False
+        if src_ip in ("127.0.0.1", "::1", "localhost") or src_ip.startswith("127."):
+            is_user_white = True
+        elif whitelist:
+            for item in whitelist:
+                w_ip = (item.get("ip") if isinstance(item, dict) else str(item)).strip()
+                if w_ip and (src_ip == w_ip or (src_ip.startswith("127.") and w_ip.startswith("127."))):
+                    is_user_white = True
+                    break
+
+        if is_user_white:
             action = "WHITELIST"
             proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
             desc = f"信任白名单连接: {proc} (端口 {dst_port})" if proc else f"信任白名单连接 (端口 {dst_port})"
@@ -3964,8 +3974,8 @@ class GlobalPortSniffer:
                 _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
                 return
 
-            # 2. 检查是否为云厂商/IDC机房探针 (仅在该业务端口开启了 block_idc 时生效)
-            if block_idc and is_idc_hosting_ip(src_ip):
+            # 2. 检查是否为云厂商/IDC机房探针 (仅在该业务端口开启了 block_idc 时生效，公共 CDN 如 Cloudflare 节点除外)
+            if block_idc and is_idc_hosting_ip(src_ip) and not is_infrastructure_or_cdn_ip(src_ip):
                 action = "INTERCEPTED"
                 desc = f"扫描拦截: 云厂商机房源探测业务端口 {dst_port} ({biz_name})"
                 port_info = {
