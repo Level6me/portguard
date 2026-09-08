@@ -3699,8 +3699,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         checkC2CompromiseStatus(false);
 
-        // 3. 黑名单数据：仅在首次加载、非轮询或当前处于黑白名单页面时刷新，避免后台无谓高频拉取
-        if (!isPeriodic || currentTabKey === 'iplists' || allBlacklist.length === 0) {
+        // 3. 黑名单数据：在首次加载、非轮询或处于概览/日志/黑白名单页面时刷新
+        if (!isPeriodic || currentTabKey === 'iplists' || currentTabKey === 'dashboard' || currentTabKey === 'logs' || allBlacklist.length === 0) {
             fetch('/api/blacklist').then(res => res.json()).then(data => {
                 allBlacklist = data;
                 renderBlacklistTable();
@@ -3801,22 +3801,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 document.getElementById('ip-detail-region-city').innerText = (geo.region || geo.city) ? `${geo.region || ''} ${geo.city || ''}`.trim() : '未知城市';
                 document.getElementById('ip-detail-isp').innerText = geo.isp || '未知运营商 / 本地或专用网络';
                 if (geo.is_banned !== undefined) {
+                    const realBanned = !!geo.is_banned;
                     const rEl = document.getElementById('ip-detail-reason');
                     if (rEl) {
-                        if (geo.is_banned) {
-                            rEl.innerText = geo.ban_reason || (bannedItem && bannedItem.reason) || '自动诱捕阻断';
+                        if (realBanned) {
+                            rEl.innerText = geo.ban_reason || (currentDetailMeta && currentDetailMeta.reason) || '自动诱捕阻断';
                             rEl.style.color = 'var(--text)';
                         } else {
                             rEl.innerText = '-';
                             rEl.style.color = 'var(--text-sec)';
                         }
                     }
+                    let sHtml = '<span class="tag warning">● 未封禁 (正常)</span>';
+                    if (realBanned) {
+                        sHtml = '<span class="tag danger">🚫 内核黑名单 (已阻断)</span>';
+                    } else if (isWhite || (currentDetailMeta && currentDetailMeta.action === 'WHITELIST')) {
+                        sHtml = '<span class="tag success">🛡️ 信任白名单 / CDN 保护 (已放行)</span>';
+                    }
+                    if (isHidden) {
+                        sHtml += ' <span class="tag" style="background: rgba(255, 149, 0, 0.15); color: var(--warning); border: 1px solid rgba(255, 149, 0, 0.3);">🙈 日志已隐藏</span>';
+                    }
+                    document.getElementById('ip-detail-status').innerHTML = sHtml;
+
+                    const bBtn = document.getElementById('btn-ip-detail-ban');
+                    if (bBtn) {
+                        if (realBanned) {
+                            bBtn.innerText = '🔓 黑名单解封';
+                            bBtn.className = 'pill-btn success';
+                        } else {
+                            bBtn.innerText = '🚫 封禁此 IP';
+                            bBtn.className = 'pill-btn danger';
+                        }
+                    }
+                    if (realBanned && allBlacklist && !allBlacklist.some(b => b.ip === ip)) {
+                        allBlacklist.unshift({ ip, reason: geo.ban_reason || '自动诱捕阻断', ban_time: geo.ban_time || '' });
+                    }
                 }
             }
         }).catch(() => {});
         
         const bannedItem = allBlacklist && allBlacklist.find(b => b.ip === ip);
-        const isBanned = !!bannedItem;
+        const isBanned = !!bannedItem || (currentDetailMeta && (currentDetailMeta.status === 'BANNED' || currentDetailMeta.action === 'INTERCEPTED'));
         const isWhite = allWhitelist && allWhitelist.some(w => w.ip === ip);
         const isHidden = allHiddenIPs && allHiddenIPs.some(h => h.ip === ip);
         const isWhiteAction = currentDetailMeta && (currentDetailMeta.action === 'WHITELIST' || currentDetailMeta.action === 'BUSINESS');
@@ -3844,7 +3869,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const reasonEl = document.getElementById('ip-detail-reason');
         if (reasonEl) {
             if (isBanned) {
-                const banReason = (bannedItem && bannedItem.reason) || (currentDetailMeta && currentDetailMeta.reason) || '自动诱捕阻断';
+                const banReason = (bannedItem && bannedItem.reason) || (currentDetailMeta && currentDetailMeta.reason) || (currentDetailMeta && currentDetailMeta.port_name) || '自动诱捕阻断';
                 reasonEl.innerText = banReason;
                 reasonEl.style.color = 'var(--text)';
             } else {
