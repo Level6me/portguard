@@ -127,6 +127,9 @@ download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_T
 download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" "sentry_daemon.py" 30000 || true
 download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
 download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
+mkdir -p "templates"
+download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/index.html" "templates/index.html" 50000 || true
+download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/report.html" "templates/report.html" 1000 || true
 
 if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！正在撤销本次更新。${NC}"
@@ -184,6 +187,16 @@ chmod 644 "$INSTALL_DIR/sentry_daemon.py"
 
 cp -f chart.min.js "$INSTALL_DIR/chart.min.js"
 chmod 644 "$INSTALL_DIR/chart.min.js"
+
+mkdir -p "$INSTALL_DIR/templates"
+if [ -f "templates/index.html" ]; then
+    cp -f templates/index.html "$INSTALL_DIR/templates/index.html"
+    chmod 644 "$INSTALL_DIR/templates/index.html"
+fi
+if [ -f "templates/report.html" ]; then
+    cp -f templates/report.html "$INSTALL_DIR/templates/report.html"
+    chmod 644 "$INSTALL_DIR/templates/report.html"
+fi
 
 if [ -s uninstall.sh ]; then
     cp -f uninstall.sh "$INSTALL_DIR/uninstall.sh"

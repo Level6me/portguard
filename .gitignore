@@ -13,3 +13,4 @@ config.json
 .DS_Store
 logs/
 *.log
+portguard_traps_recommended.json

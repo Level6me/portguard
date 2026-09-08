@@ -16,6 +16,8 @@ daemon_b64 = get_gz_b64('sentry_daemon.py')
 uninstall_b64 = get_gz_b64('uninstall.sh')
 update_b64 = get_gz_b64('update.sh')
 chart_b64 = get_gz_b64('chart.min.js')
+index_html_b64 = get_gz_b64('templates/index.html')
+report_html_b64 = get_gz_b64('templates/report.html')
 
 template = r'''#!/usr/bin/env bash
 # ==============================================================================
@@ -324,6 +326,14 @@ chmod 755 "${INSTALL_DIR}/update.sh"
 echo "__CHART_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/chart.min.js"
 chmod 644 "${INSTALL_DIR}/chart.min.js"
 
+# 释放 templates/index.html 与 templates/report.html
+mkdir -p "${INSTALL_DIR}/templates"
+echo "__INDEX_HTML_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/templates/index.html"
+chmod 644 "${INSTALL_DIR}/templates/index.html"
+
+echo "__REPORT_HTML_B64__" | base64 -d | gzip -d > "${INSTALL_DIR}/templates/report.html"
+chmod 644 "${INSTALL_DIR}/templates/report.html"
+
 # 验证核心程序文件解包完整性
 if ! python3 -m py_compile "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" >/dev/null 2>&1; then
     echo -e "${RED}[ERROR] 解包的核心 Python 代码校验失败，请检查系统 gzip/base64 支持！${NC}"
@@ -578,7 +588,9 @@ final_content = (template.replace("__WEB_B64__", web_b64)
                  .replace("__DAEMON_B64__", daemon_b64)
                  .replace("__UNINSTALL_B64__", uninstall_b64)
                  .replace("__UPDATE_B64__", update_b64)
-                 .replace("__CHART_B64__", chart_b64))
+                 .replace("__CHART_B64__", chart_b64)
+                 .replace("__INDEX_HTML_B64__", index_html_b64)
+                 .replace("__REPORT_HTML_B64__", report_html_b64))
 
 with open(os.path.join(BASE_DIR, 'install.sh'), 'w', encoding='utf-8') as f:
     f.write(final_content)
