@@ -397,12 +397,12 @@ def handle_cluster_test_node(req, parsed, req_data):
     t0 = time.time()
     try:
         target = f"{node_url}/api/cluster/ping"
-        req = urllib.request.Request(target, data=b"{}", headers={
+        http_req = urllib.request.Request(target, data=b"{}", headers={
             "Content-Type": "application/json",
             "X-Cluster-Token": token,
             "User-Agent": "PortGuardMesh/2.0"
         })
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        with urllib.request.urlopen(http_req, timeout=3.0) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             latency = int((time.time() - t0) * 1000)
             if res_data.get("success"):
@@ -463,13 +463,13 @@ def handle_cluster_nodes_add(req, parsed, req_data):
         token = generate_cluster_token("ping", secret)
         try:
             target = f"http://{ip_raw}:{port}/api/cluster/ping"
-            req = urllib.request.Request(target, data=b"{}", headers={
+            http_req = urllib.request.Request(target, data=b"{}", headers={
                 "Content-Type": "application/json",
                 "X-Cluster-Token": token,
                 "User-Agent": "PortGuardMesh/2.0"
             })
             t0 = time.time()
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
+            with urllib.request.urlopen(http_req, timeout=2.5) as resp:
                 res_data = json.loads(resp.read().decode('utf-8'))
                 if res_data.get("success"):
                     status = "online"
