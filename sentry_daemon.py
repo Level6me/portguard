@@ -1455,6 +1455,7 @@ def sync_cluster_mesh_state(target_node=None):
         for r in local_unbanned_rows if r[0]
     ]
     local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
+    local_bans_map = { r[0]: {"timestamp": r[5]} for r in local_black_rows if r[0] }
     local_whitelist = cfg.get("whitelist", [])
 
     token = generate_cluster_token("sync_state_exchange", secret)
@@ -1514,7 +1515,10 @@ def sync_cluster_mesh_state(target_node=None):
                     ru_ip = validate_ip(ru.get("ip", ""))
                     ru_ts = int(ru.get("timestamp", 0) or 0)
                     if ru_ip:
-                        unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群对齐({node.get('remark') or node['ip']})")
+                        if ru_ip in local_bans_map:
+                            local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
+                            if ru_ts >= local_ban_ts:
+                                unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群对齐({node.get('remark') or node['ip']})")
                         local_unbanned_map[ru_ip] = ru_ts
 
             # 2. 将对端独有的黑名单写入本地并下发防火墙阻断（严格比对本地解封墓碑时间）

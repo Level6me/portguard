@@ -82,6 +82,7 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
     c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
     local_unbanned_rows = c.fetchall()
     local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
+    conn.close()
 
     # 1. 优先对齐远端发来的解封墓碑
     for ru in remote_unbanned:
@@ -93,15 +94,14 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
                 if ru_ts >= local_ban_ts:
                     unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
             local_unbanned_map[ru_ip] = ru_ts
-            c.execute("""
-            INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
-            VALUES (?, ?, ?, ?)
-            """, (ru_ip, ru.get("unban_time", time.strftime("%Y-%m-%d %H:%M:%S")), ru_ts, f"集群同步({source_node})"))
 
     # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑)
     added_bans = 0
     now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     now_ts = int(time.time())
+    
+    conn = get_db()
+    c = conn.cursor()
     for rb in remote_bans:
         rb_ip = validate_ip(rb.get("ip", ""))
         if not rb_ip or ip_in_whitelist(rb_ip):
@@ -588,13 +588,13 @@ def handle_cluster_nodes_test_all(req, parsed, req_data):
         token = generate_cluster_token("ping", secret)
         try:
             target = f"http://{ip_addr}:{port_num}/api/cluster/ping"
-            req = urllib.request.Request(target, data=b"{}", headers={
+            http_req = urllib.request.Request(target, data=b"{}", headers={
                 "Content-Type": "application/json",
                 "X-Cluster-Token": token,
                 "User-Agent": "PortGuardMesh/2.0"
             })
             t0 = time.time()
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
+            with urllib.request.urlopen(http_req, timeout=2.5) as resp:
                 res_data = json.loads(resp.read().decode('utf-8'))
                 if res_data.get("success"):
                     node["status"] = "online"

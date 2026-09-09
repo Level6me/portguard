@@ -514,6 +514,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
                 local_unbanned_rows = c.fetchall()
                 local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
+                conn.close()
 
                 # 1. 优先对齐远端发来的解封墓碑
                 for ru in remote_unbanned:
@@ -525,15 +526,14 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                             if ru_ts >= local_ban_ts:
                                 unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
                         local_unbanned_map[ru_ip] = ru_ts
-                        c.execute("""
-                        INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
-                        VALUES (?, ?, ?, ?)
-                        """, (ru_ip, ru.get("unban_time", time.strftime("%Y-%m-%d %H:%M:%S")), ru_ts, f"集群同步({source_node})"))
 
                 # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑)
                 added_bans = 0
                 now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 now_ts = int(time.time())
+                
+                conn = get_db()
+                c = conn.cursor()
                 for rb in remote_bans:
                     rb_ip = validate_ip(rb.get("ip", ""))
                     if not rb_ip or ip_in_whitelist(rb_ip):
