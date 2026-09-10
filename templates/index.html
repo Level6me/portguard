@@ -6973,7 +6973,7 @@
             const res = await fetch('/api/blacklist/ban_subnet', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ip: currentTimelineAttackerIP, reason: `手动一键阻断 /24 C段网段 (${subnet})` })
+                body: JSON.stringify({ ip: currentTimelineAttackerIP, subnet: subnet, reason: `手动一键阻断 /24 C段网段 (${subnet})` })
             });
             const data = await res.json();
             if (data.success) {

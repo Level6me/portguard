@@ -294,7 +294,14 @@ def handle_ban(req, parsed, req_data):
 def handle_ban_subnet(req, parsed, req_data):
     # 一键封禁整个 /24 C段网段
     subnet = req_data.get("subnet", "").strip()
+    ip = req_data.get("ip", "").strip()
     reason = req_data.get("reason", "管理员手动封禁攻击源 /24 C段").strip()
+    
+    if not subnet and ip:
+        parts = ip.split('.')
+        if len(parts) == 4:
+            subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+
     if not subnet or "/" not in subnet:
         req._send_json({"success": False, "msg": "非法的 CIDR 网段格式 (如 1.2.3.0/24)"}, status=400)
         return
