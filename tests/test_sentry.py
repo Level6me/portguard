@@ -711,6 +711,133 @@ class OptimizationAndHardeningTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(target_ip, "8.8.8.8")
 
+    def test_no_redirect_handler(self):
+        from sentry_daemon import NoRedirectHandler
+        handler = NoRedirectHandler()
+        # 验证所有 3xx 重定向均被直接拒绝返回 None
+        for code in (301, 302, 303, 307, 308):
+            self.assertIsNone(handler.redirect_request(None, None, code, "Redirect", {}, "http://127.0.0.1:8080/pwn"))
+
+    def test_cluster_response_token_verification(self):
+        from sentry_daemon import generate_cluster_token, generate_cluster_response_token, verify_cluster_response_token
+        secret = "super_cluster_secret_key"
+        req_token = generate_cluster_token("sync_state_exchange", secret, body=b"req_data")
+        resp_body = b'{"success": true, "remote_blacklist": []}'
+
+        # 1. 正常生成与校验
+        resp_token = generate_cluster_response_token(secret, body=resp_body, req_token=req_token)
+        self.assertTrue(resp_token.startswith("v2.resp."))
+        self.assertTrue(verify_cluster_response_token(resp_token, secret, body=resp_body, req_token=req_token))
+
+        # 2. 篡改响应体验证失败
+        tampered_body = b'{"success": true, "remote_blacklist": [{"ip": "1.2.3.4"}]}'
+        self.assertFalse(verify_cluster_response_token(resp_token, secret, body=tampered_body, req_token=req_token))
+
+        # 3. 篡改请求 Token 验证失败
+        fake_req_token = generate_cluster_token("sync_state_exchange", secret, body=b"other")
+        self.assertFalse(verify_cluster_response_token(resp_token, secret, body=resp_body, req_token=fake_req_token))
+
+        # 4. 伪造超时响应 (超90秒)
+        old_time = int(time.time()) - 200
+        old_resp_token = generate_cluster_response_token(secret, body=resp_body, req_token=req_token, timestamp=old_time)
+        self.assertFalse(verify_cluster_response_token(old_resp_token, secret, body=resp_body, req_token=req_token))
+
+    def test_cluster_nonce_128bit_and_capacity(self):
+        from sentry_daemon import generate_cluster_token, _CLUSTER_NONCE_CACHE, _CLUSTER_NONCE_LOCK, MAX_CLUSTER_NONCES, verify_cluster_token
+        secret = "capacity_secret"
+        token = generate_cluster_token("ping", secret)
+        parts = token.split(".")
+        nonce = parts[2]
+        # 验证 Nonce 升级为 128 位 (32位十六进制字符)
+        self.assertEqual(len(nonce), 32)
+        self.assertEqual(MAX_CLUSTER_NONCES, 100000)
+
+    def test_cluster_secret_masking_and_retention(self):
+        from controllers.cluster_controller import handle_cluster_nodes
+        from controllers.settings_controller import handle_settings_get, handle_settings_post
+        from sentry_daemon import load_config, save_config
+
+        # 准备测试配置
+        cfg = load_config()
+        orig_secret = "real_production_secret_9988"
+        cfg["cluster_sync"] = {
+            "enabled": True,
+            "port": 9098,
+            "cluster_secret": orig_secret,
+            "cluster_nodes": [{"ip": "8.8.8.8", "port": 9098}]
+        }
+        save_config(cfg)
+
+        class MockReq:
+            def __init__(self):
+                self.sent_data = None
+                self.status = 200
+            def _send_json(self, data, status=200):
+                self.sent_data = data
+                self.status = status
+
+        # 1. 验证 handle_cluster_nodes 脱敏返回
+        mock_req = MockReq()
+        handle_cluster_nodes(mock_req, None)
+        self.assertTrue(mock_req.sent_data["cluster_secret_configured"])
+        self.assertEqual(mock_req.sent_data["cluster_secret"], "*" * len(orig_secret))
+        self.assertNotIn(orig_secret, mock_req.sent_data["cluster_secret"])
+
+        # 2. 验证 handle_settings_get 脱敏返回
+        mock_req2 = MockReq()
+        handle_settings_get(mock_req2, None)
+        cs_get = mock_req2.sent_data["cluster_sync"]
+        self.assertTrue(cs_get["cluster_secret_configured"])
+        self.assertEqual(cs_get["cluster_secret"], "*" * len(orig_secret))
+
+        # 3. 验证提交掩码时自动保留原密钥
+        mock_req3 = MockReq()
+        post_data = {
+            "cluster_sync": {
+                "enabled": True,
+                "cluster_secret": "*" * len(orig_secret),
+                "cluster_nodes": [{"ip": "8.8.8.8", "port": 9098}]
+            }
+        }
+        handle_settings_post(mock_req3, None, post_data)
+        reloaded_cfg = load_config()
+        self.assertEqual(reloaded_cfg["cluster_sync"]["cluster_secret"], orig_secret)
+
+        # 4. 验证提交新密钥时更新密钥
+        mock_req4 = MockReq()
+        new_secret = "new_secret_abcdef"
+        post_data2 = {
+            "cluster_sync": {
+                "enabled": True,
+                "cluster_secret": new_secret,
+                "cluster_nodes": [{"ip": "8.8.8.8", "port": 9098}]
+            }
+        }
+        handle_settings_post(mock_req4, None, post_data2)
+        reloaded_cfg2 = load_config()
+        self.assertEqual(reloaded_cfg2["cluster_sync"]["cluster_secret"], new_secret)
+
+        # 恢复初始
+        cfg["cluster_sync"]["cluster_secret"] = orig_secret
+        save_config(cfg)
+
+    def test_sync_cluster_mesh_state_ssrf_protection(self):
+        from sentry_daemon import sync_cluster_mesh_state, load_config, save_config
+        cfg = load_config()
+        cfg["cluster_sync"] = {
+            "enabled": True,
+            "cluster_secret": "test_secret",
+            "cluster_nodes": [
+                {"ip": "127.0.0.1", "port": 9098},
+                {"ip": "169.254.169.254", "port": 9098},
+                {"ip": "localhost", "port": 9098}
+            ]
+        }
+        save_config(cfg)
+        # SSRF 目标应被严格过滤拦截，synced_nodes 必然为 0
+        res = sync_cluster_mesh_state()
+        self.assertEqual(res.get("synced_nodes", 0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

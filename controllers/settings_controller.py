@@ -10,6 +10,16 @@ from sentry_daemon import (
 
 def handle_settings_get(req, parsed):
     cfg = load_config()
+    cluster_sync = cfg.get("cluster_sync", {
+        "enabled": False,
+        "cluster_secret": "",
+        "cluster_nodes": []
+    })
+    if isinstance(cluster_sync, dict):
+        cluster_sync = cluster_sync.copy()
+        raw_secret = cluster_sync.get("cluster_secret", "").strip()
+        cluster_sync["cluster_secret"] = ("*" * len(raw_secret)) if raw_secret else ""
+        cluster_sync["cluster_secret_configured"] = bool(raw_secret)
     req._send_json({
         "trap_threshold": int(cfg.get("trap_threshold", 2) or 2),
         "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
@@ -27,11 +37,7 @@ def handle_settings_get(req, parsed):
         "dynamic_honeypot_ports": bool(cfg.get("dynamic_honeypot_ports", True)),
         "defense_paused": bool(cfg.get("defense_paused", False)),
         "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
-        "cluster_sync": cfg.get("cluster_sync", {
-            "enabled": False,
-            "cluster_secret": "",
-            "cluster_nodes": []
-        }),
+        "cluster_sync": cluster_sync,
         "web_port": int(cfg.get("web_port", 9099) or 9099)
     })
     return
@@ -125,6 +131,15 @@ def handle_settings_post(req, parsed, req_data):
         cfg["defense_paused"] = bool(req_data["defense_paused"])
     if "cluster_sync" in req_data and isinstance(req_data["cluster_sync"], dict):
         cs = req_data["cluster_sync"]
+        old_cs = cfg.get("cluster_sync", {})
+        old_secret = old_cs.get("cluster_secret", "").strip() if isinstance(old_cs, dict) else ""
+        incoming_secret = str(cs.get("cluster_secret", "")).strip()
+        # 若前端提交的是脱敏掩码（全为*）或未输入新密钥，则自动保留原真实密钥
+        if not incoming_secret or all(ch == '*' for ch in incoming_secret):
+            cs["cluster_secret"] = old_secret
+        else:
+            cs["cluster_secret"] = incoming_secret
+
         if "cluster_nodes" in cs and isinstance(cs["cluster_nodes"], list):
             safe_nodes = []
             for n_raw in cs["cluster_nodes"]:

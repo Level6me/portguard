@@ -6083,7 +6083,15 @@
                 if (toggle) toggle.checked = isEnabled;
 
                 const secretInput = document.getElementById('cluster-sync-secret-input');
-                if (secretInput) secretInput.value = secret;
+                if (secretInput) {
+                    if (data.cluster_sync.cluster_secret_configured && /^[*]+$/.test(secret)) {
+                        secretInput.value = secret;
+                        secretInput.placeholder = '已配置通信密钥 (脱敏隐藏)';
+                    } else {
+                        secretInput.value = secret;
+                        secretInput.placeholder = '请输入集群通信密钥或点击随机生成';
+                    }
+                }
 
                 const badge = document.getElementById('cluster-sync-status-badge');
                 if (badge) {
@@ -6181,7 +6189,15 @@
             if (portInput) portInput.value = currentClusterSync.port;
 
             const secretInput = document.getElementById('cluster-sync-secret-input');
-            if (secretInput) secretInput.value = currentClusterSync.cluster_secret;
+            if (secretInput) {
+                if (data.cluster_secret_configured && /^[*]+$/.test(currentClusterSync.cluster_secret || '')) {
+                    secretInput.value = currentClusterSync.cluster_secret;
+                    secretInput.placeholder = '已配置通信密钥 (脱敏隐藏)';
+                } else {
+                    secretInput.value = currentClusterSync.cluster_secret;
+                    secretInput.placeholder = '请输入集群通信密钥或点击随机生成';
+                }
+            }
 
             const badge = document.getElementById('cluster-sync-status-badge');
             if (badge) {
@@ -6240,8 +6256,8 @@
 
     function copyClusterSecret() {
         const sec = document.getElementById('cluster-sync-secret-input')?.value.trim();
-        if (!sec) {
-            showToast('密钥内容为空', '⚠️');
+        if (!sec || /^[*]+$/.test(sec)) {
+            showToast('通信密钥已脱敏保护，如需设置新密钥请点击「🎲 随机生成」或直接输入后保存', '⚠️');
             return;
         }
         navigator.clipboard.writeText(sec).then(() => {

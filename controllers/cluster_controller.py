@@ -12,7 +12,8 @@ from sentry_daemon import (
     resolve_ip_geo_local, ban_ip_firewall, unban_ip_core,
     broadcast_cluster_ban, broadcast_cluster_unban, broadcast_cluster_whitelist,
     sync_cluster_mesh_state, get_hidden_ips_set, validate_ip, ip_in_whitelist,
-    validate_cluster_target, resolve_and_validate_target, calc_body_hash, _EXECUTOR
+    validate_cluster_target, resolve_and_validate_target, calc_body_hash, _EXECUTOR,
+    safe_cluster_urlopen, generate_cluster_response_token, verify_cluster_response_token
 )
 import re
 
@@ -29,10 +30,14 @@ def handle_cluster_nodes(req, parsed):
                 geo = resolve_ip_geo(n["ip"])
                 n["country"] = f"{geo.get('country', '')} {geo.get('city', '')}".strip() or "公网节点"
             norm_nodes.append(n)
+    secret = cluster_cfg.get("cluster_secret", "").strip()
+    # 脱敏处理：不向前端明文暴露密钥，仅返回掩码及配置状态
+    masked_secret = ("*" * len(secret)) if secret else ""
     req._send_json({
         "enabled": bool(cluster_cfg.get("enabled", False)),
         "port": int(cluster_cfg.get("port", 9098) or 9098),
-        "cluster_secret": cluster_cfg.get("cluster_secret", ""),
+        "cluster_secret": masked_secret,
+        "cluster_secret_configured": bool(secret),
         "nodes": norm_nodes
     })
     return
@@ -403,7 +408,7 @@ def handle_cluster_test_node(req, parsed, req_data):
             "User-Agent": "PortGuardMesh/2.0",
             "Host": f"{host_part}{port_suffix}"
         })
-        with urllib.request.urlopen(http_req, timeout=3.0) as resp:
+        with safe_cluster_urlopen(http_req, timeout=3.0) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             latency = int((time.time() - t0) * 1000)
             if res_data.get("success"):
@@ -485,7 +490,7 @@ def handle_cluster_nodes_add(req, parsed, req_data):
                     "Host": f"{ip_raw}:{port}"
                 })
                 t0 = time.time()
-                with urllib.request.urlopen(http_req, timeout=2.5) as resp:
+                with safe_cluster_urlopen(http_req, timeout=2.5) as resp:
                     res_data = json.loads(resp.read().decode('utf-8'))
                     if res_data.get("success"):
                         status = "online"
@@ -621,7 +626,7 @@ def handle_cluster_nodes_test_all(req, parsed, req_data):
                 "Host": f"{ip_addr}:{port_num}"
             })
             t0 = time.time()
-            with urllib.request.urlopen(http_req, timeout=2.5) as resp:
+            with safe_cluster_urlopen(http_req, timeout=2.5) as resp:
                 res_data = json.loads(resp.read().decode('utf-8'))
                 if res_data.get("success"):
                     node["status"] = "online"
@@ -692,7 +697,7 @@ def handle_cluster_nodes_test_single(req, parsed, req_data):
                 "Host": f"{ip_raw}:{port}"
             })
             t0 = time.time()
-            with urllib.request.urlopen(http_req, timeout=3.0) as resp:
+            with safe_cluster_urlopen(http_req, timeout=3.0) as resp:
                 res_data = json.loads(resp.read().decode('utf-8'))
                 if res_data.get("success"):
                     status = "online"

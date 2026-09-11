@@ -36,7 +36,8 @@ from sentry_daemon import (
     ban_ip_firewall, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
     normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
-    get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections
+    get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections,
+    generate_cluster_response_token, verify_cluster_response_token, safe_cluster_urlopen
 )
 
 def parse_loose_json_or_lines(text):
@@ -209,12 +210,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.send_header('Access-Control-Allow-Credentials', 'true')
                     self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
                     self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, X-Cluster-Token')
+                    self.send_header('Access-Control-Expose-Headers', 'X-Cluster-Response-Token')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('X-Frame-Options', 'SAMEORIGIN')
             self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
             self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
+            if hasattr(self, 'path') and self.path and self.path.startswith("/api/cluster/"):
+                cfg = load_config()
+                secret = cfg.get("cluster_sync", {}).get("cluster_secret", "").strip()
+                if secret:
+                    req_token = self.headers.get("X-Cluster-Token", "").strip()
+                    resp_token = generate_cluster_response_token(secret, body=data_bytes, req_token=req_token)
+                    self.send_header('X-Cluster-Response-Token', resp_token)
             
             accept_encoding = self.headers.get('Accept-Encoding', '')
             if 'gzip' in accept_encoding and len(data_bytes) > 256:
@@ -409,6 +418,12 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Server', 'PortGuardMesh/2.0')
+            cfg = load_config()
+            secret = cfg.get("cluster_sync", {}).get("cluster_secret", "").strip()
+            if secret:
+                req_token = self.headers.get("X-Cluster-Token", "").strip()
+                resp_token = generate_cluster_response_token(secret, body=body, req_token=req_token)
+                self.send_header('X-Cluster-Response-Token', resp_token)
             self.end_headers()
             self.wfile.write(body)
         except Exception:

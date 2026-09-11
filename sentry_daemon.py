@@ -1256,8 +1256,28 @@ def verify_search_engine_crawler(ip, user_agent):
     return res
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """
+    集群安全出站请求重定向阻断器：
+    彻底禁止跟随任何 HTTP 3xx 重定向（301, 302, 303, 307, 308），
+    防止攻击者利用 Location 跳转至 127.0.0.1、云元数据服务或内网未授权服务绕过 SSRF 防护。
+    """
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+_SAFE_CLUSTER_OPENER = urllib.request.build_opener(NoRedirectHandler())
+
+def safe_cluster_urlopen(req, timeout=3.0):
+    """
+    集群出站安全专属 HTTP 请求方法：
+    1. 强制禁用 HTTP 3xx 自动重定向，阻断 Location 跳转绕过 SSRF 校验
+    2. 返回响应对象或抛出异常
+    """
+    return _SAFE_CLUSTER_OPENER.open(req, timeout=timeout)
+
 _CLUSTER_NONCE_CACHE = {}  # 格式: {nonce_str: consume_timestamp_int}
 _CLUSTER_NONCE_LOCK = threading.Lock()
+MAX_CLUSTER_NONCES = 100000
 
 def calc_body_hash(body):
     """计算集群请求体 SHA256 哈希十六进制字符串 (统一空负载与类型转换)"""
@@ -1277,11 +1297,62 @@ def generate_cluster_token(sign_target, secret, body=b"", timestamp=None, nonce=
         timestamp = int(time.time())
     if nonce is None:
         import uuid
-        nonce = uuid.uuid4().hex[:12]
+        nonce = uuid.uuid4().hex  # 升级为完整 128-bit 随机熵，杜绝空间碰撞
     body_hash = calc_body_hash(body)
     msg = f"{sign_target}:{body_hash}:{timestamp}:{nonce}"
     sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
     return f"v2.{timestamp}.{nonce}.{sig}"
+
+def generate_cluster_response_token(secret, body=b"", req_token=None, timestamp=None):
+    """
+    生成集群响应端 HMAC-SHA256 签名，保障双向通信完整性与防篡改：
+    结构: v2.resp.<timestamp>.<signature>
+    消息体: resp:<body_hash>:<timestamp>:<req_nonce_or_empty>
+    """
+    if timestamp is None:
+        timestamp = int(time.time())
+    req_nonce = ""
+    if req_token and isinstance(req_token, str) and req_token.startswith("v2."):
+        parts = req_token.strip().split(".")
+        if len(parts) == 4:
+            req_nonce = parts[2]
+    body_hash = calc_body_hash(body)
+    msg = f"resp:{body_hash}:{timestamp}:{req_nonce}"
+    sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+    return f"v2.resp.{timestamp}.{sig}"
+
+def verify_cluster_response_token(resp_token, secret, body=b"", req_token=None):
+    """
+    验证集群节点返回的响应签名，保障全量对齐与事件协同的响应内容未被中间人劫持或篡改：
+    1. 必须为 v2.resp.<timestamp>.<sig> 规范
+    2. 严格时钟容差窗口检查 (±90秒)
+    3. 响应体 SHA256 哈希与请求 Nonce 双向绑定校验
+    """
+    if not secret or not resp_token:
+        return False
+    token_str = str(resp_token).strip()
+    if not token_str.startswith("v2.resp."):
+        return False
+    parts = token_str.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        ts = int(parts[2])
+        sig = parts[3]
+        now = int(time.time())
+        if abs(now - ts) > 90:
+            return False
+        req_nonce = ""
+        if req_token and isinstance(req_token, str) and req_token.startswith("v2."):
+            req_parts = req_token.strip().split(".")
+            if len(req_parts) == 4:
+                req_nonce = req_parts[2]
+        body_hash = calc_body_hash(body)
+        msg = f"resp:{body_hash}:{ts}:{req_nonce}"
+        expected_sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected_sig, sig)
+    except Exception:
+        return False
 
 def verify_cluster_token(sign_target, token, secret, body=b""):
     """
@@ -1290,6 +1361,7 @@ def verify_cluster_token(sign_target, token, secret, body=b""):
     2. 严格时钟容差窗口检查 (±90秒以内有效)
     3. 请求体 SHA256 哈希一致性校验 (杜绝在网络路径上篡改 IP/动作等任何负载)
     4. 采用带 TTL 的 Nonce 消费字典，先按过期时间清理历史 Nonce，再记录当前 Nonce (杜绝重放竞态)
+    5. 设置最大容量上限 (MAX_CLUSTER_NONCES)，防无节制内存挤占
     """
     if not secret or not token:
         return False
@@ -1318,13 +1390,20 @@ def verify_cluster_token(sign_target, token, secret, body=b""):
         if not hmac.compare_digest(expected_sig, sig):
             return False
 
-        # 3. Nonce 防重放检查与基于 TTL 的精准清理
+        # 3. Nonce 防重放检查与基于 TTL 的精准清理及容量上限控制
         with _CLUSTER_NONCE_LOCK:
             # 优先清理超过 180 秒的历史过期 Nonce
             expire_before = now - 180
             expired = [k for k, v in _CLUSTER_NONCE_CACHE.items() if v < expire_before]
             for k in expired:
                 del _CLUSTER_NONCE_CACHE[k]
+
+            # 防缓存泛洪 DoS：若 Nonce 缓存超出最大容量限制，淘汰最旧的 20%
+            if len(_CLUSTER_NONCE_CACHE) >= MAX_CLUSTER_NONCES:
+                sorted_items = sorted(_CLUSTER_NONCE_CACHE.items(), key=lambda x: x[1])
+                to_remove = len(_CLUSTER_NONCE_CACHE) - int(MAX_CLUSTER_NONCES * 0.8)
+                for k, _ in sorted_items[:to_remove]:
+                    _CLUSTER_NONCE_CACHE.pop(k, None)
 
             # 校验当前 Nonce 是否已被消费
             if nonce in _CLUSTER_NONCE_CACHE:
@@ -1483,8 +1562,8 @@ def normalize_cluster_node(node):
     return None
 
 
-def _send_cluster_msg(node, endpoint, payload, token):
-    """向协同节点发送通信数据，直连安全验证的解析目标以杜绝 DNS Rebinding，自适应尝试目标端口及备用端口并支持自动重试"""
+def _send_cluster_msg(node, endpoint, payload, token, secret=""):
+    """向协同节点发送通信数据，直连安全验证的解析目标以杜绝 DNS Rebinding，严格禁止 HTTP 重定向并双向校验响应签名"""
     if not node or not node.get("ip"):
         return False
 
@@ -1512,11 +1591,16 @@ def _send_cluster_msg(node, endpoint, payload, token):
         }
         for attempt in range(2):
             try:
-                # 直连已安全校验的 target_ip，防止 DNS Rebinding 攻击
+                # 直连已安全校验的 target_ip，防止 DNS Rebinding 攻击，并使用 safe_cluster_urlopen 阻断 302 重定向
                 target = f"http://{target_ip}:{p}{endpoint}"
                 req = urllib.request.Request(target, data=payload, headers=headers)
-                with urllib.request.urlopen(req, timeout=3.5) as resp:
+                with safe_cluster_urlopen(req, timeout=3.5) as resp:
                     if resp.status in (200, 201):
+                        resp_bytes = resp.read()
+                        resp_token = resp.headers.get("X-Cluster-Response-Token", "").strip()
+                        if resp_token and secret:
+                            if not verify_cluster_response_token(resp_token, secret, body=resp_bytes, req_token=token):
+                                continue
                         return True
             except Exception:
                 if attempt == 0:
@@ -1555,7 +1639,7 @@ def broadcast_cluster_ban(ip, reason, level, port=443, proto="TCP", category="we
         node = normalize_cluster_node(raw_node)
         if not node or not node.get("ip"):
             continue
-        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_ban", payload, token)
+        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_ban", payload, token, secret)
 
 
 def broadcast_cluster_unban(ip):
@@ -1579,7 +1663,7 @@ def broadcast_cluster_unban(ip):
         node = normalize_cluster_node(raw_node)
         if not node or not node.get("ip"):
             continue
-        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_unban", payload, token)
+        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_unban", payload, token, secret)
 
 
 def broadcast_cluster_whitelist(action, data, remark=""):
@@ -1609,7 +1693,7 @@ def broadcast_cluster_whitelist(action, data, remark=""):
         node = normalize_cluster_node(raw_node)
         if not node or not node.get("ip"):
             continue
-        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_whitelist", payload, token)
+        _EXECUTOR.submit(_send_cluster_msg, node, "/api/cluster/sync_whitelist", payload, token, secret)
 
 
 def clean_cluster_node_name(name):
@@ -1677,6 +1761,11 @@ def sync_cluster_mesh_state(target_node=None):
         if not node or not node.get("ip"):
             continue
 
+        orig_host = str(node.get("ip", "")).strip()
+        is_safe, target_ip, _ = resolve_and_validate_target(orig_host)
+        if not is_safe:
+            continue
+
         ports_to_try = []
         if node.get("port"):
             try: ports_to_try.append(int(node["port"]))
@@ -1688,16 +1777,21 @@ def sync_cluster_mesh_state(target_node=None):
         success = False
         res = {}
         for p in ports_to_try:
-            node_url = f"http://{node['ip']}:{p}"
+            target = f"http://{target_ip}:{p}/api/cluster/sync_state_exchange"
             try:
-                target = f"{node_url}/api/cluster/sync_state_exchange"
                 req = urllib.request.Request(target, data=payload, headers={
                     "Content-Type": "application/json",
                     "X-Cluster-Token": token,
-                    "User-Agent": "PortGuardMesh/2.0"
+                    "User-Agent": "PortGuardMesh/2.0",
+                    "Host": f"{orig_host}:{p}"
                 })
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    res = json.loads(resp.read().decode('utf-8'))
+                with safe_cluster_urlopen(req, timeout=5) as resp:
+                    resp_bytes = resp.read()
+                    resp_token = resp.headers.get("X-Cluster-Response-Token", "").strip()
+                    if resp_token:
+                        if not verify_cluster_response_token(resp_token, secret, body=resp_bytes, req_token=token):
+                            continue
+                    res = json.loads(resp_bytes.decode('utf-8'))
                     if res.get("success"):
                         success = True
                         break
