@@ -156,10 +156,20 @@ MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 请求体上限，防大包内存 DoS �
 
 class RequestHandler(BaseHTTPRequestHandler):
     def _get_real_client_ip(self):
-        """安全提取客户端真实 IP：若是本地反向代理发起的请求，优先提取受信任的反代头 (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)"""
+        """安全提取客户端真实 IP：仅当直连来源是本机回环或受信任的 RFC1918 私网反代时，才提取反代头 (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)"""
         direct_ip = self.client_address[0].replace("::ffff:", "")
-        # 仅当直连来源是本机回环/私网（如 1Panel/Nginx 反代服务器）时才信任反代头
-        if direct_ip in ("127.0.0.1", "::1", "localhost") or direct_ip.startswith("127.") or direct_ip.startswith("10.") or direct_ip.startswith("192.168.") or direct_ip.startswith("172."):
+        is_trusted_proxy = False
+        if direct_ip in ("127.0.0.1", "::1", "localhost"):
+            is_trusted_proxy = True
+        else:
+            try:
+                ip_obj = ipaddress.ip_address(direct_ip)
+                if ip_obj.is_loopback or ip_obj.is_private:
+                    is_trusted_proxy = True
+            except Exception:
+                pass
+
+        if is_trusted_proxy:
             cf_ip = self.headers.get("CF-Connecting-IP", "").strip()
             if cf_ip and validate_ip(cf_ip):
                 return cf_ip
@@ -291,7 +301,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             if path in CANARY_PATHS:
-                client_ip = self.client_address[0]
+                client_ip = self._get_real_client_ip()
                 canary_desc = CANARY_PATHS[path]
                 ban_ip(client_ip, reason=f"Web蜜标触发: 访问隐藏诱饵路径 ({canary_desc})", category="canary", level="极高危")
                 self.send_response(404)
@@ -319,11 +329,19 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urlparse(self.path)
-            length = int(self.headers.get('Content-Length', 0))
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+            except Exception:
+                length = 0
+            if length < 0:
+                self._send_json({"error": "Bad Request: 非法的 Content-Length"}, status=400)
+                return
             if length > MAX_BODY_SIZE:
                 self._send_json({"error": "Payload Too Large: 请求体大小超出限制 (最大 10MB)"}, status=413)
                 return
-            body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+            raw_body_bytes = self.rfile.read(length) if length > 0 else b""
+            self.raw_body = raw_body_bytes
+            body = raw_body_bytes.decode('utf-8', errors='ignore') if raw_body_bytes else "{}"
             try:
                 req_data = json.loads(body)
             except Exception:
@@ -344,11 +362,19 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         try:
             parsed = urlparse(self.path)
-            length = int(self.headers.get('Content-Length', 0))
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+            except Exception:
+                length = 0
+            if length < 0:
+                self._send_json({"error": "Bad Request: 非法的 Content-Length"}, status=400)
+                return
             if length > MAX_BODY_SIZE:
                 self._send_json({"error": "Payload Too Large: 请求体大小超出限制 (最大 10MB)"}, status=413)
                 return
-            body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+            raw_body_bytes = self.rfile.read(length) if length > 0 else b""
+            self.raw_body = raw_body_bytes
+            body = raw_body_bytes.decode('utf-8', errors='ignore') if raw_body_bytes else "{}"
             try:
                 req_data = json.loads(body)
             except Exception:
@@ -411,8 +437,19 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+            except Exception:
+                length = 0
+            if length < 0:
+                self._send_json({"error": "Bad Request: 非法的 Content-Length"}, status=400)
+                return
+            if length > MAX_BODY_SIZE:
+                self._send_json({"error": "Payload Too Large: 集群请求体大小超出限制 (最大 10MB)"}, status=413)
+                return
+            raw_body_bytes = self.rfile.read(length) if length > 0 else b""
+            self.raw_body = raw_body_bytes
+            body = raw_body_bytes.decode('utf-8', errors='ignore') if raw_body_bytes else "{}"
             try:
                 req_data = json.loads(body)
             except Exception:
@@ -423,7 +460,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 cfg = load_config()
                 cluster_cfg = cfg.get("cluster_sync", {})
                 secret = cluster_cfg.get("cluster_secret", "").strip()
-                if not secret or not verify_cluster_token("ping", token, secret):
+                if not secret or not verify_cluster_token("ping", token, secret, body=raw_body_bytes):
                     self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
                     return
                 self._send_json({
@@ -444,7 +481,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 level = req_data.get("level", "极高危").strip()
                 source_node = req_data.get("source_node", "远程探针").strip()
 
-                if not verify_cluster_token(ip, token, secret):
+                if not verify_cluster_token(ip, token, secret, body=raw_body_bytes):
                     self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
                     return
 
@@ -504,7 +541,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 secret = cluster_cfg.get("cluster_secret", "").strip()
 
                 ip = req_data.get("ip", "").strip()
-                if not verify_cluster_token(f"unban_{ip}", token, secret):
+                if not verify_cluster_token(f"unban_{ip}", token, secret, body=raw_body_bytes):
                     self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
                     return
 
@@ -522,7 +559,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 cfg = load_config()
                 cluster_cfg = cfg.get("cluster_sync", {})
                 secret = cluster_cfg.get("cluster_secret", "").strip()
-                if not verify_cluster_token("sync_state_exchange", token, secret):
+                if not verify_cluster_token("sync_state_exchange", token, secret, body=raw_body_bytes):
                     self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
                     return
 
@@ -642,7 +679,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                 source_node = req_data.get("source_node", "远程节点").strip()
 
                 sign_target = f"whitelist_{action}"
-                if not verify_cluster_token(sign_target, token, secret):
+                if not verify_cluster_token(sign_target, token, secret, body=raw_body_bytes):
                     self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
                     return
 

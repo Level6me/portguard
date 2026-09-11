@@ -1256,70 +1256,93 @@ def verify_search_engine_crawler(ip, user_agent):
     return res
 
 
-_CLUSTER_NONCE_CACHE = set()
+_CLUSTER_NONCE_CACHE = {}  # 格式: {nonce_str: consume_timestamp_int}
 _CLUSTER_NONCE_LOCK = threading.Lock()
-_CLUSTER_NONCE_LAST_CLEAN = 0.0
 
-def generate_cluster_token(sign_target, secret, timestamp=None, nonce=None):
-    """生成带时间戳与防重放随机数的安全集群 HMAC-SHA256 签名 Token"""
+def calc_body_hash(body):
+    """计算集群请求体 SHA256 哈希十六进制字符串 (统一空负载与类型转换)"""
+    if isinstance(body, str):
+        body = body.encode('utf-8')
+    elif not isinstance(body, (bytes, bytearray)):
+        body = b""
+    return hashlib.sha256(body).hexdigest()
+
+def generate_cluster_token(sign_target, secret, body=b"", timestamp=None, nonce=None):
+    """
+    生成带时间戳、防重放随机数与请求体完整性 SHA256 哈希的高安全集群 HMAC-SHA256 复合签名 Token
+    结构: v2.<timestamp>.<nonce>.<signature>
+    消息体: <sign_target>:<body_hash>:<timestamp>:<nonce>
+    """
     if timestamp is None:
         timestamp = int(time.time())
     if nonce is None:
         import uuid
         nonce = uuid.uuid4().hex[:12]
-    # 消息体签名: target + timestamp + nonce
-    msg = f"{sign_target}:{timestamp}:{nonce}"
+    body_hash = calc_body_hash(body)
+    msg = f"{sign_target}:{body_hash}:{timestamp}:{nonce}"
     sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
-    # 编码为复合 Token: v2.timestamp.nonce.sig
     return f"v2.{timestamp}.{nonce}.{sig}"
 
-def verify_cluster_token(sign_target, token, secret):
-    """验证集群 Token，严格防范重放攻击，具备 ±90 秒时钟容差窗口与单次使用 Nonce 校验"""
-    global _CLUSTER_NONCE_LAST_CLEAN
+def verify_cluster_token(sign_target, token, secret, body=b""):
+    """
+    验证集群 Token，严格防范重放、篡改与中间人窃听攻击：
+    1. 必须为具备时间窗口与 Nonce 的 v2 规范 Token (彻底废除无防重放能力的静态签名)
+    2. 严格时钟容差窗口检查 (±90秒以内有效)
+    3. 请求体 SHA256 哈希一致性校验 (杜绝在网络路径上篡改 IP/动作等任何负载)
+    4. 采用带 TTL 的 Nonce 消费字典，先按过期时间清理历史 Nonce，再记录当前 Nonce (杜绝重放竞态)
+    """
     if not secret or not token:
         return False
-    # 1. 优先校验抗重放 v2 Token
-    if str(token).startswith("v2."):
-        parts = str(token).split(".")
-        if len(parts) == 4:
-            try:
-                ts = int(parts[1])
-                nonce = parts[2]
-                sig = parts[3]
-                now = int(time.time())
-                # 时间窗口检查 (±90秒以内有效)
-                if abs(now - ts) > 90:
-                    return False
+    token_str = str(token).strip()
+    if not token_str.startswith("v2."):
+        return False
 
-                # 验证签名一致性
-                msg = f"{sign_target}:{ts}:{nonce}"
-                expected_sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
-                if not hmac.compare_digest(expected_sig, sig):
-                    return False
+    parts = token_str.split(".")
+    if len(parts) != 4:
+        return False
 
-                # Nonce 防重放检查 (单次使用)
-                with _CLUSTER_NONCE_LOCK:
-                    if nonce in _CLUSTER_NONCE_CACHE:
-                        return False
-                    _CLUSTER_NONCE_CACHE.add(nonce)
-                    # 定期清理过期的 Nonce
-                    if now - _CLUSTER_NONCE_LAST_CLEAN > 180:
-                        _CLUSTER_NONCE_CACHE.clear()
-                        _CLUSTER_NONCE_LAST_CLEAN = now
-                return True
-            except Exception:
+    try:
+        ts = int(parts[1])
+        nonce = parts[2]
+        sig = parts[3]
+        now = int(time.time())
+
+        # 1. 严格时间窗口检查 (±90秒)
+        if abs(now - ts) > 90:
+            return False
+
+        # 2. 验证签名一致性 (sign_target + body_hash + ts + nonce)
+        body_hash = calc_body_hash(body)
+        msg = f"{sign_target}:{body_hash}:{ts}:{nonce}"
+        expected_sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_sig, sig):
+            return False
+
+        # 3. Nonce 防重放检查与基于 TTL 的精准清理
+        with _CLUSTER_NONCE_LOCK:
+            # 优先清理超过 180 秒的历史过期 Nonce
+            expire_before = now - 180
+            expired = [k for k, v in _CLUSTER_NONCE_CACHE.items() if v < expire_before]
+            for k in expired:
+                del _CLUSTER_NONCE_CACHE[k]
+
+            # 校验当前 Nonce 是否已被消费
+            if nonce in _CLUSTER_NONCE_CACHE:
                 return False
 
-    # 2. 兼容历史 v1 静态 HMAC Token (用于渐进式兼容升级)
-    expected_v1 = hmac.new(secret.encode('utf-8'), str(sign_target).encode('utf-8'), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected_v1, str(token).strip())
+            # 标记已消费
+            _CLUSTER_NONCE_CACHE[nonce] = now
+
+        return True
+    except Exception:
+        return False
 
 
 def validate_cluster_target(ip_or_host):
     """
     集群目标地址 SSRF 安全校验：
     严格禁止本地回环 (127.0.0.0/8, ::1)、0.0.0.0、云厂商元数据地址 (169.254.169.254 / link-local)、
-    组播地址以及格式异常的目标，杜绝 SSRF 内网扫描。
+    保留网段 (240.0.0.0/4 等)、组播地址以及格式异常的目标，杜绝 SSRF 内网及本地服务扫描。
     返回 (is_valid, clean_host, err_msg)
     """
     if not ip_or_host or not isinstance(ip_or_host, str):
@@ -1348,6 +1371,8 @@ def validate_cluster_target(ip_or_host):
             return False, "", "SSRF安全拦截：禁止添加链路本地地址 (Link-local / 169.254.0.0/16) 作为集群节点"
         if ip_obj.is_multicast:
             return False, "", "SSRF安全拦截：禁止添加组播地址作为集群节点"
+        if ip_obj.is_reserved:
+            return False, "", "SSRF安全拦截：禁止添加保留地址段作为集群节点"
         if str(ip_obj) == "169.254.169.254":
             return False, "", "SSRF安全拦截：禁止访问云服务器元数据服务 (Metadata Service)"
     except ValueError:
@@ -1367,12 +1392,48 @@ def validate_cluster_target(ip_or_host):
                     return False, "", f"SSRF安全拦截：域名解析到链路本地地址 ({resolved_ip})"
                 if ip_obj.is_unspecified:
                     return False, "", f"SSRF安全拦截：域名解析到未指定地址 ({resolved_ip})"
+                if ip_obj.is_multicast or ip_obj.is_reserved:
+                    return False, "", f"SSRF安全拦截：域名解析到组播或保留地址 ({resolved_ip})"
                 if str(ip_obj) == "169.254.169.254":
                     return False, "", f"SSRF安全拦截：域名解析到云元数据服务 ({resolved_ip})"
         except Exception:
             pass
 
     return True, host, ""
+
+
+def resolve_and_validate_target(host, port=None):
+    """
+    DNS Rebinding 与 SSRF 防御解析器：
+    解析主机名并对解析到的 IP 进行严格安全校验。
+    若通过，返回 (is_safe, resolved_ip, err_msg)；若校验失败则拒绝。
+    返回的 resolved_ip 直接用于后续建立 HTTP 连接，杜绝二次 DNS 查询导致的重绑定攻击。
+    """
+    ok, clean_host, err_msg = validate_cluster_target(host)
+    if not ok:
+        return False, "", err_msg
+
+    try:
+        ipaddress.ip_address(clean_host)
+        return True, clean_host, ""
+    except ValueError:
+        pass
+
+    try:
+        addrs = socket.getaddrinfo(clean_host, port or 80, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if not addrs:
+            return False, "", "无法解析对端主机名"
+        chosen_ip = None
+        for item in addrs:
+            ip_str = item[4][0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if ip_obj.is_loopback or ip_obj.is_unspecified or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved or str(ip_obj) == "169.254.169.254":
+                return False, "", f"SSRF/DNS Rebinding 安全拦截：域名解析到内部敏感地址 ({ip_str})"
+            if chosen_ip is None:
+                chosen_ip = ip_str
+        return True, chosen_ip, ""
+    except Exception as ex:
+        return False, "", f"域名解析失败: {ex}"
 
 
 def normalize_cluster_node(node):
@@ -1423,13 +1484,15 @@ def normalize_cluster_node(node):
 
 
 def _send_cluster_msg(node, endpoint, payload, token):
-    """向协同节点发送通信数据，自适应尝试目标端口及备用端口 (9098/9099) 并支持自动重试"""
+    """向协同节点发送通信数据，直连安全验证的解析目标以杜绝 DNS Rebinding，自适应尝试目标端口及备用端口并支持自动重试"""
     if not node or not node.get("ip"):
         return False
-    # SSRF 安全防御校验
-    ok, _, _ = validate_cluster_target(node.get("ip", ""))
-    if not ok:
+
+    orig_host = str(node.get("ip", "")).strip()
+    is_safe, target_ip, _ = resolve_and_validate_target(orig_host)
+    if not is_safe:
         return False
+
     ports_to_try = []
     if node.get("port"):
         try:
@@ -1441,14 +1504,17 @@ def _send_cluster_msg(node, endpoint, payload, token):
             ports_to_try.append(p)
 
     for p in ports_to_try:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Cluster-Token": token,
+            "User-Agent": "PortGuardMesh/2.0",
+            "Host": f"{orig_host}:{p}"
+        }
         for attempt in range(2):
             try:
-                target = f"http://{node['ip']}:{p}{endpoint}"
-                req = urllib.request.Request(target, data=payload, headers={
-                    "Content-Type": "application/json",
-                    "X-Cluster-Token": token,
-                    "User-Agent": "PortGuardMesh/2.0"
-                })
+                # 直连已安全校验的 target_ip，防止 DNS Rebinding 攻击
+                target = f"http://{target_ip}:{p}{endpoint}"
+                req = urllib.request.Request(target, data=payload, headers=headers)
                 with urllib.request.urlopen(req, timeout=3.5) as resp:
                     if resp.status in (200, 201):
                         return True
@@ -1470,7 +1536,6 @@ def broadcast_cluster_ban(ip, reason, level, port=443, proto="TCP", category="we
         return
 
     geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
-    token = generate_cluster_token(ip, secret)
     payload = json.dumps({
         "ip": ip,
         "port": port,
@@ -1484,6 +1549,7 @@ def broadcast_cluster_ban(ip, reason, level, port=443, proto="TCP", category="we
         "isp": geo.get("isp", ""),
         "source_node": cfg.get("node_name", socket.gethostname())
     }).encode("utf-8")
+    token = generate_cluster_token(ip, secret, body=payload)
 
     for raw_node in nodes:
         node = normalize_cluster_node(raw_node)
@@ -1503,11 +1569,11 @@ def broadcast_cluster_unban(ip):
     if not secret or not nodes:
         return
 
-    token = generate_cluster_token(f"unban_{ip}", secret)
     payload = json.dumps({
         "ip": ip,
         "source_node": cfg.get("node_name", socket.gethostname())
     }).encode("utf-8")
+    token = generate_cluster_token(f"unban_{ip}", secret, body=payload)
 
     for raw_node in nodes:
         node = normalize_cluster_node(raw_node)
@@ -1531,13 +1597,13 @@ def broadcast_cluster_whitelist(action, data, remark=""):
         return
 
     sign_target = f"whitelist_{action}"
-    token = generate_cluster_token(sign_target, secret)
     payload = json.dumps({
         "action": action,
         "data": data,
         "remark": remark,
         "source_node": cfg.get("node_name", socket.gethostname())
     }).encode("utf-8")
+    token = generate_cluster_token(sign_target, secret, body=payload)
 
     for raw_node in nodes:
         node = normalize_cluster_node(raw_node)
@@ -1593,13 +1659,13 @@ def sync_cluster_mesh_state(target_node=None):
     local_bans_map = { r[0]: {"timestamp": r[5]} for r in local_black_rows if r[0] }
     local_whitelist = cfg.get("whitelist", [])
 
-    token = generate_cluster_token("sync_state_exchange", secret)
     payload = json.dumps({
         "source_node": cfg.get("node_name", socket.gethostname()),
         "blacklist": local_blacklist,
         "unbanned_list": local_unbanned_list,
         "whitelist": local_whitelist
     }).encode("utf-8")
+    token = generate_cluster_token("sync_state_exchange", secret, body=payload)
 
     target_nodes = [target_node] if target_node else nodes
     synced_nodes = 0

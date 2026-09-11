@@ -12,7 +12,7 @@ from sentry_daemon import (
     resolve_ip_geo_local, ban_ip_firewall, unban_ip_core,
     broadcast_cluster_ban, broadcast_cluster_unban, broadcast_cluster_whitelist,
     sync_cluster_mesh_state, get_hidden_ips_set, validate_ip, ip_in_whitelist,
-    validate_cluster_target, _EXECUTOR
+    validate_cluster_target, resolve_and_validate_target, calc_body_hash, _EXECUTOR
 )
 import re
 
@@ -45,7 +45,8 @@ def handle_cluster_sync_unban(req, parsed, req_data):
     secret = cluster_cfg.get("cluster_secret", "").strip()
 
     ip = req_data.get("ip", "").strip()
-    if not verify_cluster_token(f"unban_{ip}", token, secret):
+    raw_body = getattr(req, "raw_body", None) or (json.dumps(req_data, ensure_ascii=False).encode('utf-8') if req_data else b"")
+    if not verify_cluster_token(f"unban_{ip}", token, secret, body=raw_body):
         req._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
         return
 
@@ -65,7 +66,8 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
     secret = cluster_cfg.get("cluster_secret", "").strip()
-    if not verify_cluster_token("sync_state_exchange", token, secret):
+    raw_body = getattr(req, "raw_body", None) or (json.dumps(req_data, ensure_ascii=False).encode('utf-8') if req_data else b"")
+    if not verify_cluster_token("sync_state_exchange", token, secret, body=raw_body):
         req._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
         return
 
@@ -190,7 +192,8 @@ def handle_cluster_sync_ban(req, parsed, req_data):
     level = req_data.get("level", "极高危").strip()
     source_node = req_data.get("source_node", "远程探针").strip()
 
-    if not verify_cluster_token(ip, token, secret):
+    raw_body = getattr(req, "raw_body", None) or (json.dumps(req_data, ensure_ascii=False).encode('utf-8') if req_data else b"")
+    if not verify_cluster_token(ip, token, secret, body=raw_body):
         req._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
         return
 
@@ -257,7 +260,8 @@ def handle_cluster_sync_whitelist(req, parsed, req_data):
     source_node = req_data.get("source_node", "远程节点").strip()
 
     sign_target = f"whitelist_{action}"
-    if not verify_cluster_token(sign_target, token, secret):
+    raw_body = getattr(req, "raw_body", None) or (json.dumps(req_data, ensure_ascii=False).encode('utf-8') if req_data else b"")
+    if not verify_cluster_token(sign_target, token, secret, body=raw_body):
         req._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
         return
 
@@ -344,7 +348,8 @@ def handle_cluster_ping(req, parsed, req_data=None):
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
     secret = cluster_cfg.get("cluster_secret", "").strip()
-    if not secret or not verify_cluster_token("ping", token, secret):
+    raw_body = getattr(req, "raw_body", None) or (json.dumps(req_data, ensure_ascii=False).encode('utf-8') if req_data else b"")
+    if not secret or not verify_cluster_token("ping", token, secret, body=raw_body):
         req._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
         return
     req._send_json({
@@ -366,7 +371,7 @@ def handle_cluster_test_node(req, parsed, req_data):
         req._send_json({"success": False, "msg": "通信密钥不能为空"}, status=400)
         return
 
-    # SSRF 安全防御校验：阻断云厂商元数据及敏感内网地址探测
+    # SSRF 及 DNS Rebinding 安全防御校验
     try:
         parsed_node = urlparse(node_url)
         if parsed_node.scheme not in ('http', 'https'):
@@ -377,22 +382,26 @@ def handle_cluster_test_node(req, parsed, req_data):
             req._send_json({"success": False, "msg": "节点地址格式错误"}, status=400)
             return
 
-        ok, _, err_msg = validate_cluster_target(host_part)
+        port_val = parsed_node.port or (443 if parsed_node.scheme == 'https' else 80)
+        ok, target_ip, err_msg = resolve_and_validate_target(host_part, port_val)
         if not ok:
             req._send_json({"success": False, "msg": err_msg}, status=403)
             return
     except Exception as ex:
-        req._send_json({"success": False, "msg": f"节点地址格式异常: {ex}"}, status=400)
+        req._send_json({"success": False, "msg": f"节点地址解析异常: {ex}"}, status=400)
         return
 
-    token = generate_cluster_token("ping", secret)
+    ping_payload = b"{}"
+    token = generate_cluster_token("ping", secret, body=ping_payload)
     t0 = time.time()
     try:
-        target = f"{node_url}/api/cluster/ping"
-        http_req = urllib.request.Request(target, data=b"{}", headers={
+        port_suffix = f":{parsed_node.port}" if parsed_node.port else ""
+        target = f"{parsed_node.scheme}://{target_ip}{port_suffix}/api/cluster/ping"
+        http_req = urllib.request.Request(target, data=ping_payload, headers={
             "Content-Type": "application/json",
             "X-Cluster-Token": token,
-            "User-Agent": "PortGuardMesh/2.0"
+            "User-Agent": "PortGuardMesh/2.0",
+            "Host": f"{host_part}{port_suffix}"
         })
         with urllib.request.urlopen(http_req, timeout=3.0) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
@@ -463,25 +472,31 @@ def handle_cluster_nodes_add(req, parsed, req_data):
     status = "unknown"
     latency_ms = 0
     if secret:
-        token = generate_cluster_token("ping", secret)
-        try:
-            target = f"http://{ip_raw}:{port}/api/cluster/ping"
-            http_req = urllib.request.Request(target, data=b"{}", headers={
-                "Content-Type": "application/json",
-                "X-Cluster-Token": token,
-                "User-Agent": "PortGuardMesh/2.0"
-            })
-            t0 = time.time()
-            with urllib.request.urlopen(http_req, timeout=2.5) as resp:
-                res_data = json.loads(resp.read().decode('utf-8'))
-                if res_data.get("success"):
-                    status = "online"
-                    latency_ms = int((time.time() - t0) * 1000)
-                    if not remark and res_data.get("node_name"):
-                        remark = res_data.get("node_name")
-                else:
-                    status = "offline"
-        except Exception:
+        ok_res, target_ip, _ = resolve_and_validate_target(ip_raw, port)
+        if ok_res:
+            ping_payload = b"{}"
+            token = generate_cluster_token("ping", secret, body=ping_payload)
+            try:
+                target = f"http://{target_ip}:{port}/api/cluster/ping"
+                http_req = urllib.request.Request(target, data=ping_payload, headers={
+                    "Content-Type": "application/json",
+                    "X-Cluster-Token": token,
+                    "User-Agent": "PortGuardMesh/2.0",
+                    "Host": f"{ip_raw}:{port}"
+                })
+                t0 = time.time()
+                with urllib.request.urlopen(http_req, timeout=2.5) as resp:
+                    res_data = json.loads(resp.read().decode('utf-8'))
+                    if res_data.get("success"):
+                        status = "online"
+                        latency_ms = int((time.time() - t0) * 1000)
+                        if not remark and res_data.get("node_name"):
+                            remark = res_data.get("node_name")
+                    else:
+                        status = "offline"
+            except Exception:
+                status = "offline"
+        else:
             status = "offline"
 
     node_obj = {
@@ -588,13 +603,22 @@ def handle_cluster_nodes_test_all(req, parsed, req_data):
             updated_nodes.append(node)
             continue
 
-        token = generate_cluster_token("ping", secret)
+        ok_res, target_ip, _ = resolve_and_validate_target(ip_addr, port_num)
+        if not ok_res:
+            node["status"] = "offline"
+            node["latency_ms"] = 0
+            updated_nodes.append(node)
+            continue
+
+        ping_payload = b"{}"
+        token = generate_cluster_token("ping", secret, body=ping_payload)
         try:
-            target = f"http://{ip_addr}:{port_num}/api/cluster/ping"
-            http_req = urllib.request.Request(target, data=b"{}", headers={
+            target = f"http://{target_ip}:{port_num}/api/cluster/ping"
+            http_req = urllib.request.Request(target, data=ping_payload, headers={
                 "Content-Type": "application/json",
                 "X-Cluster-Token": token,
-                "User-Agent": "PortGuardMesh/2.0"
+                "User-Agent": "PortGuardMesh/2.0",
+                "Host": f"{ip_addr}:{port_num}"
             })
             t0 = time.time()
             with urllib.request.urlopen(http_req, timeout=2.5) as resp:
@@ -650,27 +674,32 @@ def handle_cluster_nodes_test_single(req, parsed, req_data):
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
     secret = cluster_cfg.get("cluster_secret", "").strip()
-    token = generate_cluster_token("ping", secret)
 
     status = "offline"
     latency_ms = 0
     node_name = "远程节点"
-    try:
-        target = f"http://{ip_raw}:{port}/api/cluster/ping"
-        http_req = urllib.request.Request(target, data=b"{}", headers={
-            "Content-Type": "application/json",
-            "X-Cluster-Token": token,
-            "User-Agent": "PortGuardMesh/2.0"
-        })
-        t0 = time.time()
-        with urllib.request.urlopen(http_req, timeout=3.0) as resp:
-            res_data = json.loads(resp.read().decode('utf-8'))
-            if res_data.get("success"):
-                status = "online"
-                latency_ms = int((time.time() - t0) * 1000)
-                node_name = res_data.get("node_name", "远程节点")
-    except Exception:
-        pass
+
+    ok_res, target_ip, _ = resolve_and_validate_target(ip_raw, port)
+    if ok_res:
+        ping_payload = b"{}"
+        token = generate_cluster_token("ping", secret, body=ping_payload)
+        try:
+            target = f"http://{target_ip}:{port}/api/cluster/ping"
+            http_req = urllib.request.Request(target, data=ping_payload, headers={
+                "Content-Type": "application/json",
+                "X-Cluster-Token": token,
+                "User-Agent": "PortGuardMesh/2.0",
+                "Host": f"{ip_raw}:{port}"
+            })
+            t0 = time.time()
+            with urllib.request.urlopen(http_req, timeout=3.0) as resp:
+                res_data = json.loads(resp.read().decode('utf-8'))
+                if res_data.get("success"):
+                    status = "online"
+                    latency_ms = int((time.time() - t0) * 1000)
+                    node_name = res_data.get("node_name", "远程节点")
+        except Exception:
+            pass
 
     # 更新到配置
     for ex in cluster_cfg.get("cluster_nodes", []):

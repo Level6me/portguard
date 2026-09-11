@@ -684,9 +684,32 @@ class OptimizationAndHardeningTest(unittest.TestCase):
         old_token = generate_cluster_token(target, secret, timestamp=old_time, nonce="testnonceold1")
         self.assertFalse(verify_cluster_token(target, old_token, secret))
 
-        # 3. 兼容历史 v1 静态 HMAC Token
+        # 3. 彻底拒绝历史不安全的 v1 静态 HMAC Token (消除永久重放风险)
         v1_token = hmac.new(secret.encode('utf-8'), target.encode('utf-8'), hashlib.sha256).hexdigest()
-        self.assertTrue(verify_cluster_token(target, v1_token, secret))
+        self.assertFalse(verify_cluster_token(target, v1_token, secret))
+
+        # 4. 请求体 Body SHA256 防篡改校验
+        real_body = b'{"ip": "1.2.3.4", "reason": "scan"}'
+        tampered_body = b'{"ip": "1.2.3.4", "reason": "hacked"}'
+        body_token = generate_cluster_token("sync_ban", secret, body=real_body)
+        # 篡改 Body 校验失败
+        self.assertFalse(verify_cluster_token("sync_ban", body_token, secret, body=tampered_body))
+        # 原始 Body 校验通过
+        self.assertTrue(verify_cluster_token("sync_ban", body_token, secret, body=real_body))
+
+    def test_dns_rebinding_defense(self):
+        from sentry_daemon import resolve_and_validate_target
+        # 回环与私有危险地址拦截
+        ok, _, msg = resolve_and_validate_target("127.0.0.1")
+        self.assertFalse(ok)
+        ok, _, msg = resolve_and_validate_target("localhost")
+        self.assertFalse(ok)
+        ok, _, msg = resolve_and_validate_target("169.254.169.254")
+        self.assertFalse(ok)
+        # 合法公网地址直接返回
+        ok, target_ip, _ = resolve_and_validate_target("8.8.8.8", 80)
+        self.assertTrue(ok)
+        self.assertEqual(target_ip, "8.8.8.8")
 
 
 if __name__ == "__main__":

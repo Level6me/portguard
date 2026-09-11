@@ -143,11 +143,22 @@ download_file_safe() {
     return 1
 }
 
-echo -e "正在获取最新代码架构与控制器组件..."
+echo -e "正在安全获取最新代码架构与控制器组件包..."
 ARCHIVE_URL="${GH_PROXY}https://github.com/Level6me/portguard/archive/${REF_TARGET}.tar.gz"
-if curl -fsSL --connect-timeout 8 "$ARCHIVE_URL" | tar -xzf - --strip-components=1 2>/dev/null; then
-    echo -e "${GREEN}[✓] 完整架构组件包获取成功${NC}"
-else
+ARCHIVE_FILE="archive.tar.gz"
+ARCHIVE_OK=false
+
+if curl -fsSL --connect-timeout 8 --retry 2 "$ARCHIVE_URL" -o "$ARCHIVE_FILE" 2>/dev/null; then
+    if [ -f "$ARCHIVE_FILE" ] && [ "$(get_file_size "$ARCHIVE_FILE")" -ge 10000 ]; then
+        if tar -tzf "$ARCHIVE_FILE" >/dev/null 2>&1; then
+            tar -xzf "$ARCHIVE_FILE" --strip-components=1 2>/dev/null && ARCHIVE_OK=true
+            echo -e "${GREEN}[✓] 完整架构组件包获取并通过归档完整性校验${NC}"
+        fi
+    fi
+fi
+
+if [ "$ARCHIVE_OK" = false ]; then
+    echo -e "${YELLOW}[!] 归档包直连获取受阻，启动逐个核心组件安全下载与校验...${NC}"
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/web_server.py" "web_server.py" 20000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" "sentry_daemon.py" 30000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
