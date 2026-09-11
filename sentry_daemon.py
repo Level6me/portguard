@@ -122,7 +122,7 @@ DEFAULT_CONFIG = {
     ],
     "web_port": 9099,
     "web_bind": "127.0.0.1",
-    "admin_password": "admin",
+    "admin_password": "",
     "defense_mode": "standard",
     "ban_action_iptables": True,
     "ban_action_blackhole": True,
@@ -2325,10 +2325,17 @@ def load_config():
         if dir_name and not os.path.exists(dir_name):
             os.makedirs(dir_name, exist_ok=True)
         if not os.path.exists(CONFIG_PATH):
+            initial_cfg = dict(DEFAULT_CONFIG)
+            try:
+                import secrets
+                initial_cfg["admin_password"] = secrets.token_urlsafe(12)
+            except Exception:
+                import uuid
+                initial_cfg["admin_password"] = uuid.uuid4().hex[:12]
             with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+                json.dump(initial_cfg, f, indent=2, ensure_ascii=False)
             with _CONFIG_LOCK:
-                _CONFIG_CACHE = dict(DEFAULT_CONFIG)
+                _CONFIG_CACHE = dict(initial_cfg)
                 _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
             return dict(_CONFIG_CACHE)
 
