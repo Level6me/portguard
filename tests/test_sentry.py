@@ -838,6 +838,167 @@ class OptimizationAndHardeningTest(unittest.TestCase):
         res = sync_cluster_mesh_state()
         self.assertEqual(res.get("synced_nodes", 0), 0)
 
+    def test_cluster_response_token_mandatory(self):
+        from sentry_daemon import (
+            generate_cluster_token, generate_cluster_response_token,
+            verify_cluster_response_strictly
+        )
+        secret = "mandatory_check_secret_key"
+        req_token = generate_cluster_token("sync_state_exchange", secret, body=b"test_body")
+        resp_data = b'{"success": true}'
+
+        # 模拟响应对象
+        class MockResponse:
+            def __init__(self, body, headers):
+                self._body = body
+                self.headers = headers
+            def read(self):
+                return self._body
+
+        # 1. 正常场景：携带合法签名，验证必须成功通过
+        valid_resp_token = generate_cluster_response_token(secret, body=resp_data, req_token=req_token)
+        resp1 = MockResponse(resp_data, {"X-Cluster-Response-Token": valid_resp_token})
+        ok, body, err = verify_cluster_response_strictly(resp1, secret, req_token)
+        self.assertTrue(ok)
+        self.assertEqual(body, resp_data)
+        self.assertEqual(err, "")
+
+        # 2. 攻击场景：中间人剥离/移除 X-Cluster-Response-Token，强制拦截拒绝 (P0 缺陷防御)
+        resp_stripped = MockResponse(resp_data, {})
+        ok, body, err = verify_cluster_response_strictly(resp_stripped, secret, req_token)
+        self.assertFalse(ok)
+        self.assertIn("安全拦截：对端响应缺少 X-Cluster-Response-Token 签名头", err)
+
+        # 3. 攻击场景：签名被篡改或无效
+        resp_tampered_sig = MockResponse(resp_data, {"X-Cluster-Response-Token": "v2.resp.fake.invalid.sig"})
+        ok, body, err = verify_cluster_response_strictly(resp_tampered_sig, secret, req_token)
+        self.assertFalse(ok)
+        self.assertIn("签名校验失败", err)
+
+        # 4. 攻击场景：响应体遭中间人篡改
+        tampered_data = b'{"success": true, "malicious": true}'
+        resp_tampered_body = MockResponse(tampered_data, {"X-Cluster-Response-Token": valid_resp_token})
+        ok, body, err = verify_cluster_response_strictly(resp_tampered_body, secret, req_token)
+        self.assertFalse(ok)
+        self.assertIn("签名校验失败", err)
+
+        # 5. 未配置 secret 时允许放行（兼容未启用签名环境）
+        ok, body, err = verify_cluster_response_strictly(resp_stripped, "", req_token)
+        self.assertTrue(ok)
+
+    def test_cluster_ipv6_node_parsing_and_formatting(self):
+        from sentry_daemon import (
+            parse_cluster_host_port, format_http_target_url,
+            format_host_header, normalize_cluster_node
+        )
+        # 1. 纯 IPv6 地址解析
+        h, p = parse_cluster_host_port("2001:db8::1", 9098)
+        self.assertEqual(h, "2001:db8::1")
+        self.assertEqual(p, 9098)
+
+        # 2. RFC 3986 带方括号与端口的 IPv6
+        h, p = parse_cluster_host_port("[2001:db8::1]:9099", 9098)
+        self.assertEqual(h, "2001:db8::1")
+        self.assertEqual(p, 9099)
+
+        # 3. 仅方括号的 IPv6
+        h, p = parse_cluster_host_port("[2001:db8::1]", 9098)
+        self.assertEqual(h, "2001:db8::1")
+        self.assertEqual(p, 9098)
+
+        # 4. 带 HTTP 协议前缀的 IPv6 URL
+        h, p = parse_cluster_host_port("http://[2001:db8::1]:9098/api/cluster/ping", 9098)
+        self.assertEqual(h, "2001:db8::1")
+        self.assertEqual(p, 9098)
+
+        # 5. IPv4 及域名解析兼容性
+        h, p = parse_cluster_host_port("192.168.1.100:9098", 9098)
+        self.assertEqual(h, "192.168.1.100")
+        self.assertEqual(p, 9098)
+
+        h, p = parse_cluster_host_port("cluster.example.com:9099", 9098)
+        self.assertEqual(h, "cluster.example.com")
+        self.assertEqual(p, 9099)
+
+        # 6. HTTP 目标 URL 格式化 (RFC 2732 / 3986 方括号包裹)
+        url_v6 = format_http_target_url("2001:db8::1", 9098, "/api/cluster/ping")
+        self.assertEqual(url_v6, "http://[2001:db8::1]:9098/api/cluster/ping")
+
+        url_v4 = format_http_target_url("192.168.1.100", 9098, "/api/cluster/ping")
+        self.assertEqual(url_v4, "http://192.168.1.100:9098/api/cluster/ping")
+
+        # 7. Host 请求头格式化
+        host_v6 = format_host_header("2001:db8::1", 9098)
+        self.assertEqual(host_v6, "[2001:db8::1]:9098")
+
+        host_v4 = format_host_header("192.168.1.100", 9098)
+        self.assertEqual(host_v4, "192.168.1.100:9098")
+
+        # 8. normalize_cluster_node 规范化处理
+        norm1 = normalize_cluster_node("[2001:db8::1]:9099")
+        self.assertEqual(norm1["ip"], "2001:db8::1")
+        self.assertEqual(norm1["port"], 9099)
+
+        norm2 = normalize_cluster_node({"ip": "[2001:db8::2]:9098", "port": 9098})
+        self.assertEqual(norm2["ip"], "2001:db8::2")
+        self.assertEqual(norm2["port"], 9098)
+
+    def test_cluster_outbound_endpoints_mandatory_response_token(self):
+        from unittest.mock import patch
+        from controllers.cluster_controller import handle_cluster_test_node
+        from sentry_daemon import generate_cluster_response_token, generate_cluster_token
+
+        secret = "test_endpoint_secret"
+
+        class MockReq:
+            def __init__(self):
+                self.sent_json = None
+                self.sent_status = 200
+            def _send_json(self, data, status=200):
+                self.sent_json = data
+                self.sent_status = status
+
+        class FakeResp:
+            def __init__(self, headers):
+                self.headers = headers
+                self.status = 200
+            def read(self):
+                return b'{"success": true, "node_name": "node_b"}'
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        # 1. 模拟对端未返回 X-Cluster-Response-Token（被剥离），测试必须拦截报错
+        with patch("controllers.cluster_controller.resolve_and_validate_target", return_value=(True, "8.8.8.8", "")), \
+             patch("controllers.cluster_controller.safe_cluster_urlopen", return_value=FakeResp({})):
+            req = MockReq()
+            handle_cluster_test_node(req, None, {
+                "node_url": "http://8.8.8.8:9098",
+                "secret": secret
+            })
+            self.assertEqual(req.sent_status, 403)
+            self.assertFalse(req.sent_json.get("success", False))
+            self.assertIn("缺少 X-Cluster-Response-Token", req.sent_json.get("msg", ""))
+
+        # 2. 模拟对端返回合法 X-Cluster-Response-Token，测试必须成功
+        def make_valid_resp(http_req, **kwargs):
+            req_token = http_req.get_header("X-cluster-token") or http_req.headers.get("X-cluster-token", "")
+            body = b'{"success": true, "node_name": "node_b"}'
+            valid_resp_token = generate_cluster_response_token(secret, body=body, req_token=req_token)
+            return FakeResp({"X-Cluster-Response-Token": valid_resp_token})
+
+        with patch("controllers.cluster_controller.resolve_and_validate_target", return_value=(True, "8.8.8.8", "")), \
+             patch("controllers.cluster_controller.safe_cluster_urlopen", side_effect=make_valid_resp):
+            req2 = MockReq()
+            handle_cluster_test_node(req2, None, {
+                "node_url": "http://8.8.8.8:9098",
+                "secret": secret
+            })
+            self.assertEqual(req2.sent_status, 200)
+            self.assertTrue(req2.sent_json.get("success", False))
+            self.assertEqual(req2.sent_json.get("node_name"), "node_b")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1417,66 +1417,161 @@ def verify_cluster_token(sign_target, token, secret, body=b""):
         return False
 
 
+def parse_cluster_host_port(target_str, default_port=9098):
+    """
+    稳健解析集群节点的主机名/IP与端口，全面兼容 IPv4、域名以及 RFC 3986 带括号 [IPv6]:port 与纯 IPv6 地址：
+    - "192.168.1.1:9098" -> ("192.168.1.1", 9098)
+    - "[2001:db8::1]:9098" -> ("2001:db8::1", 9098)
+    - "2001:db8::1" -> ("2001:db8::1", 9098)
+    - "http://[2001:db8::1]:9098/api" -> ("2001:db8::1", 9098)
+    """
+    if not target_str:
+        return "", default_port
+    s = str(target_str).strip()
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    if "/" in s:
+        s = s.split("/", 1)[0]
+    s = s.strip()
+    if not s:
+        return "", default_port
+
+    # 1. 带括号的 IPv6 地址格式: [2001:db8::1] 或 [2001:db8::1]:9098
+    if s.startswith("["):
+        if "]:" in s:
+            host_part, port_part = s[1:].split("]:", 1)
+            try:
+                port = int(port_part)
+            except (ValueError, TypeError):
+                port = default_port
+            return host_part.strip(), port
+        elif s.endswith("]"):
+            return s[1:-1].strip(), default_port
+
+    # 2. 纯 IPv6 地址 (含有多于一个冒号，不能按单个冒号分割端口)
+    if s.count(":") > 1:
+        try:
+            ipaddress.IPv6Address(s)
+            return s, default_port
+        except ValueError:
+            pass
+
+    # 3. IPv4 或域名 host:port
+    if ":" in s:
+        parts = s.split(":", 1)
+        host_part = parts[0].strip()
+        try:
+            port = int(parts[1])
+        except (ValueError, TypeError):
+            port = default_port
+        return host_part, port
+
+    return s, default_port
+
+
+def format_http_target_url(target_ip, port, endpoint=""):
+    """
+    格式化集群 HTTP 请求目标 URL，严格遵循 RFC 2732 / 3986 标准：
+    若 target_ip 为 IPv6 地址，自动封装方括号 [IPv6]，防止端口拼接导致多冒号 URI 解析异常。
+    """
+    clean_ip = str(target_ip).strip()
+    if clean_ip.startswith("[") and clean_ip.endswith("]"):
+        clean_ip = clean_ip[1:-1].strip()
+    if ":" in clean_ip:
+        host_repr = f"[{clean_ip}]"
+    else:
+        host_repr = clean_ip
+    return f"http://{host_repr}:{port}{endpoint}"
+
+
+def format_host_header(host, port):
+    """格式化 HTTP Host 请求头，针对 IPv6 地址自动规范化为 [IPv6]:port"""
+    h = str(host).strip()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1].strip()
+    if ":" in h:
+        return f"[{h}]:{port}"
+    return f"{h}:{port}"
+
+
+def verify_cluster_response_strictly(resp, secret, req_token):
+    """
+    严格校验集群响应端 HMAC 签名：
+    1. 当配置了集群通信密钥 secret 时，响应头必须携带 X-Cluster-Response-Token，严禁任何降级或剥离绕过；
+    2. 严格校验响应体完整性哈希、时间戳容差窗口及与本次请求 Nonce 的绑定完整性；
+    3. 校验失败或签名缺失直接返回 (False, resp_bytes, err_msg)
+    """
+    resp_bytes = resp.read()
+    if not secret:
+        return True, resp_bytes, ""
+    resp_token = resp.headers.get("X-Cluster-Response-Token", "").strip()
+    if not resp_token:
+        return False, resp_bytes, "安全拦截：对端响应缺少 X-Cluster-Response-Token 签名头 (可能遭受中间人降级或剥离攻击)"
+    if not verify_cluster_response_token(resp_token, secret, body=resp_bytes, req_token=req_token):
+        return False, resp_bytes, "安全拦截：对端响应 X-Cluster-Response-Token 签名校验失败或内容遭篡改"
+    return True, resp_bytes, ""
+
+
 def validate_cluster_target(ip_or_host):
     """
     集群目标地址 SSRF 安全校验：
     严格禁止本地回环 (127.0.0.0/8, ::1)、0.0.0.0、云厂商元数据地址 (169.254.169.254 / link-local)、
     保留网段 (240.0.0.0/4 等)、组播地址以及格式异常的目标，杜绝 SSRF 内网及本地服务扫描。
+    全面支持 IPv4、域名及 IPv6 地址安全检查。
     返回 (is_valid, clean_host, err_msg)
     """
     if not ip_or_host or not isinstance(ip_or_host, str):
         return False, "", "节点目标地址不能为空"
 
-    host = ip_or_host.strip()
-    if "://" in host:
-        host = host.split("://", 1)[1]
-    if "/" in host:
-        host = host.split("/", 1)[0]
-    if ":" in host:
-        host = host.split(":", 1)[0]
-    host = host.strip()
+    host, _ = parse_cluster_host_port(ip_or_host)
+    if not host:
+        return False, "", "节点目标地址格式无效"
 
-    if not host or not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
-        return False, "", "非法的节点主机名或IP字符"
-
-    # 若是 IP 地址直接执行网段安全过滤
+    # 若为合法的 IP 地址 (IPv4 或 IPv6) 直接执行网段安全过滤
     try:
         ip_obj = ipaddress.ip_address(host)
         if ip_obj.is_loopback:
-            return False, "", "SSRF安全拦截：禁止添加本地回环地址 (127.0.0.0/8 或 ::1) 作为集群节点"
+            return False, "", f"SSRF安全拦截：禁止添加本地回环地址 ({host}) 作为集群节点"
         if ip_obj.is_unspecified:
-            return False, "", "SSRF安全拦截：禁止添加 0.0.0.0 作为集群节点"
+            return False, "", f"SSRF安全拦截：禁止添加未指定地址 ({host}) 作为集群节点"
         if ip_obj.is_link_local:
-            return False, "", "SSRF安全拦截：禁止添加链路本地地址 (Link-local / 169.254.0.0/16) 作为集群节点"
+            return False, "", f"SSRF安全拦截：禁止添加链路本地地址 ({host}) 作为集群节点"
         if ip_obj.is_multicast:
             return False, "", "SSRF安全拦截：禁止添加组播地址作为集群节点"
         if ip_obj.is_reserved:
             return False, "", "SSRF安全拦截：禁止添加保留地址段作为集群节点"
         if str(ip_obj) == "169.254.169.254":
             return False, "", "SSRF安全拦截：禁止访问云服务器元数据服务 (Metadata Service)"
+        return True, str(ip_obj), ""
     except ValueError:
-        # 主机名/域名模式：过滤危险内网标识
-        h_lower = host.lower()
-        if h_lower in ("localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"):
-            return False, "", "SSRF安全拦截：禁止指向本机或云元数据域名"
-        # 尝试快速解析域名检查是否解析到了回环或元数据
-        try:
-            resolved_addrs = socket.getaddrinfo(host, None)
-            for item in resolved_addrs:
-                resolved_ip = item[4][0]
-                ip_obj = ipaddress.ip_address(resolved_ip)
-                if ip_obj.is_loopback:
-                    return False, "", f"SSRF安全拦截：域名解析到本地回环地址 ({resolved_ip})"
-                if ip_obj.is_link_local:
-                    return False, "", f"SSRF安全拦截：域名解析到链路本地地址 ({resolved_ip})"
-                if ip_obj.is_unspecified:
-                    return False, "", f"SSRF安全拦截：域名解析到未指定地址 ({resolved_ip})"
-                if ip_obj.is_multicast or ip_obj.is_reserved:
-                    return False, "", f"SSRF安全拦截：域名解析到组播或保留地址 ({resolved_ip})"
-                if str(ip_obj) == "169.254.169.254":
-                    return False, "", f"SSRF安全拦截：域名解析到云元数据服务 ({resolved_ip})"
-        except Exception:
-            pass
+        pass
+
+    # 域名/主机名模式：校验字符合法性 (必须是合法的主机名字符)
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        return False, "", "非法的节点主机名或IP字符"
+
+    h_lower = host.lower()
+    if h_lower in ("localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"):
+        return False, "", "SSRF安全拦截：禁止指向本机或云元数据域名"
+
+    # 尝试快速解析域名检查是否解析到了回环或元数据
+    try:
+        resolved_addrs = socket.getaddrinfo(host, None)
+        for item in resolved_addrs:
+            resolved_ip = item[4][0]
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_loopback:
+                return False, "", f"SSRF安全拦截：域名解析到本地回环地址 ({resolved_ip})"
+            if ip_obj.is_link_local:
+                return False, "", f"SSRF安全拦截：域名解析到链路本地地址 ({resolved_ip})"
+            if ip_obj.is_unspecified:
+                return False, "", f"SSRF安全拦截：域名解析到未指定地址 ({resolved_ip})"
+            if ip_obj.is_multicast or ip_obj.is_reserved:
+                return False, "", f"SSRF安全拦截：域名解析到组播或保留地址 ({resolved_ip})"
+            if str(ip_obj) == "169.254.169.254":
+                return False, "", f"SSRF安全拦截：域名解析到云元数据服务 ({resolved_ip})"
+    except Exception:
+        pass
 
     return True, host, ""
 
@@ -1488,7 +1583,8 @@ def resolve_and_validate_target(host, port=None):
     若通过，返回 (is_safe, resolved_ip, err_msg)；若校验失败则拒绝。
     返回的 resolved_ip 直接用于后续建立 HTTP 连接，杜绝二次 DNS 查询导致的重绑定攻击。
     """
-    ok, clean_host, err_msg = validate_cluster_target(host)
+    clean_h, _ = parse_cluster_host_port(host, port or 80)
+    ok, clean_host, err_msg = validate_cluster_target(clean_h)
     if not ok:
         return False, "", err_msg
 
@@ -1516,17 +1612,18 @@ def resolve_and_validate_target(host, port=None):
 
 
 def normalize_cluster_node(node):
-    """规范化协同节点数据结构，确保字段完整并兼容历史字符串格式"""
+    """规范化协同节点数据结构，确保字段完整并兼容 IPv4、IPv6 与域名格式"""
     if isinstance(node, dict):
-        ip = str(node.get("ip", "")).strip()
-        port = int(node.get("port", 9098) or 9098)
-        remark = str(node.get("remark", "")).strip() or "协同节点"
+        raw_ip = str(node.get("ip", "")).strip()
+        host, default_port = parse_cluster_host_port(raw_ip, default_port=int(node.get("port", 9098) or 9098))
+        port = int(node.get("port", default_port) or default_port)
+        remark = str(node.get("remark", "")).strip() or f"协同节点 ({host})"
         created_at = node.get("created_at") or time.strftime("%Y-%m-%d %H:%M:%S")
         status = node.get("status", "unknown")
         latency_ms = int(node.get("latency_ms", 0) or 0)
         country = node.get("country", "")
         return {
-            "ip": ip,
+            "ip": host,
             "port": port,
             "remark": remark,
             "created_at": created_at,
@@ -1538,22 +1635,13 @@ def normalize_cluster_node(node):
         s = node.strip()
         if not s:
             return None
-        port = 9098
-        if "://" in s:
-            s = s.split("://", 1)[1]
-        if "/" in s:
-            s = s.split("/", 1)[0]
-        if ":" in s:
-            parts = s.split(":")
-            s = parts[0]
-            try:
-                port = int(parts[1])
-            except Exception:
-                port = 9098
+        host, port = parse_cluster_host_port(s, default_port=9098)
+        if not host:
+            return None
         return {
-            "ip": s,
+            "ip": host,
             "port": port,
-            "remark": f"协同节点 ({s})",
+            "remark": f"协同节点 ({host})",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "status": "unknown",
             "latency_ms": 0,
@@ -1563,7 +1651,7 @@ def normalize_cluster_node(node):
 
 
 def _send_cluster_msg(node, endpoint, payload, token, secret=""):
-    """向协同节点发送通信数据，直连安全验证的解析目标以杜绝 DNS Rebinding，严格禁止 HTTP 重定向并双向校验响应签名"""
+    """向协同节点发送通信数据，直连安全验证的解析目标以杜绝 DNS Rebinding，严格禁止 HTTP 重定向并双向强制校验响应签名"""
     if not node or not node.get("ip"):
         return False
 
@@ -1571,6 +1659,10 @@ def _send_cluster_msg(node, endpoint, payload, token, secret=""):
     is_safe, target_ip, _ = resolve_and_validate_target(orig_host)
     if not is_safe:
         return False
+
+    if not secret:
+        cfg = load_config()
+        secret = cfg.get("cluster_sync", {}).get("cluster_secret", "").strip()
 
     ports_to_try = []
     if node.get("port"):
@@ -1587,20 +1679,18 @@ def _send_cluster_msg(node, endpoint, payload, token, secret=""):
             "Content-Type": "application/json",
             "X-Cluster-Token": token,
             "User-Agent": "PortGuardMesh/2.0",
-            "Host": f"{orig_host}:{p}"
+            "Host": format_host_header(orig_host, p)
         }
         for attempt in range(2):
             try:
-                # 直连已安全校验的 target_ip，防止 DNS Rebinding 攻击，并使用 safe_cluster_urlopen 阻断 302 重定向
-                target = f"http://{target_ip}:{p}{endpoint}"
+                # 直连已安全校验的 target_ip，防止 DNS Rebinding 攻击，使用 safe_cluster_urlopen 阻断 302 重定向
+                target = format_http_target_url(target_ip, p, endpoint)
                 req = urllib.request.Request(target, data=payload, headers=headers)
                 with safe_cluster_urlopen(req, timeout=3.5) as resp:
                     if resp.status in (200, 201):
-                        resp_bytes = resp.read()
-                        resp_token = resp.headers.get("X-Cluster-Response-Token", "").strip()
-                        if resp_token and secret:
-                            if not verify_cluster_response_token(resp_token, secret, body=resp_bytes, req_token=token):
-                                continue
+                        is_valid, _, _ = verify_cluster_response_strictly(resp, secret, token)
+                        if not is_valid:
+                            continue
                         return True
             except Exception:
                 if attempt == 0:
@@ -1777,20 +1867,18 @@ def sync_cluster_mesh_state(target_node=None):
         success = False
         res = {}
         for p in ports_to_try:
-            target = f"http://{target_ip}:{p}/api/cluster/sync_state_exchange"
+            target = format_http_target_url(target_ip, p, "/api/cluster/sync_state_exchange")
             try:
                 req = urllib.request.Request(target, data=payload, headers={
                     "Content-Type": "application/json",
                     "X-Cluster-Token": token,
                     "User-Agent": "PortGuardMesh/2.0",
-                    "Host": f"{orig_host}:{p}"
+                    "Host": format_host_header(orig_host, p)
                 })
                 with safe_cluster_urlopen(req, timeout=5) as resp:
-                    resp_bytes = resp.read()
-                    resp_token = resp.headers.get("X-Cluster-Response-Token", "").strip()
-                    if resp_token:
-                        if not verify_cluster_response_token(resp_token, secret, body=resp_bytes, req_token=token):
-                            continue
+                    is_valid, resp_bytes, err_msg = verify_cluster_response_strictly(resp, secret, token)
+                    if not is_valid:
+                        continue
                     res = json.loads(resp_bytes.decode('utf-8'))
                     if res.get("success"):
                         success = True
@@ -2416,6 +2504,7 @@ def cleanup_loop():
 CONFIG_SNAPSHOTS_DIR = os.path.join(os.path.dirname(CONFIG_PATH), "snapshots")
 
 def save_config(cfg):
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
     try:
         dir_name = os.path.dirname(CONFIG_PATH)
         if dir_name and not os.path.exists(dir_name):
