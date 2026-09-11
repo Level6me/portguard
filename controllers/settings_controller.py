@@ -4,7 +4,8 @@ import time
 from sentry_daemon import (
     load_config, save_config, get_config_snapshots, rollback_config_snapshot,
     check_c2_compromise_connections, trap_instance, sniffer_instance,
-    site_collector_instance, init_firewall_ipset, flush_firewall_blocks
+    site_collector_instance, init_firewall_ipset, flush_firewall_blocks,
+    validate_cluster_target, normalize_cluster_node
 )
 
 def handle_settings_get(req, parsed):
@@ -123,7 +124,17 @@ def handle_settings_post(req, parsed, req_data):
     if "defense_paused" in req_data:
         cfg["defense_paused"] = bool(req_data["defense_paused"])
     if "cluster_sync" in req_data and isinstance(req_data["cluster_sync"], dict):
-        cfg["cluster_sync"] = req_data["cluster_sync"]
+        cs = req_data["cluster_sync"]
+        if "cluster_nodes" in cs and isinstance(cs["cluster_nodes"], list):
+            safe_nodes = []
+            for n_raw in cs["cluster_nodes"]:
+                norm = normalize_cluster_node(n_raw)
+                if norm and norm.get("ip"):
+                    ok, _, _ = validate_cluster_target(norm["ip"])
+                    if ok:
+                        safe_nodes.append(norm)
+            cs["cluster_nodes"] = safe_nodes
+        cfg["cluster_sync"] = cs
     save_config(cfg)
     req._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
     return

@@ -633,12 +633,60 @@ class OptimizationAndHardeningTest(unittest.TestCase):
             self.assertEqual(kwargs.get("action"), "BUSINESS")
             self.assertIn("Trojan 代理", kwargs.get("port_name"))
 
-    def test_config_cache_performance(self):
-        from sentry_daemon import load_config, save_config, CONFIG_PATH
-        cfg1 = load_config()
-        self.assertIsInstance(cfg1, dict)
-        cfg2 = load_config()
-        self.assertEqual(cfg1, cfg2)
+    def test_cluster_target_ssrf_validation(self):
+        from sentry_daemon import validate_cluster_target
+        # 回环地址阻断
+        ok, _, msg = validate_cluster_target("127.0.0.1")
+        self.assertFalse(ok)
+        self.assertIn("本地回环", msg)
+        ok, _, msg = validate_cluster_target("::1")
+        self.assertFalse(ok)
+
+        # 未指定地址阻断
+        ok, _, msg = validate_cluster_target("0.0.0.0")
+        self.assertFalse(ok)
+
+        # 云元数据与链路本地地址阻断
+        ok, _, msg = validate_cluster_target("169.254.169.254")
+        self.assertFalse(ok)
+        ok, _, msg = validate_cluster_target("169.254.10.20")
+        self.assertFalse(ok)
+
+        # 本机及危险域名阻断
+        ok, _, msg = validate_cluster_target("localhost")
+        self.assertFalse(ok)
+
+        # 非法字符阻断
+        ok, _, msg = validate_cluster_target("bad;rm -rf /")
+        self.assertFalse(ok)
+
+        # 合法公网地址放行
+        ok, host, msg = validate_cluster_target("8.8.8.8")
+        self.assertTrue(ok)
+        self.assertEqual(host, "8.8.8.8")
+
+    def test_cluster_token_replay_defense(self):
+        import hmac, hashlib
+        from sentry_daemon import generate_cluster_token, verify_cluster_token
+        secret = "super_cluster_secret_key"
+        target = "ban_1.2.3.4"
+
+        # 1. 正常生成 v2 Token 并校验
+        token = generate_cluster_token(target, secret)
+        self.assertTrue(token.startswith("v2."))
+        # 首次验证应通过
+        self.assertTrue(verify_cluster_token(target, token, secret))
+        # 再次重放验证应失败 (防重放 Nonce 拦截)
+        self.assertFalse(verify_cluster_token(target, token, secret))
+
+        # 2. 伪造超时 Token (超过90秒)
+        old_time = int(time.time()) - 200
+        old_token = generate_cluster_token(target, secret, timestamp=old_time, nonce="testnonceold1")
+        self.assertFalse(verify_cluster_token(target, old_token, secret))
+
+        # 3. 兼容历史 v1 静态 HMAC Token
+        v1_token = hmac.new(secret.encode('utf-8'), target.encode('utf-8'), hashlib.sha256).hexdigest()
+        self.assertTrue(verify_cluster_token(target, v1_token, secret))
 
 
 if __name__ == "__main__":

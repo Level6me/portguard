@@ -340,9 +340,12 @@ def handle_ban_subnet(req, parsed, req_data):
             except Exception:
                 pass
 
-        # 下发网段级黑洞路由与防火墙拦截
-        subprocess.run(["ip", "route", "add", "blackhole", str(net_obj)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["iptables", "-I", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 下发网段级黑洞路由与防火墙拦截 (兼容 IPv4 与 IPv6 网段)
+        is_v6 = net_obj.version == 6
+        fw_tool = "ip6tables" if is_v6 else "iptables"
+        route_cmd = ["ip", "-6", "route", "add", "blackhole", str(net_obj)] if is_v6 else ["ip", "route", "add", "blackhole", str(net_obj)]
+        subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([fw_tool, "-I", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         ban_ip(str(net_obj), reason=reason, category="subnet_ban", level="极高危")
         invalidate_blacklist_cache()
         req._send_json({"success": True, "msg": f"已成功对 {net_obj} 整个网段实施内核黑洞阻断与拦截！"})

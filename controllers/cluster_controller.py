@@ -12,9 +12,10 @@ from sentry_daemon import (
     resolve_ip_geo_local, ban_ip_firewall, unban_ip_core,
     broadcast_cluster_ban, broadcast_cluster_unban, broadcast_cluster_whitelist,
     sync_cluster_mesh_state, get_hidden_ips_set, validate_ip, ip_in_whitelist,
-    _EXECUTOR
+    validate_cluster_target, _EXECUTOR
 )
-from controllers.base import invalidate_blacklist_cache
+import re
+
 
 def handle_cluster_nodes(req, parsed):
     cfg = load_config()
@@ -376,21 +377,12 @@ def handle_cluster_test_node(req, parsed, req_data):
             req._send_json({"success": False, "msg": "节点地址格式错误"}, status=400)
             return
 
-        resolved_addrs = socket.getaddrinfo(host_part, None)
-        for item in resolved_addrs:
-            ip_str = item[4][0]
-            ip_obj = ipaddress.ip_address(ip_str)
-            if ip_obj.is_link_local:
-                req._send_json({"success": False, "msg": f"安全拦截：禁止探测云元数据/链路本地地址 ({ip_str})"}, status=403)
-                return
-            if ip_obj.is_loopback:
-                req._send_json({"success": False, "msg": f"安全拦截：禁止访问本地回环地址 ({ip_str})"}, status=403)
-                return
-            if ip_obj.is_unspecified:
-                req._send_json({"success": False, "msg": f"安全拦截：禁止访问未指定地址 ({ip_str})"}, status=403)
-                return
+        ok, _, err_msg = validate_cluster_target(host_part)
+        if not ok:
+            req._send_json({"success": False, "msg": err_msg}, status=403)
+            return
     except Exception as ex:
-        req._send_json({"success": False, "msg": f"节点主机名解析异常: {ex}"}, status=400)
+        req._send_json({"success": False, "msg": f"节点地址格式异常: {ex}"}, status=400)
         return
 
     token = generate_cluster_token("ping", secret)
@@ -446,6 +438,17 @@ def handle_cluster_nodes_add(req, parsed, req_data):
     if not ip_raw:
         req._send_json({"success": False, "msg": "节点 IP 或域名不能为空"}, status=400)
         return
+
+    if not (1 <= port <= 65535):
+        req._send_json({"success": False, "msg": "节点端口必须在 1 到 65535 之间"}, status=400)
+        return
+
+    # SSRF 安全防御校验：禁止回环、云元数据、内网保留等危险地址
+    ok, clean_host, err_msg = validate_cluster_target(ip_raw)
+    if not ok:
+        req._send_json({"success": False, "msg": err_msg}, status=400)
+        return
+    ip_raw = clean_host
 
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
@@ -637,10 +640,12 @@ def handle_cluster_nodes_test_single(req, parsed, req_data):
     if ":" in ip_raw:
         ip_raw = ip_raw.split(":", 1)[0]
 
-    # 禁止不合法字符与控制字符
-    if not ip_raw or not re.match(r'^[a-zA-Z0-9.\-_]+$', ip_raw):
-        req._send_json({"success": False, "msg": "非法的节点 IP 或主机名格式"}, status=400)
+    # SSRF 安全防御校验：禁止回环、云元数据、内网保留等危险地址
+    ok, clean_host, err_msg = validate_cluster_target(ip_raw)
+    if not ok:
+        req._send_json({"success": False, "msg": err_msg}, status=400)
         return
+    ip_raw = clean_host
 
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})

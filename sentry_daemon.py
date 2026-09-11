@@ -507,22 +507,39 @@ def init_firewall_ipset():
 
 
 def flush_firewall_blocks():
-    """彻底排空内核所有封禁拦截：清空黑洞路由、ipset 黑名单集合以及 iptables INPUT 单独规则"""
+    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并精准移除数据库中登记的黑洞路由与 iptables 规则 (杜绝冲掉外部程序的黑洞路由)"""
     try:
-        run_firewall_cmd("ip", "route", "flush", "type", "blackhole")
-        run_firewall_cmd("ip", "-6", "route", "flush", "type", "blackhole")
+        # 1. 清空专属 ipset 集合
         if is_ipset_available():
             subprocess.run(["ipset", "flush", "portguard_blacklist_v4"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["ipset", "flush", "portguard_blacklist_v6"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 2. 精准查询 PortGuard 自身记录的黑名单并逐项解封底层路由与 iptables
         conn = get_db()
         c = conn.cursor()
         c.execute("SELECT ip FROM blacklist")
         for row in c.fetchall():
             b_ip = row["ip"]
-            if b_ip:
-                addr_obj = ipaddress.ip_address(b_ip)
-                fw = "ip6tables" if addr_obj.version == 6 else "iptables"
-                run_firewall_cmd(fw, "-D", "INPUT", "-s", b_ip, "-j", "DROP")
+            if not b_ip:
+                continue
+            try:
+                if "/" in b_ip:
+                    net_obj = ipaddress.ip_network(b_ip, strict=False)
+                    is_v6 = net_obj.version == 6
+                    fw_tool = "ip6tables" if is_v6 else "iptables"
+                    route_cmd = ["ip", "-6", "route", "del", "blackhole", str(net_obj)] if is_v6 else ["ip", "route", "del", "blackhole", str(net_obj)]
+                    subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run([fw_tool, "-D", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    addr_obj = ipaddress.ip_address(b_ip)
+                    is_v6 = addr_obj.version == 6
+                    mask = "/128" if is_v6 else "/32"
+                    fw_tool = "ip6tables" if is_v6 else "iptables"
+                    route_cmd = ["ip", "-6", "route", "del", "blackhole", f"{b_ip}{mask}"] if is_v6 else ["ip", "route", "del", "blackhole", f"{b_ip}{mask}"]
+                    subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run([fw_tool, "-D", "INPUT", "-s", b_ip, "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
         conn.close()
     except Exception:
         pass
@@ -1239,14 +1256,123 @@ def verify_search_engine_crawler(ip, user_agent):
     return res
 
 
-def generate_cluster_token(ip, secret):
-    return hmac.new(secret.encode('utf-8'), ip.encode('utf-8'), hashlib.sha256).hexdigest()
+_CLUSTER_NONCE_CACHE = set()
+_CLUSTER_NONCE_LOCK = threading.Lock()
+_CLUSTER_NONCE_LAST_CLEAN = 0.0
 
-def verify_cluster_token(ip, token, secret):
+def generate_cluster_token(sign_target, secret, timestamp=None, nonce=None):
+    """生成带时间戳与防重放随机数的安全集群 HMAC-SHA256 签名 Token"""
+    if timestamp is None:
+        timestamp = int(time.time())
+    if nonce is None:
+        import uuid
+        nonce = uuid.uuid4().hex[:12]
+    # 消息体签名: target + timestamp + nonce
+    msg = f"{sign_target}:{timestamp}:{nonce}"
+    sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+    # 编码为复合 Token: v2.timestamp.nonce.sig
+    return f"v2.{timestamp}.{nonce}.{sig}"
+
+def verify_cluster_token(sign_target, token, secret):
+    """验证集群 Token，严格防范重放攻击，具备 ±90 秒时钟容差窗口与单次使用 Nonce 校验"""
+    global _CLUSTER_NONCE_LAST_CLEAN
     if not secret or not token:
         return False
-    expected = generate_cluster_token(ip, secret)
-    return hmac.compare_digest(expected, token)
+    # 1. 优先校验抗重放 v2 Token
+    if str(token).startswith("v2."):
+        parts = str(token).split(".")
+        if len(parts) == 4:
+            try:
+                ts = int(parts[1])
+                nonce = parts[2]
+                sig = parts[3]
+                now = int(time.time())
+                # 时间窗口检查 (±90秒以内有效)
+                if abs(now - ts) > 90:
+                    return False
+
+                # 验证签名一致性
+                msg = f"{sign_target}:{ts}:{nonce}"
+                expected_sig = hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(expected_sig, sig):
+                    return False
+
+                # Nonce 防重放检查 (单次使用)
+                with _CLUSTER_NONCE_LOCK:
+                    if nonce in _CLUSTER_NONCE_CACHE:
+                        return False
+                    _CLUSTER_NONCE_CACHE.add(nonce)
+                    # 定期清理过期的 Nonce
+                    if now - _CLUSTER_NONCE_LAST_CLEAN > 180:
+                        _CLUSTER_NONCE_CACHE.clear()
+                        _CLUSTER_NONCE_LAST_CLEAN = now
+                return True
+            except Exception:
+                return False
+
+    # 2. 兼容历史 v1 静态 HMAC Token (用于渐进式兼容升级)
+    expected_v1 = hmac.new(secret.encode('utf-8'), str(sign_target).encode('utf-8'), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_v1, str(token).strip())
+
+
+def validate_cluster_target(ip_or_host):
+    """
+    集群目标地址 SSRF 安全校验：
+    严格禁止本地回环 (127.0.0.0/8, ::1)、0.0.0.0、云厂商元数据地址 (169.254.169.254 / link-local)、
+    组播地址以及格式异常的目标，杜绝 SSRF 内网扫描。
+    返回 (is_valid, clean_host, err_msg)
+    """
+    if not ip_or_host or not isinstance(ip_or_host, str):
+        return False, "", "节点目标地址不能为空"
+
+    host = ip_or_host.strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    if "/" in host:
+        host = host.split("/", 1)[0]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    host = host.strip()
+
+    if not host or not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        return False, "", "非法的节点主机名或IP字符"
+
+    # 若是 IP 地址直接执行网段安全过滤
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        if ip_obj.is_loopback:
+            return False, "", "SSRF安全拦截：禁止添加本地回环地址 (127.0.0.0/8 或 ::1) 作为集群节点"
+        if ip_obj.is_unspecified:
+            return False, "", "SSRF安全拦截：禁止添加 0.0.0.0 作为集群节点"
+        if ip_obj.is_link_local:
+            return False, "", "SSRF安全拦截：禁止添加链路本地地址 (Link-local / 169.254.0.0/16) 作为集群节点"
+        if ip_obj.is_multicast:
+            return False, "", "SSRF安全拦截：禁止添加组播地址作为集群节点"
+        if str(ip_obj) == "169.254.169.254":
+            return False, "", "SSRF安全拦截：禁止访问云服务器元数据服务 (Metadata Service)"
+    except ValueError:
+        # 主机名/域名模式：过滤危险内网标识
+        h_lower = host.lower()
+        if h_lower in ("localhost", "ip6-localhost", "ip6-loopback", "metadata.google.internal"):
+            return False, "", "SSRF安全拦截：禁止指向本机或云元数据域名"
+        # 尝试快速解析域名检查是否解析到了回环或元数据
+        try:
+            resolved_addrs = socket.getaddrinfo(host, None)
+            for item in resolved_addrs:
+                resolved_ip = item[4][0]
+                ip_obj = ipaddress.ip_address(resolved_ip)
+                if ip_obj.is_loopback:
+                    return False, "", f"SSRF安全拦截：域名解析到本地回环地址 ({resolved_ip})"
+                if ip_obj.is_link_local:
+                    return False, "", f"SSRF安全拦截：域名解析到链路本地地址 ({resolved_ip})"
+                if ip_obj.is_unspecified:
+                    return False, "", f"SSRF安全拦截：域名解析到未指定地址 ({resolved_ip})"
+                if str(ip_obj) == "169.254.169.254":
+                    return False, "", f"SSRF安全拦截：域名解析到云元数据服务 ({resolved_ip})"
+        except Exception:
+            pass
+
+    return True, host, ""
 
 
 def normalize_cluster_node(node):
@@ -1299,6 +1425,10 @@ def normalize_cluster_node(node):
 def _send_cluster_msg(node, endpoint, payload, token):
     """向协同节点发送通信数据，自适应尝试目标端口及备用端口 (9098/9099) 并支持自动重试"""
     if not node or not node.get("ip"):
+        return False
+    # SSRF 安全防御校验
+    ok, _, _ = validate_cluster_target(node.get("ip", ""))
+    if not ok:
         return False
     ports_to_try = []
     if node.get("port"):
