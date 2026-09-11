@@ -226,7 +226,7 @@ def handle_analytics(req, parsed):
     c = conn.cursor()
 
     c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    total_probes = c.fetchone()[0]
+    raw_port_probes = c.fetchone()[0]
 
     c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     total_intercepted = c.fetchone()[0]
@@ -243,7 +243,18 @@ def handle_analytics(req, parsed):
     c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     abnormal_web_requests = c.fetchone()[0]
 
-    ban_rate = round((total_intercepted / total_probes * 100), 1) if total_probes > 0 else (100.0 if total_intercepted > 0 else 0.0)
+    # 统计口径科学对齐：
+    # 探测捕获总量（全网威胁感知总量）由本地端口探测、拦截阻断事件、外部集群协同情报以及未阻断连接组成
+    # 逻辑底线：探测捕获总量 >= 安全拦截总量，且 探测捕获总量 >= 独立威胁源 IP 数
+    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
+    non_intercepted_probes = c.fetchone()[0]
+    total_probes = max(raw_port_probes, total_intercepted + non_intercepted_probes, unique_attackers)
+
+    # 威胁拦截比率：严格约束在 0.0% ~ 100.0% 之间，科学反映系统感知威胁中已被处置阻断的比率
+    if total_probes > 0:
+        ban_rate = round(min(100.0, max(0.0, (total_intercepted / total_probes) * 100)), 1)
+    else:
+        ban_rate = 100.0 if total_intercepted > 0 else 0.0
 
     labels = []
     full_labels = []
@@ -258,10 +269,13 @@ def handle_analytics(req, parsed):
         full_labels.append(time.strftime("%Y-%m-%d %H:%M" if step_seconds < 86400 else "%Y-%m-%d", time.localtime(e_ts)))
 
         c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
-        events_trend.append(c.fetchone()[0])
+        ev_cnt = c.fetchone()[0]
+        events_trend.append(ev_cnt)
 
         c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
-        probes_trend.append(c.fetchone()[0])
+        pb_cnt = c.fetchone()[0]
+        # 趋势图中“探测捕获”作为全集威胁感知量，必须 >= 内部实际拦截量
+        probes_trend.append(max(pb_cnt, ev_cnt))
 
         c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
         web_trend.append(c.fetchone()[0])

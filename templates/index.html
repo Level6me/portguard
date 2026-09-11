@@ -910,7 +910,7 @@
                 <div class="card">
                     <div class="val-sub" style="color: var(--success);">🎯 威胁拦截比率</div>
                     <div class="val-big" id="akpi-banrate" style="color: var(--success); font-size: 24px;">--</div>
-                    <div class="val-sub">拦截次数 / 探测总次数</div>
+                    <div class="val-sub">拦截处置量 / 探测感知总量</div>
                 </div>
                 <div class="card">
                     <div class="val-sub" style="color: #af52de;">🌍 来源国家/地区</div>
@@ -3200,7 +3200,7 @@
                 if (elProbes) elProbes.innerText = (kp.total_probes || 0).toLocaleString();
                 if (elInter) elInter.innerText = (kp.total_intercepted || 0).toLocaleString();
                 if (elAttacker) elAttacker.innerText = (kp.unique_attackers || 0).toLocaleString();
-                if (elBanRate) elBanRate.innerText = `${kp.ban_rate || 0}%`;
+                if (elBanRate) elBanRate.innerText = `${Math.min(100, Math.max(0, parseFloat(kp.ban_rate) || 0)).toFixed(1)}%`;
                 if (elCountries) elCountries.innerText = (kp.unique_countries || 0).toLocaleString();
                 if (elWeb) elWeb.innerText = (kp.abnormal_web_requests || 0).toLocaleString();
             }
