@@ -161,6 +161,11 @@ if [ "$ARCHIVE_OK" = false ]; then
     echo -e "${YELLOW}[!] 归档包直连获取受阻，启动逐个核心组件安全下载与校验...${NC}"
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/web_server.py" "web_server.py" 20000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/sentry_daemon.py" "sentry_daemon.py" 30000 || true
+    mkdir -p core
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/__init__.py" "core/__init__.py" 500 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/db.py" "core/db.py" 5000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/firewall.py" "core/firewall.py" 5000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/mesh.py" "core/mesh.py" 5000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
 fi
