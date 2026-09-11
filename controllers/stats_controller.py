@@ -225,7 +225,7 @@ def handle_analytics(req, parsed):
     conn = get_db()
     c = conn.cursor()
 
-    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
+    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     raw_port_probes = c.fetchone()[0]
 
     c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
@@ -245,8 +245,9 @@ def handle_analytics(req, parsed):
 
     # 统计口径科学对齐：
     # 探测捕获总量（全网威胁感知总量）由本地端口探测、拦截阻断事件、外部集群协同情报以及未阻断连接组成
+    # 自动排除 WHITELIST（白名单信任流量，如集群节点内部同步、管理员 IP 等），防止内部高频心跳稀释安全拦截率
     # 逻辑底线：探测捕获总量 >= 安全拦截总量，且 探测捕获总量 >= 独立威胁源 IP 数
-    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
+    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED', 'WHITELIST') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     non_intercepted_probes = c.fetchone()[0]
     total_probes = max(raw_port_probes, total_intercepted + non_intercepted_probes, unique_attackers)
 
@@ -272,7 +273,7 @@ def handle_analytics(req, parsed):
         ev_cnt = c.fetchone()[0]
         events_trend.append(ev_cnt)
 
-        c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
+        c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
         pb_cnt = c.fetchone()[0]
         # 趋势图中“探测捕获”作为全集威胁感知量，必须 >= 内部实际拦截量
         probes_trend.append(max(pb_cnt, ev_cnt))
