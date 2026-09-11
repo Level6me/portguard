@@ -152,12 +152,32 @@ def invalidate_blacklist_cache():
         _BLACKLIST_CACHE = None
         _BLACKLIST_CACHE_TIME = 0.0
 
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 请求体上限，防大包内存 DoS 攻击
+
 class RequestHandler(BaseHTTPRequestHandler):
+    def _get_real_client_ip(self):
+        """安全提取客户端真实 IP：若是本地反向代理发起的请求，优先提取受信任的反代头 (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)"""
+        direct_ip = self.client_address[0].replace("::ffff:", "")
+        # 仅当直连来源是本机回环/私网（如 1Panel/Nginx 反代服务器）时才信任反代头
+        if direct_ip in ("127.0.0.1", "::1", "localhost") or direct_ip.startswith("127.") or direct_ip.startswith("10.") or direct_ip.startswith("192.168.") or direct_ip.startswith("172."):
+            cf_ip = self.headers.get("CF-Connecting-IP", "").strip()
+            if cf_ip and validate_ip(cf_ip):
+                return cf_ip
+            x_real = self.headers.get("X-Real-IP", "").strip()
+            if x_real and validate_ip(x_real):
+                return x_real
+            xff = self.headers.get("X-Forwarded-For", "").strip()
+            if xff:
+                first_ip = xff.split(",")[0].strip()
+                if validate_ip(first_ip):
+                    return first_ip
+        return direct_ip
+
     def send_response(self, code, message=None):
         # 在响应层统一记录访问日志：真实状态码、覆盖 GET/POST/HEAD/OPTIONS/404/400 等全部请求
         super().send_response(code, message)
         try:
-            client_ip = self.client_address[0]  # 直连来源 IP，不信任可伪造的 X-Forwarded-For
+            client_ip = self._get_real_client_ip()
             user_agent = self.headers.get('User-Agent', '')
             parsed = urlparse(self.path)
             log_access_entry(client_ip, self.command, parsed.path, code, user_agent)
@@ -300,6 +320,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             length = int(self.headers.get('Content-Length', 0))
+            if length > MAX_BODY_SIZE:
+                self._send_json({"error": "Payload Too Large: 请求体大小超出限制 (最大 10MB)"}, status=413)
+                return
             body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
             try:
                 req_data = json.loads(body)
@@ -322,6 +345,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             length = int(self.headers.get('Content-Length', 0))
+            if length > MAX_BODY_SIZE:
+                self._send_json({"error": "Payload Too Large: 请求体大小超出限制 (最大 10MB)"}, status=413)
+                return
             body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
             try:
                 req_data = json.loads(body)

@@ -100,10 +100,21 @@ get_file_size() {
     stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || wc -c < "$1" || echo "0"
 }
 
+calc_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
 download_file_safe() {
     local url="$1"
     local dest="$2"
     local min_sz="${3:-100}"
+    local expected_sha="$4"
     
     if [ -n "$GH_PROXY" ]; then
         curl -fsSL --connect-timeout 6 --retry 2 "${GH_PROXY}${url}" -o "$dest" 2>/dev/null || \
@@ -117,6 +128,15 @@ download_file_safe() {
         local sz
         sz=$(get_file_size "$dest")
         if [ "$sz" -ge "$min_sz" ]; then
+            if [ -n "$expected_sha" ]; then
+                local got_sha
+                got_sha=$(calc_sha256 "$dest")
+                if [ -n "$got_sha" ] && [ "$got_sha" != "$expected_sha" ]; then
+                    echo -e "${RED}[!] 文件 ${dest} 哈希不匹配 (可能被篡改或损坏)，已丢弃${NC}"
+                    rm -f "$dest" 2>/dev/null || true
+                    return 1
+                fi
+            fi
             return 0
         fi
     fi
@@ -150,11 +170,12 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 echo -e "\n${BLUE}[3/5] 正在校验并补全 GeoIP 全球离线定位数据库...${NC}"
-# 1. IP2Region (11MB)
+# 1. IP2Region (11MB，加入 SHA256 完整性校验)
+IP2REGION_SHA="c6edaf379fe524d7283a9c11c7eac27d5641a0976baa48c22c319ccd59aa3f36"
 if [ ! -f "$INSTALL_DIR/ip2region.xdb" ] || [ "$(get_file_size "$INSTALL_DIR/ip2region.xdb")" -lt 5000000 ]; then
     echo -e "正在获取 IP2Region 本地离线 IP 库 (约 11MB)..."
-    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/ip2region.xdb" "ip2region.xdb" 5000000 || \
-    download_file_safe "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb" "ip2region.xdb" 5000000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/ip2region.xdb" "ip2region.xdb" 5000000 "$IP2REGION_SHA" || \
+    download_file_safe "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb" "ip2region.xdb" 5000000 "" || true
     if [ -f "ip2region.xdb" ] && [ "$(get_file_size "ip2region.xdb")" -ge 5000000 ]; then
         cp -f ip2region.xdb "$INSTALL_DIR/ip2region.xdb"
         chmod 644 "$INSTALL_DIR/ip2region.xdb"

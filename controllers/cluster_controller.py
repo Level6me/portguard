@@ -620,7 +620,28 @@ def handle_cluster_nodes_test_all(req, parsed, req_data):
 
 def handle_cluster_nodes_test_single(req, parsed, req_data):
     ip_raw = str(req_data.get("ip", "")).strip()
-    port = int(req_data.get("port", 9099) or 9099)
+    try:
+        port = int(req_data.get("port", 9099) or 9099)
+    except (ValueError, TypeError):
+        port = 9099
+
+    if not (1 <= port <= 65535):
+        req._send_json({"success": False, "msg": "非法的端口范围 (1-65535)"}, status=400)
+        return
+
+    # 规范化与安全校验 IP/域名
+    if "://" in ip_raw:
+        ip_raw = ip_raw.split("://", 1)[1]
+    if "/" in ip_raw:
+        ip_raw = ip_raw.split("/", 1)[0]
+    if ":" in ip_raw:
+        ip_raw = ip_raw.split(":", 1)[0]
+
+    # 禁止不合法字符与控制字符
+    if not ip_raw or not re.match(r'^[a-zA-Z0-9.\-_]+$', ip_raw):
+        req._send_json({"success": False, "msg": "非法的节点 IP 或主机名格式"}, status=400)
+        return
+
     cfg = load_config()
     cluster_cfg = cfg.get("cluster_sync", {})
     secret = cluster_cfg.get("cluster_secret", "").strip()

@@ -265,27 +265,27 @@ if [ -t 0 ] && [ "$FORCE_YES" = false ] && [ "$IS_UPDATE" = false ]; then
 fi
 
 # 智能选择 Web 监听绑定地址与反代选项
-WEB_BIND="0.0.0.0"
+WEB_BIND="127.0.0.1"
 if [ -n "$CUSTOM_BIND" ]; then
     WEB_BIND="$CUSTOM_BIND"
     echo -e "\n${BLUE}[2/6] 使用命令行指定的 Web 监听地址: ${GREEN}${WEB_BIND}${NC}"
 elif [ -t 0 ] && [ "$FORCE_YES" = false ] && [ "$IS_UPDATE" = false ] && [ ! -f "${INSTALL_DIR}/config.json" ]; then
     echo -e "\n${BLUE}[2/6] 请选择 Web 控制台网络监听与访问模式:${NC}"
-    echo -e "  ${GREEN}[1] 0.0.0.0${NC}   - 允许公网直接访问 (适合独立部署、直接通过 http://公网IP:${TARGET_WEB_PORT} 访问)"
-    echo -e "  ${GREEN}[2] 127.0.0.1${NC} - 仅监听本地环回 (【强烈推荐】专为 1Panel/Nginx 反代及密码鉴权设计，公网不可探)"
+    echo -e "  ${GREEN}[1] 127.0.0.1${NC} - 仅监听本地环回 (【强烈推荐】专为 1Panel/Nginx 反代及密码鉴权设计，公网不可探，杜绝未授权访问)"
+    echo -e "  ${YELLOW}[2] 0.0.0.0${NC}   - 允许公网直接访问 (适合独立测试、直接通过 http://公网IP:${TARGET_WEB_PORT} 访问)"
     read -r -p "请输入选项 [1/2] (默认 1): " BIND_CHOICE
     case "$BIND_CHOICE" in
-        2|127*)
+        2|0.0.0.0*)
+            WEB_BIND="0.0.0.0"
+            echo -e "${YELLOW}[!] 已配置为: 0.0.0.0 (公网直连模式，请注意安全防护)${NC}"
+            ;;
+        *)
             WEB_BIND="127.0.0.1"
             echo -e "${GREEN}[✓] 已配置为: 127.0.0.1 (本地反代安全模式)${NC}"
             ;;
-        *)
-            WEB_BIND="0.0.0.0"
-            echo -e "${GREEN}[✓] 已配置为: 0.0.0.0 (公网直连模式)${NC}"
-            ;;
     esac
 else
-    WEB_BIND="${CUSTOM_BIND:-0.0.0.0}"
+    WEB_BIND="${CUSTOM_BIND:-127.0.0.1}"
 fi
 
 # 兼容历史路径平滑迁移
@@ -326,15 +326,35 @@ get_file_size() {
     stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || wc -c < "$1" || echo "0"
 }
 
+calc_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    else
+        echo ""
+    fi
+}
+
 download_db_safe() {
     local url="$1"
     local dest="$2"
     local min_sz="$3"
     local label="$4"
+    local expected_sha="$5"
     
     if [ -f "$dest" ] && [ "$(get_file_size "$dest")" -ge "$min_sz" ]; then
-        echo -e "${GREEN}[✓] ${label} 已存在且完整，跳过下载${NC}"
-        return 0
+        if [ -n "$expected_sha" ]; then
+            local curr_sha
+            curr_sha=$(calc_sha256 "$dest")
+            if [ "$curr_sha" == "$expected_sha" ]; then
+                echo -e "${GREEN}[✓] ${label} 已存在且哈希校验通过，跳过下载${NC}"
+                return 0
+            fi
+        else
+            echo -e "${GREEN}[✓] ${label} 已存在且完整，跳过下载${NC}"
+            return 0
+        fi
     fi
     
     echo -e "正在下载 ${label} ..."
@@ -347,8 +367,17 @@ download_db_safe() {
     fi
     
     if [ -f "$dest" ] && [ "$(get_file_size "$dest")" -ge "$min_sz" ]; then
+        if [ -n "$expected_sha" ]; then
+            local got_sha
+            got_sha=$(calc_sha256 "$dest")
+            if [ -n "$got_sha" ] && [ "$got_sha" != "$expected_sha" ]; then
+                echo -e "${RED}[!] ${label} SHA256 哈希校验不匹配，疑似损坏或非官方版本！${NC}"
+                rm -f "$dest" 2>/dev/null || true
+                return 1
+            fi
+        fi
         chmod 644 "$dest" 2>/dev/null || true
-        echo -e "${GREEN}[✓] ${label} 下载并校验成功！${NC}"
+        echo -e "${GREEN}[✓] ${label} 下载并完整性校验成功！${NC}"
         return 0
     else
         echo -e "${YELLOW}[!] ${label} 下载未完成，系统将自动降级运行${NC}"
@@ -356,11 +385,12 @@ download_db_safe() {
     fi
 }
 
-# 1. IP2Region 本地纯内存离线库 (11MB)
+# 1. IP2Region 本地纯内存离线库 (11MB，官方标准 SHA256 完整性校验)
+IP2REGION_SHA="c6edaf379fe524d7283a9c11c7eac27d5641a0976baa48c22c319ccd59aa3f36"
 download_db_safe "https://raw.githubusercontent.com/Level6me/portguard/main/ip2region.xdb" \
-                 "${INSTALL_DIR}/ip2region.xdb" 5000000 "IP2Region 离线高精度数据库" || \
+                 "${INSTALL_DIR}/ip2region.xdb" 5000000 "IP2Region 离线高精度数据库" "$IP2REGION_SHA" || \
 download_db_safe "https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb" \
-                 "${INSTALL_DIR}/ip2region.xdb" 5000000 "IP2Region 离线高精度数据库 (备用源)" || true
+                 "${INSTALL_DIR}/ip2region.xdb" 5000000 "IP2Region 离线高精度数据库 (备用源)" "" || true
 
 # 2. MaxMind GeoLite2-ASN 自治系统与运营商库 (12MB)
 download_db_safe "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb" \

@@ -121,7 +121,7 @@ DEFAULT_CONFIG = {
         {"ip": "100.64.0.0/10", "remark": "运营商 CGNAT / 云专网"}
     ],
     "web_port": 9099,
-    "web_bind": "0.0.0.0",
+    "web_bind": "127.0.0.1",
     "admin_password": "admin",
     "defense_mode": "standard",
     "ban_action_iptables": True,
@@ -670,7 +670,12 @@ def get_local_ips():
     except Exception:
         pass
     try:
-        out = subprocess.check_output("ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null", shell=True, universal_newlines=True)
+        res = subprocess.run(["ip", "-o", "addr", "show"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+        if res.returncode == 0 and res.stdout:
+            out = res.stdout
+        else:
+            res_if = subprocess.run(["ifconfig", "-a"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+            out = res_if.stdout or ""
         for line in out.splitlines():
             m = re.search(r'inet6?\s+([0-9a-fA-F\.\:]+)', line)
             if m:
@@ -2060,17 +2065,31 @@ def cleanup_expired_bans():
             if expired:
                 print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
 
-        # 2. SQLite 历史数据归档与瘦身：清理超过保留天数的历史端口访问审计日志与常规事件，防止数据库膨胀
+        # 2. SQLite 历史数据归档与瘦身：清理超过保留天数的历史端口与Web访问日志，防止数据库膨胀
         if auto_clean_days > 0:
             expire_cutoff = now_ts - (auto_clean_days * 86400)
             c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (expire_cutoff,))
             del_access = c.rowcount
+            c.execute("DELETE FROM access_logs WHERE timestamp < ?", (expire_cutoff,))
+            del_web = c.rowcount
             # 保留已被拉黑的核心安全事件，仅删除过期的常规探测/非封禁日志
             c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (expire_cutoff,))
             del_events = c.rowcount
+
+            # 容量天花板保护：若单表超过 100,000 条记录，强制清理最旧的数据保持系统轻快
+            for table_name in ("port_access_logs", "access_logs", "events"):
+                try:
+                    c.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    t_cnt = c.fetchone()[0]
+                    if t_cnt > 100000:
+                        overflow = t_cnt - 80000
+                        c.execute(f"DELETE FROM {table_name} WHERE id IN (SELECT id FROM {table_name} ORDER BY id ASC LIMIT ?)", (overflow,))
+                except Exception:
+                    pass
+
             conn.commit()
-            if (del_access + del_events) > 0:
-                print(f"[CLEANUP] 历史日志自动归档完成：已清理 {del_access} 条访问审计日志、{del_events} 条常规事件")
+            if (del_access + del_web + del_events) > 0:
+                print(f"[CLEANUP] 历史日志自动归档完成：已清理 {del_access} 条端口日志、{del_web} 条Web日志、{del_events} 条常规事件")
 
         conn.close()
 
@@ -2548,7 +2567,7 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
         
     auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
     
-    # 阶梯惩罚模型：查询历史违规频次，阶梯设定解封时间
+    # 阶梯惩罚模型：查询历史违规频次，阶梯设定解封时间 (避免一次误碰导致永久误封)
     try:
         conn_h = get_db()
         ch = conn_h.cursor()
@@ -2558,12 +2577,23 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     except Exception:
         hist_count = 0
 
-    if hist_count <= 1 and auto_clean_days > 0 and event_level not in ("极高危", "critical"):
-        ban_expire = now_ts + 3600  # 首次轻微触碰：阶梯轻度惩罚 1 小时
-        expire_secs = 3600
+    # 阶梯惩罚梯度：
+    # 1) 首次轻微触碰或公开测绘爬虫：封禁 15 分钟 (900秒)
+    # 2) 历史违规 <= 2 次且非极高危：封禁 1 小时 (3600秒)
+    # 3) 历史违规 <= 5 次：封禁 24 小时 (86400秒)
+    # 4) 反复恶意攻击者：按配置保留天数长期封禁 (auto_clean_days)
+    if event_category == "survey" or "测绘" in str(port_name):
+        expire_secs = 1800  # 公开测绘默认仅临时压制 30 分钟
+    elif hist_count <= 1 and event_level not in ("极高危", "critical"):
+        expire_secs = 900   # 首次探测轻微触碰：临时阻断 15 分钟缓冲
+    elif hist_count <= 2 and event_level not in ("极高危", "critical"):
+        expire_secs = 3600  # 二次触碰：阻断 1 小时
+    elif hist_count <= 5 and auto_clean_days > 0:
+        expire_secs = 86400 # 5次以内：阻断 24 小时
     else:
-        ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
         expire_secs = auto_clean_days * 86400 if auto_clean_days > 0 else 2147483
+
+    ban_expire = now_ts + expire_secs
 
     # 3. 达到阈值：使用 ipset (动态 timeout) 与黑洞路由毫秒级下发内核阻断
     if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):

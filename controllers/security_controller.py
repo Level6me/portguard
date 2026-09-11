@@ -307,10 +307,44 @@ def handle_ban_subnet(req, parsed, req_data):
         return
     try:
         net_obj = ipaddress.ip_network(subnet, strict=False)
+
+        # 防自锁与白名单保护：检查当前控制台客户端、活跃白名单是否落在目标网段内
+        client_ip = getattr(req, "client_address", ("", 0))[0]
+        if client_ip:
+            try:
+                c_addr = ipaddress.ip_address(client_ip)
+                if c_addr in net_obj:
+                    req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 包含了当前登录控制台的客户端 IP [{client_ip}]，触发管理员防自锁保护！"}, status=400)
+                    return
+            except Exception:
+                pass
+
+        cfg = load_config()
+        whitelist = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
+        for w_item in whitelist:
+            w_ip_str = w_item.get("ip") if isinstance(w_item, dict) else str(w_item)
+            w_ip_str = (w_ip_str or "").strip()
+            if not w_ip_str:
+                continue
+            try:
+                if "/" in w_ip_str:
+                    w_net = ipaddress.ip_network(w_ip_str, strict=False)
+                    if net_obj.overlaps(w_net):
+                        req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 与系统安全白名单网段 [{w_ip_str}] 存在重叠冲突，严禁封禁！"}, status=400)
+                        return
+                else:
+                    w_addr = ipaddress.ip_address(w_ip_str)
+                    if w_addr in net_obj:
+                        req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 包含了系统安全白名单 IP [{w_ip_str}]，严禁封禁！"}, status=400)
+                        return
+            except Exception:
+                pass
+
         # 下发网段级黑洞路由与防火墙拦截
         subprocess.run(["ip", "route", "add", "blackhole", str(net_obj)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["iptables", "-I", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         ban_ip(str(net_obj), reason=reason, category="subnet_ban", level="极高危")
+        invalidate_blacklist_cache()
         req._send_json({"success": True, "msg": f"已成功对 {net_obj} 整个网段实施内核黑洞阻断与拦截！"})
     except Exception as e:
         req._send_json({"success": False, "msg": f"网段阻断失败: {e}"}, status=400)
@@ -342,11 +376,9 @@ def handle_batch_ban_all(req, parsed, req_data):
         cached_geo = _GEO_CACHE.get(v, {})
         country = cached_geo.get("country", "公网探测")
 
-        if cfg.get("ban_action_iptables", True):
-            run_firewall_cmd("iptables", "-C", "INPUT", "-s", v, "-j", "DROP")
-            run_firewall_cmd("iptables", "-I", "INPUT", "-s", v, "-j", "DROP")
-        if cfg.get("ban_action_blackhole", True):
-            run_firewall_cmd("ip", "route", "add", "blackhole", f"{v}/32")
+        # 统一通过底层高性能 ipset + 黑洞路由下发阻断，杜绝逐条iptables规则线性膨胀
+        if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
+            ban_ip_firewall(v, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None))
 
         c.execute("""
         INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
@@ -364,9 +396,7 @@ def handle_batch_ban_all(req, parsed, req_data):
 
     conn.commit()
     conn.close()
-    if cfg.get("ban_action_iptables", True):
-        run_firewall_cmd("iptables-save")
-    req._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个恶意探测 IP 批量加入黑名单并下发防火墙阻断。"})
+    req._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个恶意探测 IP 批量加入黑名单并下发内核阻断。"})
     return
 
 
@@ -395,13 +425,17 @@ def handle_blacklist_import(req, parsed, req_data):
         for (old_ip,) in c.fetchall():
             v_old = validate_ip(old_ip)
             if v_old:
-                run_firewall_cmd("iptables", "-D", "INPUT", "-s", v_old, "-j", "DROP")
-                run_firewall_cmd("ip", "route", "del", "blackhole", f"{v_old}/32")
+                unban_ip_core(v_old, status_event="REPLACED")
         c.execute("DELETE FROM blacklist")
         conn.commit()
 
     now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     now_ts = int(time.time())
+
+    cfg_import = load_config()
+    auto_clean_days = int(cfg_import.get("auto_clean_days", 30) or 30)
+    ban_expire = now_ts + (auto_clean_days * 86400) if auto_clean_days > 0 else None
+    node_name = cfg_import.get("node_name", "本机") or "本机"
 
     success_count = 0
     for item in parsed_items:
@@ -424,23 +458,20 @@ def handle_blacklist_import(req, parsed, req_data):
         if not ip or len(ip) < 7:
             continue
         valid_ip = validate_ip(ip)
-        if not valid_ip:
+        if not valid_ip or ip_in_whitelist(valid_ip):
             continue
         ip = valid_ip
 
-        run_firewall_cmd("iptables", "-C", "INPUT", "-s", ip, "-j", "DROP")
-        run_firewall_cmd("iptables", "-I", "INPUT", "-s", ip, "-j", "DROP")
-        run_firewall_cmd("ip", "route", "add", "blackhole", f"{ip}/32")
+        # 统一使用 ipset + 黑洞路由高速阻断
+        if cfg_import.get("ban_action_iptables", True) or cfg_import.get("ban_action_blackhole", True):
+            ban_ip_firewall(ip, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None))
 
-        cfg_import = load_config()
-        node_name = cfg_import.get("node_name", "本机") or "本机"
         c.execute("""
         INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ip, reason, country, level, ban_time, now_ts, None, f"批量导入 ({node_name})"))
+        """, (ip, reason, country, level, ban_time, now_ts, ban_expire, f"批量导入 ({node_name})"))
         success_count += 1
 
-    run_firewall_cmd("iptables-save")
     conn.commit()
     conn.close()
 
