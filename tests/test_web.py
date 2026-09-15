@@ -103,6 +103,22 @@ class WebRoutesTest(unittest.TestCase):
         matched = dispatch_get(req, parsed)
         self.assertFalse(matched)
 
+    def test_dispatch_get_blacklist_pagination(self):
+        req = MockRequest()
+        parsed = urlparse("/api/blacklist?limit=10")
+        matched = dispatch_get(req, parsed)
+        self.assertTrue(matched)
+        self.assertEqual(req.sent_status, 200)
+        self.assertIsInstance(req.sent_json, list)
+
+    def test_dispatch_get_blacklist_search(self):
+        req = MockRequest()
+        parsed = urlparse("/api/blacklist?search=127.0.0.1&limit=5")
+        matched = dispatch_get(req, parsed)
+        self.assertTrue(matched)
+        self.assertEqual(req.sent_status, 200)
+        self.assertIsInstance(req.sent_json, list)
+
     def test_parse_loose_json(self):
         self.assertEqual(parse_loose_json_or_lines(""), [])
         self.assertEqual(parse_loose_json_or_lines('["1.1.1.1", "2.2.2.2"]'), ["1.1.1.1", "2.2.2.2"])

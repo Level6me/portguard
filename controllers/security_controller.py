@@ -175,44 +175,72 @@ def handle_ip_info(req, parsed):
 
 
 def handle_blacklist(req, parsed):
-    global _BLACKLIST_CACHE, _BLACKLIST_CACHE_TIME
+    query = parse_qs(parsed.query)
+    limit_raw = query.get("limit", [None])[0]
+    search_kw = (query.get("search", [""])[0] or "").strip()
+
+    if limit_raw in ("all", "0", "-1"):
+        limit_cnt = None
+    elif limit_raw is not None:
+        try:
+            limit_cnt = max(1, min(int(limit_raw), 5000))
+        except Exception:
+            limit_cnt = 300
+    else:
+        limit_cnt = 300
+
     now_mono = time.monotonic()
-    with _BLACKLIST_CACHE_LOCK:
-        if _BLACKLIST_CACHE is not None and (now_mono - _BLACKLIST_CACHE_TIME) < 5.0:
-            cached_data = _BLACKLIST_CACHE
-        else:
-            cached_data = None
-    if cached_data is not None:
-        req._send_json(cached_data)
-        return
+    if not search_kw and limit_cnt == 300:
+        cached_data, cached_time = get_blacklist_cache()
+        if cached_data is not None and (now_mono - cached_time) < 10.0:
+            req._send_json(cached_data)
+            return
 
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
+
+    sql = "SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)"
+    params = []
+    if search_kw:
+        sql += " AND (ip LIKE ? OR reason LIKE ? OR source_node LIKE ? OR country LIKE ?)"
+        kw_like = f"%{search_kw}%"
+        params.extend([kw_like, kw_like, kw_like, kw_like])
+
+    sql += " ORDER BY timestamp DESC"
+    if limit_cnt:
+        sql += " LIMIT ?"
+        params.append(limit_cnt)
+
+    c.execute(sql, tuple(params))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
+
     for r in rows:
         ip_k = r["ip"]
-        geo = _GEO_CACHE.get(ip_k) or resolve_ip_geo_local(ip_k) or {}
         raw_country = (r.get("country") or "").strip()
-        if geo.get("country") and geo["country"] not in ("未知地域", "公网节点", "分析中...", "", "None", None):
+        geo = _GEO_CACHE.get(ip_k)
+        if not geo and (not raw_country or raw_country in ("分析中...", "未知地域", "公网节点", "", "None")):
+            geo = resolve_ip_geo_local(ip_k) or {}
+
+        if geo and geo.get("country") and geo["country"] not in ("未知地域", "公网节点", "分析中...", "", "None", None):
             r["country"] = geo["country"]
             r["region"] = geo.get("region", "")
             r["city"] = geo.get("city", "")
             r["isp"] = geo.get("isp", "")
         else:
             if not raw_country or raw_country in ("分析中...", "未知地域", "公网节点", "", "None"):
-                r["country"] = geo.get("country") or "公网节点"
+                r["country"] = (geo and geo.get("country")) or "公网节点"
                 _EXECUTOR.submit(resolve_ip_geo, ip_k)
             else:
                 r["country"] = raw_country
-            r["region"] = geo.get("region") or r.get("region", "")
-            r["city"] = geo.get("city") or r.get("city", "")
-            r["isp"] = geo.get("isp") or r.get("isp", "")
-        r["threat_tags"] = get_ip_threat_tags(ip_k, geo)
-    with _BLACKLIST_CACHE_LOCK:
-        _BLACKLIST_CACHE = rows
-        _BLACKLIST_CACHE_TIME = now_mono
+            r["region"] = (geo and geo.get("region")) or r.get("region", "")
+            r["city"] = (geo and geo.get("city")) or r.get("city", "")
+            r["isp"] = (geo and geo.get("isp")) or r.get("isp", "")
+        r["threat_tags"] = get_ip_threat_tags(ip_k, geo or {})
+
+    if not search_kw and limit_cnt == 300:
+        set_blacklist_cache(rows, now_mono)
+
     req._send_json(rows)
     return
 

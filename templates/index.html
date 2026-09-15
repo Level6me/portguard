@@ -3440,7 +3440,7 @@
     }
 
     function fetchBlacklist() {
-        return fetch('/api/blacklist').then(res => res.json()).then(data => {
+        return fetch('/api/blacklist?limit=300').then(res => res.json()).then(data => {
             allBlacklist = data;
             renderBlacklistTable();
         }).catch(err => {
@@ -3695,16 +3695,21 @@
 
         checkC2CompromiseStatus(false);
 
-        // 3. 黑名单数据：在首次加载、非轮询或处于概览/日志/黑白名单页面时刷新
-        if (!isPeriodic || currentTabKey === 'iplists' || currentTabKey === 'dashboard' || currentTabKey === 'logs' || allBlacklist.length === 0) {
-            fetch('/api/blacklist').then(res => res.json()).then(data => {
-                allBlacklist = data;
-                renderBlacklistTable();
-            });
+        // 3. 黑名单/白名单数据：仅处于黑白名单页面时刷新
+        if (currentTabKey === 'iplists') {
+            if (currentIpListSubTab === 'blacklist') {
+                fetchBlacklist();
+            } else {
+                fetchWhitelist();
+            }
+            fetch('/api/hidden-ips').then(res => res.json()).then(data => {
+                allHiddenIPs = data || [];
+                updateHiddenBadge(allHiddenIPs.length);
+            }).catch(() => {});
         }
 
-        // 4. 静态规则与配置数据：仅在首次全量加载或显式刷新时拉取，避免 5 秒定时器产生网络洪峰
-        if (!isPeriodic) {
+        // 4. 静态规则与配置数据：仅处于诱捕防御页面时拉取
+        if (currentTabKey === 'traps') {
             fetch('/api/traps').then(res => res.json()).then(data => {
                 allTraps = data;
                 if (currentTrapTab === 'port') renderTrapsTable();
@@ -3719,16 +3724,6 @@
                 allHttpTraps = data;
                 if (currentTrapTab === 'req') renderTrapsTable();
             });
-
-            fetch('/api/whitelist').then(res => res.json()).then(data => {
-                allWhitelist = data;
-                renderWhitelistTable();
-            });
-
-            fetch('/api/hidden-ips').then(res => res.json()).then(data => {
-                allHiddenIPs = data || [];
-                updateHiddenBadge(allHiddenIPs.length);
-            }).catch(() => {});
         }
 
         if (currentTabKey === 'access-logs') {
@@ -4203,11 +4198,24 @@
     let filteredBlacklist = [];
     let blacklistSearchKeyword = '';
 
+    let blacklistSearchTimer = null;
     function onBlacklistSearch() {
         const input = document.getElementById('blacklist-search-input');
         blacklistSearchKeyword = (input ? input.value : '').trim().toLowerCase();
         blacklistPage = 1;
         renderBlacklistTable();
+
+        if (blacklistSearchTimer) clearTimeout(blacklistSearchTimer);
+        blacklistSearchTimer = setTimeout(() => {
+            const kw = blacklistSearchKeyword;
+            const url = kw ? `/api/blacklist?search=${encodeURIComponent(kw)}&limit=300` : '/api/blacklist?limit=300';
+            fetch(url).then(res => res.json()).then(data => {
+                if (blacklistSearchKeyword === kw) {
+                    allBlacklist = data;
+                    renderBlacklistTable();
+                }
+            }).catch(() => {});
+        }, 250);
     }
 
     function changeBlacklistPage(delta) {

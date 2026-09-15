@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+import threading
 import time
 import json
 from urllib.parse import parse_qs
@@ -8,21 +8,50 @@ from sentry_daemon import (
 )
 from controllers.base import load_report_template
 
+_STATS_CACHE = None
+_STATS_CACHE_TIME = 0.0
+_STATS_CACHE_LOCK = threading.Lock()
+
+def invalidate_stats_cache():
+    global _STATS_CACHE, _STATS_CACHE_TIME
+    with _STATS_CACHE_LOCK:
+        _STATS_CACHE = None
+        _STATS_CACHE_TIME = 0.0
+
 def handle_stats(req, parsed):
+    global _STATS_CACHE, _STATS_CACHE_TIME
+    now_mono = time.monotonic()
+    with _STATS_CACHE_LOCK:
+        if _STATS_CACHE is not None and (now_mono - _STATS_CACHE_TIME) < 5.0:
+            req._send_json(_STATS_CACHE)
+            return
+
     conn = get_db()
     c = conn.cursor()
 
-    c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
-    total_banned = c.fetchone()[0]
+    hidden_set = get_hidden_ips_set()
+    has_hidden = len(hidden_set) > 0
+    hidden_filter = "AND ip NOT IN (SELECT ip FROM hidden_ips)" if has_hidden else ""
+    hidden_where = "WHERE ip NOT IN (SELECT ip FROM hidden_ips)" if has_hidden else ""
+
+    if has_hidden:
+        c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
+    else:
+        c.execute("SELECT COUNT(*) FROM blacklist")
+    total_banned = c.fetchone()[0] or 0
 
     today_prefix = time.strftime("%Y-%m-%d", time.localtime())
-    c.execute("SELECT COUNT(*) FROM events WHERE attack_time LIKE ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (f"{today_prefix}%",))
-    today_events = c.fetchone()[0]
+    try:
+        today_start_ts = int(time.mktime(time.strptime(today_prefix, "%Y-%m-%d")))
+        c.execute(f"SELECT COUNT(*) FROM events WHERE timestamp >= ? {hidden_filter}", (today_start_ts,))
+    except Exception:
+        c.execute(f"SELECT COUNT(*) FROM events WHERE attack_time LIKE ? {hidden_filter}", (f"{today_prefix}%",))
+    today_events = c.fetchone()[0] or 0
 
-    c.execute("""
+    c.execute(f"""
     SELECT port, port_name, COUNT(*) as cnt 
     FROM events 
-    WHERE ip NOT IN (SELECT ip FROM hidden_ips)
+    {hidden_where}
     GROUP BY port 
     ORDER BY cnt DESC 
     LIMIT 5
@@ -30,19 +59,19 @@ def handle_stats(req, parsed):
     port_dist = [{"port": row["port"], "name": row["port_name"], "count": row["cnt"]} for row in c.fetchall()]
 
     # 国家排行 Top 10
-    c.execute("""
+    c.execute(f"""
     SELECT country, COUNT(*) as cnt 
     FROM events 
     WHERE country IS NOT NULL AND country != '' 
       AND country NOT IN ('分析中...', '未知地域', 'Localhost', '本地回环')
-      AND ip NOT IN (SELECT ip FROM hidden_ips)
+      {hidden_filter}
     GROUP BY country 
     ORDER BY cnt DESC 
     LIMIT 10
     """)
     geo_rank = [{"country": row["country"], "count": row["cnt"]} for row in c.fetchall()]
 
-    # 24小时趋势
+    # 24小时趋势 (利用 timestamp 索引)
     labels = []
     full_labels = []
     data_points = []
@@ -52,13 +81,13 @@ def handle_stats(req, parsed):
         hour_end = hour_start + 3600
         hour_label = time.strftime("%H:00", time.localtime(hour_start))
         full_label = time.strftime("%Y-%m-%d %H:00", time.localtime(hour_start))
-        c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (hour_start, hour_end))
+        c.execute(f"SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? {hidden_filter}", (hour_start, hour_end))
         labels.append(hour_label)
         full_labels.append(full_label)
-        data_points.append(c.fetchone()[0])
+        data_points.append(c.fetchone()[0] or 0)
 
-    c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
-    unique_attackers = c.fetchone()[0]
+    c.execute(f"SELECT COUNT(DISTINCT ip) FROM events {hidden_where}")
+    unique_attackers = c.fetchone()[0] or 0
 
     cfg = load_config()
     conn.close()
@@ -66,10 +95,10 @@ def handle_stats(req, parsed):
     raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
     active_traps = sum(1 for t in raw_traps if (t.get("enabled", True) if isinstance(t, dict) else True))
     whitelist_count = len(cfg.get("whitelist", []))
-    hidden_ips_cnt = len(get_hidden_ips_set())
+    hidden_ips_cnt = len(hidden_set)
     cluster_nodes_count = max(1, len(cfg.get("cluster_sync", {}).get("cluster_nodes", [])) + 1)
 
-    req._send_json({
+    result_data = {
         "total_banned": total_banned,
         "today_events": today_events,
         "unique_attackers": unique_attackers,
@@ -85,7 +114,13 @@ def handle_stats(req, parsed):
             "full_labels": full_labels,
             "data": data_points
         }
-    })
+    }
+
+    with _STATS_CACHE_LOCK:
+        _STATS_CACHE = result_data
+        _STATS_CACHE_TIME = now_mono
+
+    req._send_json(result_data)
     return
 
 
