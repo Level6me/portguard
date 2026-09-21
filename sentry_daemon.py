@@ -1676,25 +1676,17 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
             return
 
-        # 4. 系统内核实际 LISTEN 监听的未配置活跃系统端口放行（如非标 SSH 端口等，绝不误判为未开放端口探测 PROBE 或多端口扫描）
-        is_zero_trust_all = bool(cfg.get("trap_all_ports", False) and cfg.get("trap_business_ports", False))
-        if dst_port in active_ports_map and not is_zero_trust_all:
-            svc_name = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, f"系统服务 ({dst_port})"))
-            if is_survey_scanner_ip(src_ip):
-                action = "INTERCEPTED"
-                desc = f"测绘扫描拦截: 探测系统监听端口 {dst_port} ({svc_name})"
-                port_info = {
-                    "name": desc,
-                    "category": "survey",
-                    "level": "高危",
-                    "is_business": False
-                }
-                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
-                return
-
-            action = "BUSINESS"
-            desc = f"业务访问: {svc_name} (端口 {dst_port})"
-            _EXECUTOR.submit(_async_write, action, desc)
+        # 4. 空间测绘扫描引擎拦截 (对所有未加入正常业务的端口执行防测绘嗅探保护)
+        if is_survey_scanner_ip(src_ip):
+            action = "INTERCEPTED"
+            desc = f"测绘扫描拦截: 探测未开放端口 {dst_port}"
+            port_info = {
+                "name": desc,
+                "category": "survey",
+                "level": "高危",
+                "is_business": False
+            }
+            _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
             return
 
         # 5. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
@@ -1724,7 +1716,7 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info)
             return
 
-        # 7. 常规单次未开放端口偶发探测（未达到扫描器判定标准，仅记录访问审计日志，不封禁）
+        # 7. 常规单次未开放端口偶发探测（未在业务端口列表中显式配置的端口一律作为外部探测，绝不误判为正常业务）
         action = "PROBE"
         desc = f"未开放端口探测 (端口 {dst_port})"
         _EXECUTOR.submit(_async_write, action, desc)

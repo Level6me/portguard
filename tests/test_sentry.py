@@ -615,16 +615,38 @@ class OptimizationAndHardeningTest(unittest.TestCase):
                 ban_ip("192.168.99.1")
                 mock_fw2.assert_not_called()
 
-    def test_active_system_ports_auto_exemption(self):
+    def test_unconfigured_system_ports_treated_as_probe_or_unopened(self):
         from sentry_daemon import GlobalPortSniffer, init_db
         init_db()
         sniffer = GlobalPortSniffer()
         test_ip = "198.51.100.77"
         
-        with mock.patch("sentry_daemon.get_active_system_ports", return_value={443: "HTTPS 网站", 4212: "Trojan 代理"}), \
+        with mock.patch("sentry_daemon.load_config", return_value={
+                "whitelist": [], "trap_ports": [], "business_ports": [], "enable_port_scan_defense": False, "trap_all_unopened_ports": False, "trap_all_ports": False
+             }), \
+             mock.patch("sentry_daemon.get_active_system_ports", return_value={443: "HTTPS 网站", 4212: "Trojan 代理"}), \
              mock.patch("sentry_daemon.ban_ip") as mock_ban, \
              mock.patch("sentry_daemon.log_port_access_entry") as mock_log:
             # 访问系统内核实际监听但未在 business_ports 显式配置的 4212
+            sniffer._handle_port_access(test_ip, 4212, "TCP")
+            time.sleep(0.05)
+            mock_ban.assert_not_called()
+            mock_log.assert_called_once()
+            args, kwargs = mock_log.call_args
+            self.assertEqual(kwargs.get("action"), "PROBE")
+            self.assertIn("未开放端口探测", kwargs.get("port_name"))
+
+    def test_configured_business_ports_logged_as_business(self):
+        from sentry_daemon import GlobalPortSniffer, init_db
+        init_db()
+        sniffer = GlobalPortSniffer()
+        test_ip = "198.51.100.78"
+        
+        with mock.patch("sentry_daemon.load_config", return_value={
+                "whitelist": [], "trap_ports": [], "business_ports": [{"port": 4212, "name": "Trojan 代理", "block_scanner": False, "block_idc": False}], "enable_port_scan_defense": False
+             }), \
+             mock.patch("sentry_daemon.ban_ip") as mock_ban, \
+             mock.patch("sentry_daemon.log_port_access_entry") as mock_log:
             sniffer._handle_port_access(test_ip, 4212, "TCP")
             time.sleep(0.05)
             mock_ban.assert_not_called()
