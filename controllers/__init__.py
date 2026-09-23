@@ -5,7 +5,7 @@ from controllers.stats_controller import (
 from controllers.settings_controller import (
     handle_settings_get, handle_config_snapshots, handle_config_backup,
     handle_compromise_check, handle_defense_toggle, handle_settings_post,
-    handle_config_rollback
+    handle_config_rollback, handle_auth_status, handle_auth_login, handle_auth_logout
 )
 from controllers.logs_controller import (
     handle_events, handle_access_logs, handle_access_logs_clear
@@ -63,9 +63,12 @@ GET_ROUTES = {
     "/api/http_traps": handle_http_traps,
     "/api/http_traps/export": handle_http_traps,
     "/api/access_logs": handle_access_logs,
+    "/api/auth/status": handle_auth_status,
 }
 
 POST_ROUTES = {
+    "/api/auth/login": handle_auth_login,
+    "/api/auth/logout": handle_auth_logout,
     "/api/access_logs/clear": handle_access_logs_clear,
     "/api/unban": handle_unban,
     "/api/ban": handle_ban,

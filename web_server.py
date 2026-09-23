@@ -24,13 +24,16 @@ from urllib.parse import urlparse, parse_qs
 
 _RAW_HTML_CACHE = None
 _GZIP_HTML_CACHE = None
+_AUTH_SESSIONS = {}  # token -> expire_ts
+_AUTH_LOCK = threading.Lock()
+
 from controllers import dispatch_get, dispatch_post, dispatch_delete
 from sentry_daemon import (
     DB_PATH, CONFIG_PATH, load_config, save_config, get_db, init_db,
     trap_instance, sniffer_instance, site_collector_instance, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
     DEFAULT_HTTP_TRAPS, get_http_traps, check_http_request_traps,
     normalize_trap_item, log_access_entry, validate_ip, run_firewall_cmd,
-    cleanup_expired_bans, ip_in_whitelist, resolve_ip_geo, resolve_ip_geo_local, _GEO_CACHE, _EXECUTOR,
+    cleanup_expired_bans, cleanup_loop, config_watcher_loop, ip_in_whitelist, resolve_ip_geo, resolve_ip_geo_local, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
     ban_ip_firewall, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
@@ -272,6 +275,56 @@ class RequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _create_auth_session(self):
+        token = os.urandom(24).hex()
+        with _AUTH_LOCK:
+            now = time.time()
+            expired = [t for t, exp in _AUTH_SESSIONS.items() if exp < now]
+            for t in expired:
+                _AUTH_SESSIONS.pop(t, None)
+            _AUTH_SESSIONS[token] = now + 7 * 86400
+        return token
+
+    def _destroy_auth_session(self):
+        token = self._get_session_token()
+        if token:
+            with _AUTH_LOCK:
+                _AUTH_SESSIONS.pop(token, None)
+
+    def _get_session_token(self):
+        cookie = self.headers.get("Cookie", "")
+        if cookie:
+            for part in cookie.split(";"):
+                if "=" in part:
+                    k, v = part.strip().split("=", 1)
+                    if k.strip() == "portguard_session":
+                        return v.strip()
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:].strip()
+        token_hdr = self.headers.get("X-Auth-Token", "").strip()
+        if token_hdr:
+            return token_hdr
+        return ""
+
+    def _is_request_authenticated(self):
+        cfg = load_config()
+        if not bool(cfg.get("auth_enabled", False)):
+            return True
+        admin_pwd = str(cfg.get("admin_password", "")).strip()
+        if not admin_pwd:
+            return True
+        token = self._get_session_token()
+        if not token:
+            return False
+        with _AUTH_LOCK:
+            exp = _AUTH_SESSIONS.get(token)
+            if exp and exp > time.time():
+                return True
+            if exp:
+                _AUTH_SESSIONS.pop(token, None)
+        return False
+
     def do_OPTIONS(self):
         self._send_response_data(b"", status=204)
 
@@ -323,6 +376,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_html(HTML_TEMPLATE)
                 return
 
+            if path == "/api/auth/status" or path.startswith("/api/cluster/"):
+                pass
+            elif path.startswith("/api/"):
+                if not self._is_request_authenticated():
+                    self._send_json({"error": "Unauthorized", "auth_required": True, "msg": "控制台安全登录已启用，请先登录"}, status=401)
+                    return
+
             if dispatch_get(self, parsed):
                 return
 
@@ -356,6 +416,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 req_data = {}
 
+            if path in ("/api/auth/login", "/api/auth/logout") or path.startswith("/api/cluster/"):
+                pass
+            elif path.startswith("/api/"):
+                if not self._is_request_authenticated():
+                    self._send_json({"error": "Unauthorized", "auth_required": True, "msg": "控制台安全登录已启用，请先登录"}, status=401)
+                    return
+
             if dispatch_post(self, parsed, req_data):
                 return
 
@@ -388,6 +455,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 req_data = json.loads(body)
             except Exception:
                 req_data = {}
+
+            path = parsed.path
+            if path.startswith("/api/cluster/"):
+                pass
+            elif path.startswith("/api/"):
+                if not self._is_request_authenticated():
+                    self._send_json({"error": "Unauthorized", "auth_required": True, "msg": "控制台安全登录已启用，请先登录"}, status=401)
+                    return
 
             if dispatch_delete(self, parsed, req_data):
                 return
@@ -785,6 +860,9 @@ def run_server():
     sniffer_instance.start()
     site_collector_instance.start()
     cleanup_expired_bans()
+    # 启动后台自动清理守护线程 (定期清理过期黑名单/过期日志/VACUUM) 与配置变动热加载线程
+    threading.Thread(target=cleanup_loop, daemon=True, name="CleanupLoop").start()
+    threading.Thread(target=config_watcher_loop, daemon=True, name="ConfigWatcherLoop").start()
     # 启动多机集群黑白名单全量双向定时自动对齐巡检
     start_cluster_autosync_worker()
 

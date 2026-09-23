@@ -38,7 +38,9 @@ def handle_settings_get(req, parsed):
         "defense_paused": bool(cfg.get("defense_paused", False)),
         "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
         "cluster_sync": cluster_sync,
-        "web_port": int(cfg.get("web_port", 9099) or 9099)
+        "web_port": int(cfg.get("web_port", 9099) or 9099),
+        "auth_enabled": bool(cfg.get("auth_enabled", False)),
+        "has_password": bool(str(cfg.get("admin_password", "")).strip())
     })
     return
 
@@ -129,6 +131,12 @@ def handle_settings_post(req, parsed, req_data):
         cfg["trap_all_ports"] = bool(req_data["trap_all_ports"])
     if "defense_paused" in req_data:
         cfg["defense_paused"] = bool(req_data["defense_paused"])
+    if "auth_enabled" in req_data:
+        cfg["auth_enabled"] = bool(req_data["auth_enabled"])
+    if "admin_password" in req_data:
+        new_pwd = str(req_data["admin_password"]).strip()
+        if new_pwd and not all(ch == '*' for ch in new_pwd):
+            cfg["admin_password"] = new_pwd
     if "cluster_sync" in req_data and isinstance(req_data["cluster_sync"], dict):
         cs = req_data["cluster_sync"]
         old_cs = cfg.get("cluster_sync", {})
@@ -155,7 +163,6 @@ def handle_settings_post(req, parsed, req_data):
     return
 
 
-
 def handle_config_rollback(req, parsed, req_data):
     # 快照一键回滚接口
     snap_filename = req_data.get("filename", "").strip()
@@ -165,5 +172,57 @@ def handle_config_rollback(req, parsed, req_data):
     ok, msg = rollback_config_snapshot(snap_filename)
     req._send_json({"success": ok, "msg": msg})
     return
+
+
+def handle_auth_status(req, parsed):
+    cfg = load_config()
+    auth_enabled = bool(cfg.get("auth_enabled", False))
+    admin_pwd = str(cfg.get("admin_password", "")).strip()
+    logged_in = True
+    if auth_enabled and admin_pwd:
+        if hasattr(req, "_is_request_authenticated"):
+            logged_in = req._is_request_authenticated()
+        else:
+            logged_in = False
+    req._send_json({
+        "auth_enabled": auth_enabled,
+        "has_password": bool(admin_pwd),
+        "logged_in": logged_in
+    })
+
+
+def handle_auth_login(req, parsed, req_data):
+    cfg = load_config()
+    auth_enabled = bool(cfg.get("auth_enabled", False))
+    admin_pwd = str(cfg.get("admin_password", "")).strip()
+    if not auth_enabled or not admin_pwd:
+        req._send_json({"success": True, "auth_enabled": False, "msg": "系统当前未开启密码认证，已自动放行"})
+        return
+
+    password = str(req_data.get("password", "")).strip()
+    if password == admin_pwd:
+        token = ""
+        if hasattr(req, "_create_auth_session"):
+            token = req._create_auth_session()
+        cookie_header = f"portguard_session={token}; Path=/; Max-Age=604800; SameSite=Lax"
+        req.send_response(200)
+        req.send_header('Content-Type', 'application/json; charset=utf-8')
+        req.send_header('Set-Cookie', cookie_header)
+        req.end_headers()
+        req.wfile.write(json.dumps({"success": True, "token": token, "msg": "认证成功，正在进入控制台..."}).encode('utf-8'))
+    else:
+        req._send_json({"success": False, "msg": "认证失败：管理密码错误"}, status=403)
+
+
+def handle_auth_logout(req, parsed, req_data):
+    if hasattr(req, "_destroy_auth_session"):
+        req._destroy_auth_session()
+    cookie_header = "portguard_session=; Path=/; Max-Age=0; SameSite=Lax"
+    req.send_response(200)
+    req.send_header('Content-Type', 'application/json; charset=utf-8')
+    req.send_header('Set-Cookie', cookie_header)
+    req.end_headers()
+    req.wfile.write(json.dumps({"success": True, "msg": "已安全退出管理登录"}).encode('utf-8'))
+
 
 

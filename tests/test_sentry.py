@@ -295,7 +295,8 @@ class IsTrapPortTest(unittest.TestCase):
         conn_pre.commit()
         conn_pre.close()
 
-        with mock.patch("sentry_daemon.get_active_ssh_client_ips", return_value=set()):
+        with mock.patch("sentry_daemon.get_active_ssh_client_ips", return_value=set()), \
+             mock.patch("sentry_daemon.load_config", return_value={"defense_paused": False}):
             # 执行封禁
             ban_ip(test_ip, port=443, reason="Web特征: 探测高危敏感配置文件", category="web", level="极高危")
             time.sleep(0.1)  # 等待异步批量日志落盘

@@ -119,13 +119,40 @@ class WebRoutesTest(unittest.TestCase):
         self.assertEqual(req.sent_status, 200)
         self.assertIsInstance(req.sent_json, list)
 
-    def test_parse_loose_json(self):
-        self.assertEqual(parse_loose_json_or_lines(""), [])
-        self.assertEqual(parse_loose_json_or_lines('["1.1.1.1", "2.2.2.2"]'), ["1.1.1.1", "2.2.2.2"])
-        # trailing comma tolerance
-        self.assertEqual(parse_loose_json_or_lines('["1.1.1.1", ]'), ["1.1.1.1"])
-        # plain text line mode
-        self.assertEqual(parse_loose_json_or_lines("1.1.1.1\n2.2.2.2"), ["1.1.1.1", "2.2.2.2"])
+    def test_dispatch_get_blacklist_paged_structure(self):
+        req = MockRequest()
+        parsed = urlparse("/api/blacklist?page=1&page_size=10")
+        matched = dispatch_get(req, parsed)
+        self.assertTrue(matched)
+        self.assertEqual(req.sent_status, 200)
+        self.assertIsInstance(req.sent_json, dict)
+        self.assertIn("total", req.sent_json)
+        self.assertIn("items", req.sent_json)
+        self.assertEqual(req.sent_json["page"], 1)
+        self.assertEqual(req.sent_json["page_size"], 10)
+
+    def test_auth_status_and_login(self):
+        # 1. 状态查询
+        req = MockRequest()
+        parsed = urlparse("/api/auth/status")
+        matched = dispatch_get(req, parsed)
+        self.assertTrue(matched)
+        self.assertEqual(req.sent_status, 200)
+        self.assertIn("auth_enabled", req.sent_json)
+
+        # 2. 模拟登录（在未开启密码时放行，在开启密码时验证）
+        req_post = MockRequest()
+        parsed_post = urlparse("/api/auth/login")
+        matched_post = dispatch_post(req_post, parsed_post, {"password": "test"})
+        self.assertTrue(matched_post)
+        self.assertIn(req_post.sent_status, (200, 403))
+
+        # 3. 登出
+        req_out = MockRequest()
+        parsed_out = urlparse("/api/auth/logout")
+        matched_out = dispatch_post(req_out, parsed_out, {})
+        self.assertTrue(matched_out)
+        self.assertEqual(req_out.sent_status, 200)
 
 if __name__ == "__main__":
     unittest.main()

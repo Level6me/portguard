@@ -177,20 +177,35 @@ def handle_ip_info(req, parsed):
 def handle_blacklist(req, parsed):
     query = parse_qs(parsed.query)
     limit_raw = query.get("limit", [None])[0]
+    page_raw = query.get("page", [None])[0]
+    page_size_raw = query.get("page_size", [None])[0]
     search_kw = (query.get("search", [""])[0] or "").strip()
+    is_paginated_mode = (page_raw is not None) or (query.get("paginated", [""])[0] in ("1", "true"))
 
-    if limit_raw in ("all", "0", "-1"):
-        limit_cnt = None
-    elif limit_raw is not None:
+    is_all = limit_raw in ("all", "0", "-1")
+
+    # 分页参数计算
+    try:
+        page = max(1, int(page_raw)) if page_raw else 1
+    except Exception:
+        page = 1
+
+    if page_size_raw is not None:
         try:
-            limit_cnt = max(1, min(int(limit_raw), 5000))
+            page_size = max(1, min(int(page_size_raw), 500))
         except Exception:
-            limit_cnt = 300
+            page_size = 50
+    elif limit_raw is not None and not is_all:
+        try:
+            page_size = max(1, min(int(limit_raw), 5000))
+        except Exception:
+            page_size = 300
     else:
-        limit_cnt = 300
+        page_size = 50 if is_paginated_mode else 300
 
     now_mono = time.monotonic()
-    if not search_kw and limit_cnt == 300:
+    # 针对默认无搜索的第1页或默认查询缓存10秒
+    if not search_kw and not is_all and page == 1 and page_size == 300 and not is_paginated_mode:
         cached_data, cached_time = get_blacklist_cache()
         if cached_data is not None and (now_mono - cached_time) < 10.0:
             req._send_json(cached_data)
@@ -199,17 +214,27 @@ def handle_blacklist(req, parsed):
     conn = get_db()
     c = conn.cursor()
 
-    sql = "SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)"
-    params = []
+    base_where = " WHERE ip NOT IN (SELECT ip FROM hidden_ips)"
+    where_params = []
     if search_kw:
-        sql += " AND (ip LIKE ? OR reason LIKE ? OR source_node LIKE ? OR country LIKE ?)"
+        base_where += " AND (ip LIKE ? OR reason LIKE ? OR source_node LIKE ? OR country LIKE ?)"
         kw_like = f"%{search_kw}%"
-        params.extend([kw_like, kw_like, kw_like, kw_like])
+        where_params.extend([kw_like, kw_like, kw_like, kw_like])
 
+    # 统计总数 (仅在分页模式或全量导出下高效统计)
+    total_count = 0
+    if is_paginated_mode or is_all:
+        c.execute("SELECT COUNT(*) FROM blacklist" + base_where, tuple(where_params))
+        total_count = c.fetchone()[0]
+
+    sql = "SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist" + base_where
+    params = list(where_params)
     sql += " ORDER BY timestamp DESC"
-    if limit_cnt:
-        sql += " LIMIT ?"
-        params.append(limit_cnt)
+
+    if not is_all:
+        offset = max(0, (page - 1) * page_size)
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([page_size, offset])
 
     c.execute(sql, tuple(params))
     rows = [dict(r) for r in c.fetchall()]
@@ -238,10 +263,20 @@ def handle_blacklist(req, parsed):
             r["isp"] = (geo and geo.get("isp")) or r.get("isp", "")
         r["threat_tags"] = get_ip_threat_tags(ip_k, geo or {})
 
-    if not search_kw and limit_cnt == 300:
+    if not search_kw and page == 1 and page_size == 300 and not is_paginated_mode:
         set_blacklist_cache(rows, now_mono)
 
-    req._send_json(rows)
+    if is_paginated_mode:
+        total_pages = max(1, (total_count + page_size - 1) // page_size) if page_size > 0 else 1
+        req._send_json({
+            "total": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "items": rows
+        })
+    else:
+        req._send_json(rows)
     return
 
 

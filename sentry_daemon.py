@@ -68,8 +68,10 @@ from core.mesh import (
     sync_cluster_mesh_state, start_cluster_autosync_worker,
 )
 
-# 全局线程池：限制并发，避免扫描风暴下线程爆炸
-_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sentry")
+# 核心防御高优先级线程池 (限制并发，避免扫描风暴下线程爆炸)
+_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="SentryWorker")
+# 外部网络 I/O 隔离线程池 (GeoIP 溯源查询、慢速外网请求，与核心防御彻底隔离)
+_GEO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="GeoWorker")
 
 from collectors.packet import ParsedPacket, parse_packet, parse_port_range
 
@@ -535,7 +537,7 @@ def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTE
             pass
 
         if not geo and ip not in ("127.0.0.1", "::1", "localhost"):
-            _EXECUTOR.submit(resolve_ip_geo, ip)
+            _GEO_EXECUTOR.submit(resolve_ip_geo, ip)
     except Exception:
         pass
 
@@ -859,7 +861,7 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
                 except Exception:
                     pass
 
-            _EXECUTOR.submit(_async_geo_watch, w_event_id, w_port_id, ip)
+            _GEO_EXECUTOR.submit(_async_geo_watch, w_event_id, w_port_id, ip)
         except Exception:
             pass
         return
@@ -1105,7 +1107,32 @@ class TrapServer:
         self.running = True
         self.reload()
         threading.Thread(target=self._loop, daemon=True).start()
-        
+
+    def _bind_socket(self, port, backlog=64):
+        """优先尝试 IPv6 双栈绑定（同时监听 IPv4 与 IPv6），失败则降级为 IPv4 单栈"""
+        try:
+            s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (AttributeError, OSError):
+                pass
+            s.bind(("::", port))
+            s.listen(backlog)
+            s.setblocking(False)
+            return s
+        except Exception:
+            pass
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", port))
+            s.listen(backlog)
+            s.setblocking(False)
+            return s
+        except Exception:
+            return None
+
     def reload(self):
         if self.epoll:
             try:
@@ -1171,12 +1198,8 @@ class TrapServer:
                 if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
                     print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
                     break
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    s.bind(("0.0.0.0", port))
-                    s.listen(64)
-                    s.setblocking(False)
+                s = self._bind_socket(port, backlog=64)
+                if s:
                     fd = s.fileno()
                     if self.epoll:
                         self.epoll.register(fd, select.EPOLLIN)
@@ -1184,8 +1207,6 @@ class TrapServer:
                     self.trap_map[port] = item
                     total_bound += 1
                     bound_count_for_item += 1
-                except Exception:
-                    pass
 
             display_port = item.get("port")
             if bound_count_for_item > 0:
@@ -1200,12 +1221,8 @@ class TrapServer:
                 for dp in seed_ports:
                     if dp in active_ports or dp in self.trap_map or dp == web_port or dp == cluster_port:
                         continue
-                    try:
-                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        s.bind(("0.0.0.0", dp))
-                        s.listen(32)
-                        s.setblocking(False)
+                    s = self._bind_socket(dp, backlog=32)
+                    if s:
                         fd = s.fileno()
                         if self.epoll:
                             self.epoll.register(fd, select.EPOLLIN)
@@ -1221,8 +1238,6 @@ class TrapServer:
                         dynamic_count += 1
                         if dynamic_count >= 3:
                             break
-                    except Exception:
-                        pass
                 if dynamic_count > 0:
                     print(f"[Trap] 移动目标防御 MTD 成功随机激活 {dynamic_count} 个动态浮动诱捕靶点")
             except Exception:
@@ -1230,7 +1245,7 @@ class TrapServer:
 
     def _handle_trap_client(self, client_sock, client_addr, port, port_info):
         """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，提取恶意样本 URL，并在结束时伪装 TCP RST 或实施 Tarpit 粘滞减速"""
-        client_ip = client_addr[0]
+        client_ip = client_addr[0].replace("::ffff:", "")
         payload_captured = ""
         sample_urls_found = []
         cfg = load_config()
@@ -1374,7 +1389,7 @@ class TrapServer:
                             s, port = self.sockets[fd]
                             try:
                                 client_sock, client_addr = s.accept()
-                                client_ip = client_addr[0]
+                                client_ip = client_addr[0].replace("::ffff:", "")
                                 
                                 # 严格忽略本机及本地回环测试流量
                                 if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
@@ -1394,7 +1409,7 @@ class TrapServer:
                             if sock_obj == s:
                                 try:
                                     client_sock, client_addr = s.accept()
-                                    client_ip = client_addr[0]
+                                    client_ip = client_addr[0].replace("::ffff:", "")
                                     
                                     if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
                                         client_sock.close()
@@ -1441,8 +1456,6 @@ def check_port_scan_attack(src_ip, dst_port, cfg):
             return True
     return False
 
-# 全局单例异步工作线程池 (限制最大 8 线程并发，防止极端流量下线程爆满)
-_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="SentryWorker")
 
 class GlobalPortSniffer:
     """
@@ -1451,6 +1464,8 @@ class GlobalPortSniffer:
     def __init__(self):
         self.running = False
         self.raw_sock = None
+        self.raw_sock_udp = None
+        self.raw_sock_v6 = None
         self._sniffer_thread = None
         self.local_ips = set(get_local_ips())
         self._recent_cache = {}  # (src_ip, dst_port, proto) -> timestamp
@@ -1465,11 +1480,12 @@ class GlobalPortSniffer:
 
     def stop(self):
         self.running = False
-        if self.raw_sock:
-            try:
-                self.raw_sock.close()
-            except Exception:
-                pass
+        for s in (self.raw_sock, getattr(self, "raw_sock_udp", None), getattr(self, "raw_sock_v6", None)):
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
     def _sniff_loop(self):
         try:
@@ -1490,11 +1506,20 @@ class GlobalPortSniffer:
         except Exception:
             pass
 
+        # 尝试启动 IPv6 TCP Raw Socket 监听以支持双栈网络
+        self.raw_sock_v6 = None
+        try:
+            self.raw_sock_v6 = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        except Exception:
+            pass
+
         while self.running:
             try:
                 sock_list = [self.raw_sock]
                 if self.raw_sock_udp:
                     sock_list.append(self.raw_sock_udp)
+                if self.raw_sock_v6:
+                    sock_list.append(self.raw_sock_v6)
                 
                 readable, _, _ = select.select(sock_list, [], [], 1.0)
                 for sock in readable:

@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "web_port": 9099,
     "web_bind": "127.0.0.1",
     "admin_password": "",
+    "auth_enabled": False,
     "defense_mode": "standard",
     "ban_action_iptables": True,
     "ban_action_blackhole": True,
