@@ -262,5 +262,150 @@ class TestNotifyAndFeishu(unittest.TestCase):
         self.assertIn("自动检测并绑定", msg)
 
 
+class TestFeishuCommands(unittest.TestCase):
+    def setUp(self):
+        self.mgr = FeishuWsManager()
+        self.mgr.app_id = "cli_test"
+        self.mgr.app_secret = "sec_test"
+        self.cfg = {
+            "node_name": "Test-Node",
+            "feishu_bot": {
+                "enabled": True,
+                "app_id": "cli_test",
+                "app_secret": "sec_test",
+                "receive_id": "oc_test_chat_id",
+                "receive_id_type": "chat_id"
+            },
+            "defense_paused": False,
+            "whitelist": [{"ip": "10.0.0.1", "remark": "受信任运维机"}],
+            "business_ports": [80, 443]
+        }
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("core.db.save_config")
+    @patch("core.db.load_config")
+    def test_feishu_auto_bind(self, mock_load, mock_save, mock_send_app):
+        """测试首次收到消息自动绑定 chat_id"""
+        cfg_copy = dict(self.cfg)
+        cfg_copy["feishu_bot"] = dict(self.cfg["feishu_bot"])
+        cfg_copy["feishu_bot"]["receive_id"] = ""
+        mock_load.return_value = cfg_copy
+
+        self.mgr._handle_auto_bind_and_command("oc_new_group_123", "ou_sender", "你好")
+
+        self.assertEqual(cfg_copy["feishu_bot"]["receive_id"], "oc_new_group_123")
+        self.assertTrue(mock_save.called)
+        self.assertTrue(mock_send_app.called)
+        card = mock_send_app.call_args[1].get("card_dict")
+        self.assertIn("自动绑定成功", card["header"]["title"]["content"])
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("core.firewall.get_blacklisted_ips_set")
+    @patch("sentry_daemon.get_all_business_ports_info")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_status(self, mock_load, mock_ports, mock_bans, mock_send_app):
+        """测试 /status 查看实时安全防御态势看板"""
+        mock_load.return_value = self.cfg
+        mock_ports.return_value = [{"port": 80}, {"port": 443}]
+        mock_bans.return_value = {"198.51.100.1", "198.51.100.2"}
+
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/status")
+
+        self.assertTrue(mock_send_app.called)
+        card = mock_send_app.call_args[1].get("card_dict")
+        self.assertIn("实时安全防御态势", card["header"]["title"]["content"])
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("sentry_daemon.ban_ip")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_ban_and_whitelist_protect(self, mock_load, mock_ban, mock_send_app):
+        """测试 /ban 封禁指令与核心白名单防自锁保护"""
+        mock_load.return_value = self.cfg
+
+        # 1. 正常封禁
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/ban 198.51.100.99 恶意爆破")
+        mock_ban.assert_called_with("198.51.100.99", port=0, reason="恶意爆破", trigger_type="feishu_manual")
+
+        # 2. 白名单保护
+        mock_ban.reset_mock()
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/ban 10.0.0.1 尝试误封")
+        mock_ban.assert_not_called()
+        self.assertTrue(mock_send_app.called)
+        last_text = mock_send_app.call_args[1].get("text_content") or ""
+        self.assertIn("白名单", last_text)
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("sentry_daemon.unban_ip_core")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_unban(self, mock_load, mock_unban, mock_send_app):
+        """测试 /unban 解封指令"""
+        mock_load.return_value = self.cfg
+
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/unban 198.51.100.99")
+        mock_unban.assert_called_with("198.51.100.99")
+        self.assertTrue(mock_send_app.called)
+        card = mock_send_app.call_args[1].get("card_dict")
+        self.assertIn("解封成功", card["header"]["title"]["content"])
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("sentry_daemon.broadcast_cluster_whitelist")
+    @patch("sentry_daemon.unban_ip_core")
+    @patch("core.db.save_config")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_white_and_unwhite(self, mock_load, mock_save, mock_unban, mock_broadcast, mock_send_app):
+        """测试 /white 加白 与 /unwhite 删白 指令"""
+        cfg_copy = dict(self.cfg)
+        cfg_copy["whitelist"] = list(self.cfg["whitelist"])
+        mock_load.return_value = cfg_copy
+
+        # 加白
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/white 192.168.10.5 办公机")
+        self.assertTrue(any(w.get("ip") == "192.168.10.5" for w in cfg_copy["whitelist"]))
+        self.assertTrue(mock_unban.called)
+        self.assertTrue(mock_broadcast.called)
+
+        # 删白
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/unwhite 192.168.10.5")
+        self.assertFalse(any(w.get("ip") == "192.168.10.5" for w in cfg_copy["whitelist"]))
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("sentry_daemon.init_firewall_ipset")
+    @patch("sentry_daemon.flush_firewall_blocks")
+    @patch("core.db.save_config")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_pause_and_resume(self, mock_load, mock_save, mock_flush, mock_init, mock_send_app):
+        """测试 /pause 暂停防御 与 /resume 恢复防御 指令"""
+        cfg_copy = dict(self.cfg)
+        mock_load.return_value = cfg_copy
+
+        # 暂停防御
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/pause")
+        self.assertTrue(cfg_copy["defense_paused"])
+        self.assertTrue(mock_flush.called)
+
+        # 恢复防御
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/resume")
+        self.assertFalse(cfg_copy["defense_paused"])
+        self.assertTrue(mock_init.called)
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_check_and_help(self, mock_load, mock_send_app):
+        """测试 /check 溯源画像与 /help 帮助指令"""
+        mock_load.return_value = self.cfg
+
+        # 查 IP
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/check 8.8.8.8")
+        self.assertTrue(mock_send_app.called)
+        card1 = mock_send_app.call_args[1].get("card_dict")
+        self.assertIn("威胁情报溯源画像", card1["header"]["title"]["content"])
+
+        # 帮助手册
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/help")
+        card2 = mock_send_app.call_args[1].get("card_dict")
+        self.assertIn("快捷控制指令手册", card2["header"]["title"]["content"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

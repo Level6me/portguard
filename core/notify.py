@@ -544,8 +544,15 @@ class FeishuWsManager:
             parts = cmd.split()
             cmd = " ".join([p for p in parts if not p.startswith("@_user_")]).strip()
 
-        # 命令 1：/status 或 状态
-        if cmd in ("/status", "状态", "status"):
+        if not cmd:
+            return
+
+        parts = cmd.split()
+        op = parts[0].lower()
+        args = parts[1:]
+
+        # 1. 状态查看: /status, 状态, /s
+        if op in ("/status", "状态", "status", "/s"):
             try:
                 from sentry_daemon import get_all_business_ports_info
                 from core.firewall import get_blacklisted_ips_set
@@ -570,8 +577,165 @@ class FeishuWsManager:
             except Exception as e:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"获取状态异常: {e}")
 
-        # 命令 2：/ports 或 端口
-        elif cmd in ("/ports", "端口", "ports"):
+        # 2. 封禁/拉黑 IP: /ban <ip> [原因], 封禁 <ip> [原因], 拉黑 <ip> [原因]
+        elif op in ("/ban", "封禁", "拉黑"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /ban <IP地址> [原因]")
+                return
+            ip = args[0].strip()
+            reason = " ".join(args[1:]).strip() if len(args) > 1 else "飞书管理员手动拉黑"
+            from sentry_daemon import validate_ip, ip_in_whitelist, ban_ip
+            v_ip = validate_ip(ip)
+            if not v_ip:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 地址: {ip}")
+                return
+            if ip_in_whitelist(v_ip):
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"⚠️ 该 IP ({v_ip}) 位于核心白名单中，受防自锁保护禁止封禁！")
+                return
+            try:
+                ban_ip(v_ip, port=0, reason=reason, trigger_type="feishu_manual")
+                card = build_feishu_card(
+                    "🚨 PortGuard 手动拉黑封禁成功",
+                    f"**已对目标 IP `{v_ip}` 实施最高级别实时阻断处置**",
+                    fields=[
+                        ("🖥️ 操作节点", node_name),
+                        ("🎯 封禁目标", v_ip),
+                        ("⚠️ 处置原因", reason),
+                        ("⚡ 执行机制", "Linux 内核 IPSet + 黑洞路由 + 集群同步"),
+                        ("⏰ 处置时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    ],
+                    color="carmine"
+                )
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+            except Exception as e:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"封禁操作失败: {e}")
+
+        # 3. 解封 IP: /unban <ip>, 解封 <ip>
+        elif op in ("/unban", "解封"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /unban <IP地址>")
+                return
+            ip = args[0].strip()
+            from sentry_daemon import validate_ip, unban_ip_core
+            v_ip = validate_ip(ip)
+            if not v_ip:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 地址: {ip}")
+                return
+            try:
+                unban_ip_core(v_ip)
+                card = build_feishu_card(
+                    "✅ PortGuard 解封成功",
+                    f"已将目标 IP `{v_ip}` 从内核 IPSet 防火墙与黑洞路由中彻底解封！",
+                    fields=[
+                        ("🖥️ 操作节点", node_name),
+                        ("🎯 解封目标", v_ip),
+                        ("⚡ 生效状态", "防火墙阻断已排空，集群状态已同步"),
+                        ("⏰ 操作时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    ],
+                    color="turquoise"
+                )
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+            except Exception as e:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"解封失败: {e}")
+
+        # 4. 加白名单: /white <ip> [备注], /wl <ip>, 加白 <ip> [备注]
+        elif op in ("/white", "/wl", "加白", "加白名单"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /white <IP或CIDR> [备注名称]")
+                return
+            ip = args[0].strip()
+            remark = " ".join(args[1:]).strip() if len(args) > 1 else "飞书快捷加白"
+            from sentry_daemon import validate_ip, unban_ip_core, broadcast_cluster_whitelist
+            is_cidr = "/" in ip
+            if is_cidr:
+                import ipaddress
+                try:
+                    ipaddress.ip_network(ip, strict=False)
+                    v_ip = ip
+                except Exception:
+                    v_ip = None
+            else:
+                v_ip = validate_ip(ip)
+            if not v_ip:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 或子网: {ip}")
+                return
+            try:
+                current_wl = cfg.get("whitelist", [])
+                already = False
+                for item in current_wl:
+                    if isinstance(item, dict) and item.get("ip") == v_ip:
+                        item["remark"] = remark
+                        already = True
+                        break
+                    elif isinstance(item, str) and item == v_ip:
+                        already = True
+                        break
+                if not already:
+                    current_wl.append({"ip": v_ip, "remark": remark})
+                cfg["whitelist"] = current_wl
+                save_config(cfg)
+                unban_ip_core(v_ip, status_event="WHITELIST")
+                broadcast_cluster_whitelist(v_ip, remark=remark)
+                card = build_feishu_card(
+                    "🛡️ PortGuard 添加白名单成功",
+                    f"已成功将目标 `{v_ip}` 纳管至系统永久放行白名单！",
+                    fields=[
+                        ("🖥️ 操作节点", node_name),
+                        ("🛡️ 白名单目标", v_ip),
+                        ("📝 备注信息", remark),
+                        ("⚡ 处置联动", "已从本地与集群黑名单彻底解除并永久放行"),
+                        ("⏰ 生效时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    ],
+                    color="turquoise"
+                )
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+            except Exception as e:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"添加白名单异常: {e}")
+
+        # 5. 减白名单: /unwhite <ip>, 减白 <ip>, 删白 <ip>
+        elif op in ("/unwhite", "/delwhite", "减白", "删白"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /unwhite <IP地址>")
+                return
+            ip = args[0].strip()
+            current_wl = cfg.get("whitelist", [])
+            new_wl = [it for it in current_wl if not (
+                (isinstance(it, dict) and it.get("ip") == ip) or
+                (isinstance(it, str) and it == ip)
+            )]
+            if len(new_wl) == len(current_wl):
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"⚠️ 白名单中未找到目标 IP: {ip}")
+                return
+            cfg["whitelist"] = new_wl
+            save_config(cfg)
+            card = build_feishu_card(
+                "🗑️ PortGuard 移除白名单成功",
+                f"已将目标 `{ip}` 从放行白名单中移除，后续异常访问将正常受到防护审计。",
+                fields=[("🖥️ 操作节点", node_name), ("🎯 移除目标", ip), ("⏰ 时间", time.strftime("%Y-%m-%d %H:%M:%S"))],
+                color="orange"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 6. 查看白名单列表: /whitelist, /wl, 白名单
+        elif op in ("/whitelist", "白名单"):
+            current_wl = cfg.get("whitelist", [])
+            lines = []
+            for it in current_wl[:20]:
+                if isinstance(it, dict):
+                    lines.append(f"• `{it.get('ip')}` - {it.get('remark', '')}")
+                elif isinstance(it, str):
+                    lines.append(f"• `{it}`")
+            list_str = "\n".join(lines) if lines else "暂无自定义白名单"
+            card = build_feishu_card(
+                "📋 PortGuard 安全白名单清单",
+                f"当前系统共维护 **{len(current_wl)}** 个白名单目标：\n\n{list_str}",
+                fields=[("🖥️ 节点", node_name), ("⏰ 查询时间", time.strftime("%Y-%m-%d %H:%M:%S"))],
+                color="blue"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 7. 端口与监听列表: /ports, 端口
+        elif op in ("/ports", "端口", "ports"):
             try:
                 from sentry_daemon import get_raw_kernel_listen_ports_with_details, get_all_business_ports_info
                 k_ports = get_raw_kernel_listen_ports_with_details()
@@ -593,36 +757,184 @@ class FeishuWsManager:
             except Exception as e:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"获取端口清单异常: {e}")
 
-        # 命令 3：/unban <ip>
-        elif cmd.startswith("/unban") or cmd.startswith("解封"):
-            parts = cmd.split()
-            if len(parts) >= 2:
-                ip = parts[1].strip()
-                try:
-                    from core.firewall import unban_ip_core
-                    unban_ip_core(ip)
-                    card = build_feishu_card(
-                        "✅ PortGuard 解封成功",
-                        f"已将目标 IP `{ip}` 从内核 IPSet 防火墙与黑洞路由中彻底解封！",
-                        fields=[("🖥️ 操作节点", node_name), ("🎯 解封 IP", ip), ("⏰ 时间", time.strftime("%Y-%m-%d %H:%M:%S"))],
-                        color="turquoise"
-                    )
-                    send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
-                except Exception as e:
-                    send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"解封失败: {e}")
-            else:
-                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="使用方法: /unban <目标IP>")
-
-        # 命令 4：/help 或 帮助
-        elif cmd in ("/help", "帮助", "help", "?", "？"):
+        # 8. 添加业务端口放行: /port <端口> [服务名], /addport <端口> [服务名], 加端口 <端口> [服务名]
+        elif op in ("/port", "/addport", "加端口", "放行"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /port <端口号> [服务名称]")
+                return
+            try:
+                p_num = int(args[0])
+                if not (1 <= p_num <= 65535):
+                    raise ValueError("端口范围必须在 1-65535 之间")
+            except Exception:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 端口格式错误: {args[0]}")
+                return
+            svc_name = " ".join(args[1:]).strip() if len(args) > 1 else f"业务服务 ({p_num})"
+            from sentry_daemon import invalidate_system_ports_cache
+            biz = cfg.get("business_ports", [])
+            exists = any((x == p_num or (isinstance(x, dict) and x.get("port") == p_num)) for x in biz)
+            if not exists:
+                biz.append({
+                    "port": p_num,
+                    "name": svc_name,
+                    "category": "custom",
+                    "remark": "飞书快捷纳管放行",
+                    "block_idc": False,
+                    "block_scanner": True,
+                    "is_system": False,
+                    "enabled": True
+                })
+                cfg["business_ports"] = biz
+                save_config(cfg)
+                invalidate_system_ports_cache()
             card = build_feishu_card(
-                "💡 PortGuard 飞书长连接助手指令手册",
-                "您可以通过本会话直接与 PortGuard 诱捕防御引擎进行双向控制交互：\n\n"
-                "• `/status` - 查看实时运行状态与封禁态势\n"
-                "• `/ports` - 查看内核活跃监听端口与业务端口列表\n"
-                "• `/unban <IP>` - 快速解封指定 IP 目标\n"
-                "• `/help` - 调出本指令菜单\n\n"
-                "💡 **自动纳管**：当服务器启动新的业务监听端口时，系统将自动纳管并推送告警卡片至本会话。",
+                "🔌 PortGuard 业务端口放行成功",
+                f"已将端口 `TCP {p_num}` 成功加入正常业务端口列表并立即放行！",
+                fields=[
+                    ("🖥️ 操作节点", node_name),
+                    ("🔌 放行端口", f"TCP {p_num}"),
+                    ("📦 服务名称", svc_name),
+                    ("⚡ 防护策略", "已移出蜜罐诱捕范围，正常放行业务流量"),
+                    ("⏰ 生效时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                ],
+                color="turquoise"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 9. 移除业务端口: /delport <端口>, 删端口 <端口>
+        elif op in ("/delport", "删端口"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /delport <端口号>")
+                return
+            try:
+                p_num = int(args[0])
+            except Exception:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 端口格式错误: {args[0]}")
+                return
+            from sentry_daemon import invalidate_system_ports_cache
+            biz = cfg.get("business_ports", [])
+            new_biz = [x for x in biz if not ((x == p_num) or (isinstance(x, dict) and x.get("port") == p_num))]
+            if len(new_biz) == len(biz):
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"⚠️ 业务端口列表中未找到端口: {p_num}")
+                return
+            cfg["business_ports"] = new_biz
+            save_config(cfg)
+            invalidate_system_ports_cache()
+            card = build_feishu_card(
+                "🗑️ PortGuard 业务端口移除成功",
+                f"已从业务端口列表中移除 `TCP {p_num}`。",
+                fields=[("🖥️ 操作节点", node_name), ("🔌 移除端口", f"TCP {p_num}"), ("⏰ 时间", time.strftime("%Y-%m-%d %H:%M:%S"))],
+                color="orange"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 10. 暂停防御: /pause, 暂停, 暂停防御
+        elif op in ("/pause", "暂停", "暂停防御"):
+            from sentry_daemon import flush_firewall_blocks
+            cfg["defense_paused"] = True
+            save_config(cfg)
+            flush_firewall_blocks()
+            card = build_feishu_card(
+                "⏸️ PortGuard 防御拦截已暂停 (观察模式)",
+                "**系统已进入应急观察模式**\n"
+                "所有 Linux 内核防火墙阻断与黑洞路由已清空排空，入站流量已全部放行，后台日志审计与蜜罐监听保持运行。",
+                fields=[
+                    ("🖥️ 操作节点", node_name),
+                    ("🛡️ 当前状态", "观察模式 (暂停拦截)"),
+                    ("💡 恢复指令", "发送 `/resume` 即可随时恢复主动拦截"),
+                    ("⏰ 操作时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                ],
+                color="orange"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 11. 恢复防御: /resume, 恢复, 恢复防御
+        elif op in ("/resume", "恢复", "恢复防御"):
+            from sentry_daemon import init_firewall_ipset
+            cfg["defense_paused"] = False
+            save_config(cfg)
+            init_firewall_ipset()
+            card = build_feishu_card(
+                "🛡️ PortGuard 防御拦截已恢复",
+                "**主动诱捕与实时阻断引擎已重新生效！**\n"
+                "内核 IPSet 防护规则已重新装载，恶意扫描与未授权探测将被立即阻断。",
+                fields=[
+                    ("🖥️ 操作节点", node_name),
+                    ("🛡️ 当前状态", "标准主动防御中"),
+                    ("⚡ 阻断机制", "iptables / IPSet + 黑洞路由"),
+                    ("⏰ 恢复时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                ],
+                color="turquoise"
+            )
+            send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+
+        # 12. 查 IP 画像: /check <ip>, 查 <ip>, 查ip <ip>
+        elif op in ("/check", "查", "查ip"):
+            if not args:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /check <IP地址>")
+                return
+            ip = args[0].strip()
+            from sentry_daemon import validate_ip, resolve_ip_geo_local, get_ip_threat_tags, get_blacklisted_ips_set, ip_in_whitelist
+            v_ip = validate_ip(ip)
+            if not v_ip:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 地址: {ip}")
+                return
+            try:
+                geo_info = resolve_ip_geo_local(v_ip)
+                country = geo_info.get("country", "")
+                province = geo_info.get("province", "")
+                city = geo_info.get("city", "")
+                isp = geo_info.get("isp", "")
+                loc = f"{country} {province} {city} ({isp})".strip() or "未知位置"
+
+                threat_tags = get_ip_threat_tags(v_ip)
+                tag_str = ", ".join(threat_tags) if threat_tags else "暂无威胁标签 (普通网络)"
+
+                is_banned = v_ip in get_blacklisted_ips_set()
+                is_white = ip_in_whitelist(v_ip)
+                if is_white:
+                    sec_state = "🛡️ 白名单受信任 IP (放行)"
+                    state_color = "turquoise"
+                elif is_banned:
+                    sec_state = "🚫 当前已被内核封禁阻断 (黑名单)"
+                    state_color = "carmine"
+                else:
+                    sec_state = "⚪ 正常未封禁"
+                    state_color = "blue"
+
+                card = build_feishu_card(
+                    f"🔍 IP 威胁情报溯源画像 [{v_ip}]",
+                    f"**目标 IP 全维度行为与威胁特征查询结果**",
+                    fields=[
+                        ("🖥️ 查询节点", node_name),
+                        ("🎯 目标 IP", v_ip),
+                        ("🌐 物理归属地", loc),
+                        ("🏷️ 威胁画像标签", tag_str),
+                        ("⚡ 防火墙状态", sec_state),
+                        ("⏰ 查询时间", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    ],
+                    color=state_color
+                )
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
+            except Exception as e:
+                send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"查询 IP 画像异常: {e}")
+
+        # 13. 帮助手册: /help, 帮助, help, ?
+        else:
+            card = build_feishu_card(
+                "💡 PortGuard 快捷控制指令手册",
+                "**您可以通过发送简短指令直接控制 PortGuard 防御引擎：**\n\n"
+                "• `/status` 或 `状态` - 查看当前安全防御态势看板\n"
+                "• `/ban <IP> [原因]` - 立即拉黑封禁指定 IP（全集群同步）\n"
+                "• `/unban <IP>` - 立即解封指定 IP\n"
+                "• `/white <IP> [备注]` - 将 IP 录入放行白名单并自愈解封\n"
+                "• `/whitelist` - 查看当前安全白名单清单\n"
+                "• `/ports` 或 `端口` - 查看系统内核监听与放行端口\n"
+                "• `/port <端口> [名称]` - 快捷放行新的业务端口\n"
+                "• `/check <IP>` 或 `查 <IP>` - 快速查询 IP 归属地与威胁画像\n"
+                "• `/pause` 或 `暂停` - 应急切入观察模式（清空拦截规则）\n"
+                "• `/resume` 或 `恢复` - 恢复主动拦截与 IPSet 防火墙\n\n"
+                "💡 **提示**：所有指令均支持中文快捷别名（如直接输入 `状态`、`拉黑 1.1.1.1`、`查 8.8.8.8` 即可）。",
                 color="blue"
             )
             send_feishu_app_message(self.app_id, self.app_secret, target_id, card_dict=card)
