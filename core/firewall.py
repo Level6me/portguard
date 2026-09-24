@@ -697,3 +697,68 @@ def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
         return True
     except Exception:
         return False
+
+
+def auto_heal_whitelist_ips(whitelist_items=None):
+    """
+    白名单内核强联动与全自动自愈机制：
+    反向比对当前 Linux 内核黑洞路由、ipset 阻断集合与数据库黑名单，
+    一旦发现任何属于白名单（含单个 IP 及 CIDR 网段）的地址仍处于被阻断状态，
+    瞬间自动从内核路由表与 ipset 中剔除解封，做到‘加白即物理连通’，彻底杜绝状态脱节。
+    """
+    try:
+        if whitelist_items is None:
+            cfg = load_config()
+            whitelist_items = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
+
+        healed_count = 0
+        # 1. 扫描当前 Linux 内核路由表中实际存在的 IPv4 / IPv6 黑洞
+        active_blackholes = set()
+        for cmd in (["ip", "route", "show"], ["ip", "-6", "route", "show"]):
+            try:
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
+                for line in res.stdout.splitlines():
+                    if "blackhole" in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            bh_ip = parts[1].split('/')[0].strip()
+                            if bh_ip:
+                                active_blackholes.add(bh_ip)
+            except Exception:
+                pass
+
+        # 2. 扫描数据库黑名单中的 IP
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute("SELECT ip FROM blacklist")
+            for r in c.fetchall():
+                if r[0]:
+                    active_blackholes.add(r[0])
+            conn.close()
+        except Exception:
+            pass
+
+        # 3. 对所有处于阻断态的 IP 进行白名单核验，若在白名单中则立刻执行内核级解封
+        for test_ip in active_blackholes:
+            if ip_in_whitelist(test_ip, whitelist_items=whitelist_items):
+                unban_ip_core(test_ip, status_event="WHITELIST", source_node="白名单自愈")
+                healed_count += 1
+
+        # 4. 确保所有白名单显式 IP 无论是否在黑名单中，都确保从 ipset 移除
+        if is_ipset_available():
+            for item in whitelist_items:
+                w_ip = item.get("ip") if isinstance(item, dict) else item
+                if w_ip and "/" not in str(w_ip):
+                    valid_ip = validate_ip(w_ip)
+                    if valid_ip:
+                        subprocess.run(["ipset", "del", "portguard_blacklist_v4", valid_ip, "-exist"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run(["ipset", "del", "portguard_blacklist_v6", valid_ip, "-exist"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        return healed_count
+    except Exception as e:
+        print(f"[AutoHeal] 白名单自愈异常: {e}")
+        return 0
+

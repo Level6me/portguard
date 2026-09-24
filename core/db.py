@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
         {"port": 3389, "name": "RDP 远程桌面防护", "category": "rdp", "enabled": True, "level": "极高危"},
         {"port": 5900, "name": "VNC 远程控制防护", "category": "rdp", "enabled": True, "level": "高危"},
         {"port": 6379, "name": "Redis 端口防护", "category": "db", "enabled": True, "level": "极高危"},
-        {"port": 8888, "name": "管理控制台端口", "category": "web", "enabled": True, "level": "中危"},
+        {"port": 8888, "name": "管理控制台诱捕 (1Panel/宝塔等无面板时可开启)", "category": "web", "enabled": False, "level": "中危"},
         {"port": 9200, "name": "Elasticsearch 端口防护", "category": "db", "enabled": True, "level": "高危"},
         {"port": 27017, "name": "MongoDB 端口防护", "category": "db", "enabled": True, "level": "高危"}
     ],

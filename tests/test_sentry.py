@@ -1043,6 +1043,32 @@ class OptimizationAndHardeningTest(unittest.TestCase):
             self.assertTrue(req2.sent_json.get("success", False))
             self.assertEqual(req2.sent_json.get("node_name"), "node_b")
 
+    def test_auto_heal_whitelist_ips(self):
+        from core.firewall import auto_heal_whitelist_ips, unban_ip_core
+        from sentry_daemon import get_db, init_db
+        init_db()
+        # 模拟数据库中存在一个已被加白的 IP（例如 198.51.100.99）
+        test_ip = "198.51.100.99"
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO blacklist (ip, reason, ban_time, timestamp) VALUES (?, ?, ?, ?)",
+                  (test_ip, "测试恶意扫描", "2026-09-24 10:00:00", 1790215200))
+        conn.commit()
+        conn.close()
+
+        with mock.patch("core.firewall.load_config", return_value={"whitelist": [{"ip": test_ip, "remark": "管理员公网"}]}), \
+             mock.patch("subprocess.run") as mock_sub:
+            healed = auto_heal_whitelist_ips([{"ip": test_ip, "remark": "管理员公网"}])
+            self.assertGreaterEqual(healed, 1)
+
+            # 验证数据库中该 IP 已被自愈移除
+            conn2 = get_db()
+            c2 = conn2.cursor()
+            c2.execute("SELECT ip FROM blacklist WHERE ip = ?", (test_ip,))
+            row = c2.fetchone()
+            conn2.close()
+            self.assertIsNone(row)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,7 @@ from core.firewall import (
     get_system_ssh_ports, get_active_ssh_client_ips, get_default_gateway,
     ip_in_whitelist,
     unban_ip_core,
+    auto_heal_whitelist_ips,
 )
 
 from core.mesh import (
@@ -1192,8 +1193,9 @@ class TrapServer:
 
             bound_count_for_item = 0
             cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
+            ssh_ports = get_system_ssh_ports()
             for port in range(start_p, end_p + 1):
-                if port == web_port or (cluster_port > 0 and port == cluster_port) or port in active_ports or port in self.trap_map:
+                if port == web_port or (cluster_port > 0 and port == cluster_port) or port in active_ports or port in self.trap_map or port in ssh_ports:
                     continue
                 if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
                     print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
@@ -1218,8 +1220,9 @@ class TrapServer:
                 import random
                 seed_ports = [random.randint(20000, 60000) for _ in range(8)]
                 dynamic_count = 0
+                ssh_ports = get_system_ssh_ports()
                 for dp in seed_ports:
-                    if dp in active_ports or dp in self.trap_map or dp == web_port or dp == cluster_port:
+                    if dp in active_ports or dp in self.trap_map or dp == web_port or dp == cluster_port or dp in ssh_ports:
                         continue
                     s = self._bind_socket(dp, backlog=32)
                     if s:
@@ -1246,6 +1249,14 @@ class TrapServer:
     def _handle_trap_client(self, client_sock, client_addr, port, port_info):
         """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，提取恶意样本 URL，并在结束时伪装 TCP RST 或实施 Tarpit 粘滞减速"""
         client_ip = client_addr[0].replace("::ffff:", "")
+        # 核心白名单免杀与不干扰保护：白名单 IP 绝对不进入蜜罐仿真，不发 RST，平滑关闭套接字
+        if ip_in_whitelist(client_ip):
+            try:
+                client_sock.close()
+            except Exception:
+                pass
+            return
+
         payload_captured = ""
         sample_urls_found = []
         cfg = load_config()
@@ -1395,6 +1406,14 @@ class TrapServer:
                                 if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
                                     client_sock.close()
                                     continue
+
+                                # 核心白名单免杀保护：白名单 IP 绝对不进入蜜罐诱捕，不发 RST，平滑关闭套接字
+                                if ip_in_whitelist(client_ip):
+                                    try:
+                                        client_sock.close()
+                                    except Exception:
+                                        pass
+                                    continue
                                 
                                 port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
                                 _EXECUTOR.submit(self._handle_trap_client, client_sock, client_addr, port, port_info)
@@ -1413,6 +1432,13 @@ class TrapServer:
                                     
                                     if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
                                         client_sock.close()
+                                        continue
+
+                                    if ip_in_whitelist(client_ip):
+                                        try:
+                                            client_sock.close()
+                                        except Exception:
+                                            pass
                                         continue
                                     
                                     port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
@@ -1971,15 +1997,16 @@ class SiteLogCollector:
             time.sleep(2)
 
 def config_watcher_loop():
-    """实时监听 config.json 文件变更，动态热重载蜜罐监听套接字"""
+    """实时监听 config.json 文件变更，动态热重载蜜罐监听套接字并自动执行白名单内核自愈"""
     last_mtime = 0
     while True:
         try:
             if os.path.exists(CONFIG_PATH):
                 mtime = os.path.getmtime(CONFIG_PATH)
                 if last_mtime != 0 and mtime > last_mtime:
-                    print("[ConfigWatcher] 检测到 config.json 变更，正在动态热重载蜜罐监听...")
+                    print("[ConfigWatcher] 检测到 config.json 变更，正在动态热重载蜜罐监听与内核白名单自愈...")
                     trap_instance.reload()
+                    auto_heal_whitelist_ips()
                 last_mtime = mtime
         except Exception:
             pass

@@ -13,7 +13,8 @@ from sentry_daemon import (
     broadcast_cluster_whitelist, resolve_ip_geo, resolve_ip_geo_local,
     get_ip_threat_tags, get_hidden_ips, get_hidden_ips_set,
     add_hidden_ip, remove_hidden_ip, clear_hidden_ips, _GEO_CACHE,
-    DEFAULT_CONFIG, run_firewall_cmd, ip_in_whitelist, _EXECUTOR
+    DEFAULT_CONFIG, run_firewall_cmd, ip_in_whitelist, _EXECUTOR,
+    auto_heal_whitelist_ips
 )
 from controllers.base import (
     invalidate_blacklist_cache, get_blacklist_cache, set_blacklist_cache,
@@ -580,6 +581,9 @@ def handle_whitelist_add(req, parsed, req_data):
         # 广播至集群协同节点
         broadcast_cluster_whitelist("add", ip, remark)
 
+    # 触发全自动白名单内核级自愈
+    auto_heal_whitelist_ips(cfg.get("whitelist", []))
+
     extra_tip = "（已自动解除原黑名单封禁并撤销防火墙阻断）" if was_banned else ""
     req._send_json({"success": True, "msg": f"已成功将 {ip} 加入信任白名单{extra_tip}！"})
     return
@@ -659,6 +663,7 @@ def handle_whitelist_import(req, parsed, req_data):
     new_whitelist = list(current_map.values())
     cfg["whitelist"] = new_whitelist
     save_config(cfg)
+    auto_heal_whitelist_ips(new_whitelist)
     # 广播批量导入至集群协同节点
     broadcast_cluster_whitelist("batch_add", new_whitelist, "批量导入同步")
     unban_tip = f"，并同步解除 {unbanned_count} 个原黑名单目标" if unbanned_count > 0 else ""

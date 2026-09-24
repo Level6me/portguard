@@ -40,7 +40,8 @@ from sentry_daemon import (
     normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
     get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections,
-    generate_cluster_response_token, verify_cluster_response_token, safe_cluster_urlopen
+    generate_cluster_response_token, verify_cluster_response_token, safe_cluster_urlopen,
+    auto_heal_whitelist_ips
 )
 
 def parse_loose_json_or_lines(text):
@@ -789,6 +790,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                         whitelist.append({"ip": ip, "remark": node_remark})
                         cfg["whitelist"] = whitelist
                         save_config(cfg)
+                    auto_heal_whitelist_ips(cfg.get("whitelist", []))
                     self._send_json({"success": True, "msg": f"已成功同步添加白名单: {ip}"})
                     return
 
@@ -827,6 +829,7 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
 
                     cfg["whitelist"] = list(current_map.values())
                     save_config(cfg)
+                    auto_heal_whitelist_ips(cfg.get("whitelist", []))
                     self._send_json({"success": True, "msg": f"已批量同步 {updated_cnt} 条协同白名单", "count": updated_cnt})
                     return
 
@@ -840,6 +843,12 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
 def run_server():
     init_db()
     cfg = load_config()
+    try:
+        healed = auto_heal_whitelist_ips()
+        if healed > 0:
+            print(f"[PortGuard] 启动自愈：已成功将 {healed} 个误阻断白名单目标从内核与防火墙解封")
+    except Exception as e:
+        print(f"[PortGuard] 启动自愈异常: {e}")
     bind_ip = cfg.get("web_bind", "0.0.0.0")
     bind_port = int(cfg.get("web_port", 9099))
     cluster_port = int(cfg.get("cluster_sync", {}).get("port", 9098) or 9098)
