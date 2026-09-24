@@ -158,8 +158,8 @@ DEFAULT_HTTP_TRAPS = [
         "window": 30,
         "action": "ban",
         "level": "中危",
-        "enabled": 1,
-        "description": "拦截未携带合法域名 Host、直接通过服务器 IP 地址发起的 Web 探测请求"
+        "enabled": 0,
+        "description": "拦截未携带合法域名 Host、直接通过服务器 IP 地址发起的 Web 探测请求 (默认关闭，防自锁)"
     },
     {
         "rule_id": "ht_rate_404",

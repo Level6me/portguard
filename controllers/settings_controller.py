@@ -26,7 +26,7 @@ def handle_settings_get(req, parsed):
         "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
         "defense_mode": cfg.get("defense_mode", "standard"),
         "enable_port_scan_defense": bool(cfg.get("enable_port_scan_defense", True)),
-        "port_scan_threshold": int(cfg.get("port_scan_threshold", 1) or 1),
+        "port_scan_threshold": max(2, int(cfg.get("port_scan_threshold", 3) or 3)),
         "port_scan_window_seconds": int(cfg.get("port_scan_window_seconds", 15) or 15),
         "trap_all_ports": bool(cfg.get("trap_all_ports", False)),
         "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", False)),
@@ -112,7 +112,7 @@ def handle_settings_post(req, parsed, req_data):
     if "enable_port_scan_defense" in req_data:
         cfg["enable_port_scan_defense"] = bool(req_data["enable_port_scan_defense"])
     if "port_scan_threshold" in req_data:
-        cfg["port_scan_threshold"] = int(req_data["port_scan_threshold"])
+        cfg["port_scan_threshold"] = max(2, int(req_data["port_scan_threshold"]))
     if "port_scan_window_seconds" in req_data:
         cfg["port_scan_window_seconds"] = int(req_data["port_scan_window_seconds"])
     if "ban_action_iptables" in req_data:

@@ -1436,7 +1436,7 @@ def check_port_scan_attack(src_ip, dst_port, cfg):
         return False
     
     window = int(cfg.get("port_scan_window_seconds", 15) or 15)
-    threshold = int(cfg.get("port_scan_threshold", 1) or 1)
+    threshold = int(cfg.get("port_scan_threshold", 3) or 3)
     now = time.time()
     cutoff = now - window
 
@@ -1701,7 +1701,28 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
             return
 
-        # 4. 空间测绘扫描引擎拦截 (对所有未加入正常业务的端口执行防测绘嗅探保护)
+        # 4. 系统内核实际处于 LISTEN 监听状态的活跃服务端口放行（如 1Panel 控制台、非标 SSH 端口、Docker 容器等，绝不误判为恶意扫描）
+        is_zero_trust_all = bool(cfg.get("trap_all_ports", False) and cfg.get("trap_business_ports", False))
+        if dst_port in active_ports_map and not is_zero_trust_all:
+            svc_name = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, f"系统服务 ({dst_port})"))
+            if is_survey_scanner_ip(src_ip):
+                action = "INTERCEPTED"
+                desc = f"测绘扫描拦截: 探测系统监听端口 {dst_port} ({svc_name})"
+                port_info = {
+                    "name": desc,
+                    "category": "survey",
+                    "level": "高危",
+                    "is_business": False
+                }
+                _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
+                return
+
+            action = "BUSINESS"
+            desc = f"业务访问: {svc_name} (端口 {dst_port})"
+            _EXECUTOR.submit(_async_write, action, desc)
+            return
+
+        # 5. 空间测绘扫描引擎拦截 (对所有未开放端口执行防测绘嗅探保护)
         if is_survey_scanner_ip(src_ip):
             action = "INTERCEPTED"
             desc = f"测绘扫描拦截: 探测未开放端口 {dst_port}"
@@ -1714,10 +1735,10 @@ class GlobalPortSniffer:
             _EXECUTOR.submit(ban_ip, src_ip, dst_port, port_info, reason=desc)
             return
 
-        # 5. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
+        # 6. 恶意访问行为 ②：多端口扫描与探针攻击检测 (Nmap/Masscan 等扫描器识别)
         if check_port_scan_attack(src_ip, dst_port, cfg):
             action = "INTERCEPTED"
-            threshold = int(cfg.get("port_scan_threshold", 1) or 1)
+            threshold = int(cfg.get("port_scan_threshold", 3) or 3)
             desc = f"未开放端口扫描探测 (目标端口 {dst_port})" if threshold <= 1 else f"多端口扫描探测 (目标端口 {dst_port})"
             port_info = {
                 "name": desc,

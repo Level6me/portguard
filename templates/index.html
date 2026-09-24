@@ -1544,9 +1544,8 @@
                         <div>
                             <label style="font-size: 11px; font-weight: 600; color: var(--text-sec);">多端口扫描判定阈值</label>
                             <select id="setting-policy-scan-threshold" class="input-field" style="width: 100%; margin-top: 4px; padding: 8px 10px; font-size: 12px; font-weight: 600;">
-                                <option value="1" selected>探测 ≥1 个未开放端口 (即刻封禁/最高灵敏度)</option>
                                 <option value="2">探测 ≥2 个未开放端口 (高灵敏度)</option>
-                                <option value="3">探测 ≥3 个未开放端口 (标准模式)</option>
+                                <option value="3" selected>探测 ≥3 个未开放端口 (推荐标准模式)</option>
                                 <option value="5">探测 ≥5 个未开放端口 (宽松模式)</option>
                             </select>
                         </div>
@@ -6076,7 +6075,7 @@
                 nodeInput.value = String(data.node_name || '本机节点');
             }
             if (document.getElementById('setting-policy-scan-threshold')) {
-                document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold !== undefined ? data.port_scan_threshold : 1);
+                document.getElementById('setting-policy-scan-threshold').value = String(data.port_scan_threshold !== undefined ? data.port_scan_threshold : 3);
             }
             if (document.getElementById('setting-policy-scan-window')) {
                 document.getElementById('setting-policy-scan-window').value = String(data.port_scan_window_seconds || 15);
@@ -6511,7 +6510,7 @@
 
     async function saveIntegratedPolicySettings() {
         const nodeName = document.getElementById('setting-policy-node-name')?.value.trim() || '本机节点';
-        const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '1');
+        const scanThreshold = parseInt(document.getElementById('setting-policy-scan-threshold')?.value || '3');
         const scanWindow = parseInt(document.getElementById('setting-policy-scan-window')?.value || '15');
         const trapThreshold = parseInt(document.getElementById('setting-policy-trap-threshold')?.value || '2');
         const trapWindow = parseInt(document.getElementById('setting-policy-trap-window')?.value || '30');
