@@ -238,24 +238,61 @@ def _ensure_ipset_timeout_set(set_name, is_ipv6=False):
     except Exception:
         return False
 
+def _ensure_ipset_net_set(set_name, is_ipv6=False):
+    """确保 ipset 集合存在且为 hash:net 类型，完美支持单个 IP 及 CIDR 网段（如 111.181.0.0/16）。"""
+    try:
+        tmp_name = f"pg_tmp_{int(time.time()*1000)%100000}"
+        create_args = ["hash:net", "maxelem", "65536"]
+        if is_ipv6:
+            create_args = ["hash:net", "family", "inet6", "maxelem", "65536"]
+        
+        probe = subprocess.run(["ipset", "list", set_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+        if probe.returncode == 0:
+            return True
+        else:
+            res = subprocess.run(["ipset", "create", set_name] + create_args + ["-exist"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return res.returncode == 0
+    except Exception:
+        return False
+
 def init_firewall_ipset():
-    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载单一规则，实现 O(1) 百万级黑名单与内核级动态 timeout 自动老化。"""
+    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载单一规则，实现 O(1) 百万级黑名单与内核级动态 timeout 自动老化。
+    核心安全铁律：白名单集合挂载在黑名单之前，享受 Linux 内核最高优先级绝对放行！"""
     if not is_ipset_available():
         return False
     try:
+        # 1. 确保黑名单集合存在 (hash:ip 带 timeout)
         _ensure_ipset_timeout_set("portguard_blacklist_v4", is_ipv6=False)
         _ensure_ipset_timeout_set("portguard_blacklist_v6", is_ipv6=True)
+
+        # 2. 确保白名单集合存在 (hash:net 支持单IP与CIDR网段)
+        _ensure_ipset_net_set("portguard_whitelist_v4", is_ipv6=False)
+        _ensure_ipset_net_set("portguard_whitelist_v6", is_ipv6=True)
+
+        # 3. iptables IPv4: 先挂载白名单放行，再挂载黑名单丢弃
+        check_w4 = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_whitelist_v4", "src", "-j", "ACCEPT"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_w4.returncode != 0:
+            subprocess.run(["iptables", "-I", "INPUT", "1", "-m", "set", "--match-set", "portguard_whitelist_v4", "src", "-j", "ACCEPT"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         check_v4 = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if check_v4.returncode != 0:
-            subprocess.run(["iptables", "-I", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
+            subprocess.run(["iptables", "-I", "INPUT", "2", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 4. ip6tables IPv6: 同步挂载白名单放行与黑名单丢弃
+        check_w6 = subprocess.run(["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_whitelist_v6", "src", "-j", "ACCEPT"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_w6.returncode != 0:
+            subprocess.run(["ip6tables", "-I", "INPUT", "1", "-m", "set", "--match-set", "portguard_whitelist_v6", "src", "-j", "ACCEPT"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         check_v6 = subprocess.run(["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if check_v6.returncode != 0:
-            subprocess.run(["ip6tables", "-I", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
+            subprocess.run(["ip6tables", "-I", "INPUT", "2", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         conn = get_db()
@@ -745,17 +782,37 @@ def auto_heal_whitelist_ips(whitelist_items=None):
                 unban_ip_core(test_ip, status_event="WHITELIST", source_node="白名单自愈")
                 healed_count += 1
 
-        # 4. 确保所有白名单显式 IP 无论是否在黑名单中，都确保从 ipset 移除
+        # 4. 确保所有白名单显式 IP 无论是否在黑名单中，都确保从黑名单 ipset 移除
         if is_ipset_available():
             for item in whitelist_items:
-                w_ip = item.get("ip") if isinstance(item, dict) else item
-                if w_ip and "/" not in str(w_ip):
+                w_ip = (item.get("ip") if isinstance(item, dict) else item) or ""
+                w_ip = str(w_ip).strip()
+                if not w_ip:
+                    continue
+                if "/" not in w_ip:
                     valid_ip = validate_ip(w_ip)
                     if valid_ip:
                         subprocess.run(["ipset", "del", "portguard_blacklist_v4", valid_ip, "-exist"],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         subprocess.run(["ipset", "del", "portguard_blacklist_v6", valid_ip, "-exist"],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # 5. 内核级白名单 IPSet 集合实时同步：不管是单个 IP 还是 CIDR 网段，注入 portguard_whitelist 集合享受最高优先级放行
+                try:
+                    if "/" in w_ip:
+                        net_obj = ipaddress.ip_network(w_ip, strict=False)
+                        target_set = "portguard_whitelist_v6" if net_obj.version == 6 else "portguard_whitelist_v4"
+                        subprocess.run(["ipset", "add", target_set, str(net_obj), "-exist"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        valid_ip = validate_ip(w_ip)
+                        if valid_ip:
+                            ip_obj = ipaddress.ip_address(valid_ip)
+                            target_set = "portguard_whitelist_v6" if ip_obj.version == 6 else "portguard_whitelist_v4"
+                            subprocess.run(["ipset", "add", target_set, valid_ip, "-exist"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
 
         return healed_count
     except Exception as e:

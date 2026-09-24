@@ -1610,6 +1610,13 @@ class GlobalPortSniffer:
         if proto == "UDP" and not trap_meta:
             return
 
+        # 1. 优先检查用户手动配置的显式白名单与本地防自锁（绝对免杀：支持单IP与CIDR网段）
+        if ip_in_whitelist(src_ip, whitelist):
+            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
+            desc = f"信任白名单连接: {proc} (端口 {dst_port})" if proc else f"信任白名单连接 (端口 {dst_port})"
+            _EXECUTOR.submit(log_port_access_entry, src_ip, dst_port, port_name=desc, action="WHITELIST")
+            return
+
         # 0. 优先检测并直接秒杀 Nmap 高级隐蔽/畸形扫描 (NULL, FIN, XMAS, SYN-FIN, SYN-RST)
         if stealth_type:
             stealth_names = {
@@ -1633,24 +1640,6 @@ class GlobalPortSniffer:
         
         def _async_write(act, d):
             log_port_access_entry(src_ip, dst_port, port_name=d, action=act)
-
-        # 1. 优先检查用户手动配置的显式白名单与本地防自锁
-        is_user_white = False
-        if src_ip in ("127.0.0.1", "::1", "localhost") or src_ip.startswith("127."):
-            is_user_white = True
-        elif whitelist:
-            for item in whitelist:
-                w_ip = (item.get("ip") if isinstance(item, dict) else str(item)).strip()
-                if w_ip and (src_ip == w_ip or (src_ip.startswith("127.") and w_ip.startswith("127."))):
-                    is_user_white = True
-                    break
-
-        if is_user_white:
-            action = "WHITELIST"
-            proc = active_ports_map.get(dst_port, KNOWN_SYSTEM_SERVICES.get(dst_port, ""))
-            desc = f"信任白名单连接: {proc} (端口 {dst_port})" if proc else f"信任白名单连接 (端口 {dst_port})"
-            _EXECUTOR.submit(_async_write, action, desc)
-            return
 
         # 1.5 严格屏蔽已被封禁的黑名单 IP 嗅探流量：防止已拉黑恶意 IP 的残余网络包被误判记录为正常业务
         blacklisted_set = get_blacklisted_ips_set()
