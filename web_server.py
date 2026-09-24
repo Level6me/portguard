@@ -398,6 +398,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urlparse(self.path)
+            path = parsed.path
             try:
                 length = int(self.headers.get('Content-Length', 0))
             except Exception:
