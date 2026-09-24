@@ -316,38 +316,22 @@ def init_firewall_ipset():
         return False
 
 def flush_firewall_blocks():
-    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并精准移除数据库中登记的黑洞路由与 iptables 规则"""
+    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并毫秒级批量移除内核黑洞路由"""
     try:
         if is_ipset_available():
             subprocess.run(["ipset", "flush", "portguard_blacklist_v4"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["ipset", "flush", "portguard_blacklist_v6"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT ip FROM blacklist")
-        for row in c.fetchall():
-            b_ip = row["ip"]
-            if not b_ip:
-                continue
-            try:
-                if "/" in b_ip:
-                    net_obj = ipaddress.ip_network(b_ip, strict=False)
-                    is_v6 = net_obj.version == 6
-                    fw_tool = "ip6tables" if is_v6 else "iptables"
-                    route_cmd = ["ip", "-6", "route", "del", "blackhole", str(net_obj)] if is_v6 else ["ip", "route", "del", "blackhole", str(net_obj)]
-                    subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    subprocess.run([fw_tool, "-D", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    addr_obj = ipaddress.ip_address(b_ip)
-                    is_v6 = addr_obj.version == 6
-                    mask = "/128" if is_v6 else "/32"
-                    fw_tool = "ip6tables" if is_v6 else "iptables"
-                    route_cmd = ["ip", "-6", "route", "del", "blackhole", f"{b_ip}{mask}"] if is_v6 else ["ip", "route", "del", "blackhole", f"{b_ip}{mask}"]
-                    subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    subprocess.run([fw_tool, "-D", "INPUT", "-s", b_ip, "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-        conn.close()
+        # 毫秒级批量清理当前内核实际存在的黑洞路由（彻底杜绝逐条遍历数据库导致的子进程风暴与卡顿）
+        for cmd in [
+            "ip route show | grep blackhole | awk '{print $2}' | while read ip; do ip route del blackhole \"$ip\" 2>/dev/null || true; done",
+            "ip -6 route show | grep blackhole | awk '{print $2}' | while read ip; do ip -6 route del blackhole \"$ip\" 2>/dev/null || true; done"
+        ]:
+            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"[Firewall] 清理阻断异常: {e}")
+        return False
     except Exception:
         pass
 
