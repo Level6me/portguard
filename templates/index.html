@@ -1534,7 +1534,7 @@
                     </div>
                 </div>
 
-                <!-- 0.9 飞书机器人实时通知与业务端口智能纳管 (Feishu Bot & Auto Listen Ports) -->
+                <!-- 0.9 飞书机器人实时通知与业务端口智能纳管 (Feishu Bot & WebSocket Long Connection) -->
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
                         <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px;">
@@ -1543,38 +1543,59 @@
                                 <span class="tag" id="feishu-bot-status-badge" style="background: rgba(142, 142, 147, 0.15); color: var(--text-sec); font-weight: 700;">未启用</span>
                             </div>
                             <span style="font-size: 11px; color: var(--text-sec); line-height: 1.5;">
-                                配置飞书群自定义机器人 Webhook 与签名秘钥。当系统内核检测到新增监听端口时，可自动纳管放行至业务端口并向飞书推送富文本交互卡片。
+                                使用飞书企业自建应用 AppID 与 AppSecret，通过 <b>WebSocket 双向长连接</b>传输信息（无需公网IP或回调域名）。当内核检测到新增监听端口时，自动纳管放行并向飞书推送富文本交互卡片。
                             </span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <label style="font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                 <input type="checkbox" id="feishu-bot-enabled-toggle" onchange="toggleFeishuBotUI()" style="transform: scale(1.2); cursor: pointer;">
-                                <span>启用飞书告警</span>
+                                <span>启用飞书机器人</span>
                             </label>
                         </div>
                     </div>
 
-                    <!-- Webhook 与签名密钥配置 -->
+                    <!-- 机器人核心凭据与长连接配置 -->
                     <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; margin-bottom: 14px;">
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 12px;">
                             <div>
-                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔗 飞书自定义机器人 Webhook 地址</label>
-                                <input type="text" id="feishu-bot-webhook-input" class="input-field" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🆔 飞书应用 App ID</label>
+                                <input type="text" id="feishu-bot-appid-input" class="input-field" placeholder="cli_xxxxxxxxxxxxxxxx" style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
                                 <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
-                                    💡 飞书群聊 ➔ 设置 ➔ 群机器人 ➔ 添加「自定义机器人」获取 Webhook 地址。
+                                    💡 飞书开放平台 ➔ 创建自建应用 ➔ 凭证与基础信息 ➔ App ID。
                                 </div>
                             </div>
                             <div>
-                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔐 安全设置加签密钥 (Secret)</label>
-                                <input type="text" id="feishu-bot-secret-input" class="input-field" placeholder="可选：自定义机器人安全设置签名校验密钥" style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔑 飞书应用 App Secret (应用密钥)</label>
+                                <input type="password" id="feishu-bot-appsecret-input" class="input-field" placeholder="输入 App Secret（保持 ****** 表示不修改）" style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
                                 <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
-                                    💡 若在飞书机器人安全设置中勾选了「签名校验」，请在此填写 Secret（基于 HMAC-SHA256 签名）。
+                                    💡 飞书开放平台 ➔ 凭证与基础信息 ➔ App Secret。
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 12px;">
+                            <div>
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">💬 告警接收群/会话 ID (Receive ID · 选填)</label>
+                                <input type="text" id="feishu-bot-receiveid-input" class="input-field" placeholder="群ID (oc_xxx) 或用户 OpenID (ou_xxx) · 留空可自动绑定" style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
+                                <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
+                                    💡 <b>自动绑定特性</b>：留空此项时，启动后只需在飞书群/私聊中向机器人发送任意消息（如 <code>/status</code>），系统将自动绑定并开通告警推送！
+                                </div>
+                            </div>
+                            <div>
+                                <label style="font-size: 11px; font-weight: 700; color: var(--text-sec); display: block; margin-bottom: 6px;">🔗 群自定义 Webhook 地址 (选填备用)</label>
+                                <input type="text" id="feishu-bot-webhook-input" class="input-field" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." style="width: 100%; font-family: monospace; font-size: 12px; padding: 8px 10px;">
+                                <div style="font-size: 10px; color: var(--text-sec); margin-top: 5px; line-height: 1.4;">
+                                    💡 若同时配置了群自定义 Webhook，系统将作为双路冗余通道自动备用。
                                 </div>
                             </div>
                         </div>
 
                         <!-- 联动选项 -->
                         <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding: 10px 12px; background: var(--card-sec); border-radius: 8px; border: 1px solid var(--border-subtle);">
+                            <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
+                                <input type="checkbox" id="feishu-bot-usews-toggle" checked style="width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;">
+                                <span><b>启用 WebSocket 长连接模式</b>（持久保持同飞书网关的长连接，无需公网开放端口，支持实时双向指令交互）</span>
+                            </label>
                             <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); cursor: pointer;">
                                 <input type="checkbox" id="feishu-auto-manage-listen-ports-toggle" checked style="width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;">
                                 <span><b>内核新增监听端口时自动纳管放行</b>（检测到新增监听端口时，自动添加至业务端口列表，防止业务受阻或被蜜罐诱捕）</span>
@@ -1591,10 +1612,10 @@
 
                         <div style="display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
                             <button type="button" class="pill-btn" onclick="testFeishuNotification()" id="btn-test-feishu" style="font-size: 11px; font-weight: 700; padding: 6px 16px; cursor: pointer; border-color: var(--accent); color: var(--accent);">
-                                🧪 发送测试卡片
+                                🧪 校验长连接并测试发送
                             </button>
                             <button type="button" class="pill-btn primary" onclick="saveFeishuSettingsOnly()" id="btn-save-feishu" style="font-size: 11px; font-weight: 700; padding: 6px 16px; cursor: pointer;">
-                                💾 保存飞书通知配置
+                                💾 保存飞书机器人配置
                             </button>
                         </div>
                     </div>
@@ -6250,20 +6271,35 @@
                 const toggle = document.getElementById('feishu-bot-enabled-toggle');
                 if (toggle) toggle.checked = isEnabled;
 
+                const appIdInput = document.getElementById('feishu-bot-appid-input');
+                if (appIdInput && document.activeElement !== appIdInput) {
+                    appIdInput.value = fb.app_id || '';
+                }
+
+                const appSecretInput = document.getElementById('feishu-bot-appsecret-input');
+                if (appSecretInput && document.activeElement !== appSecretInput) {
+                    if (fb.app_secret_configured && /^[*]+$/.test(fb.app_secret || '')) {
+                        appSecretInput.value = fb.app_secret;
+                        appSecretInput.placeholder = '已配置 App Secret (脱敏隐藏)';
+                    } else {
+                        appSecretInput.value = fb.app_secret || '';
+                        appSecretInput.placeholder = '输入 App Secret（保持 ****** 表示不修改）';
+                    }
+                }
+
+                const receiveIdInput = document.getElementById('feishu-bot-receiveid-input');
+                if (receiveIdInput && document.activeElement !== receiveIdInput) {
+                    receiveIdInput.value = fb.receive_id || '';
+                }
+
+                const useWsToggle = document.getElementById('feishu-bot-usews-toggle');
+                if (useWsToggle) {
+                    useWsToggle.checked = fb.use_ws !== false;
+                }
+
                 const webhookInput = document.getElementById('feishu-bot-webhook-input');
                 if (webhookInput && document.activeElement !== webhookInput) {
                     webhookInput.value = fb.webhook_url || '';
-                }
-
-                const secretInput = document.getElementById('feishu-bot-secret-input');
-                if (secretInput && document.activeElement !== secretInput) {
-                    if (fb.secret_configured && /^[*]+$/.test(fb.secret || '')) {
-                        secretInput.value = fb.secret;
-                        secretInput.placeholder = '已配置签名秘钥 (脱敏隐藏)';
-                    } else {
-                        secretInput.value = fb.secret || '';
-                        secretInput.placeholder = '可选：自定义机器人安全设置签名校验密钥';
-                    }
                 }
 
                 if (document.getElementById('feishu-notify-listen-port-toggle')) {
@@ -6276,10 +6312,17 @@
                 const badge = document.getElementById('feishu-bot-status-badge');
                 if (badge) {
                     if (isEnabled) {
-                        badge.className = 'tag success';
-                        badge.style.background = '';
-                        badge.style.color = '';
-                        badge.innerText = '🛡️ 飞书告警已开启';
+                        if (fb.ws_connected) {
+                            badge.className = 'tag success';
+                            badge.style.background = '';
+                            badge.style.color = '';
+                            badge.innerText = '🛡️ WebSocket 长连接已连接';
+                        } else {
+                            badge.className = 'tag warning';
+                            badge.style.background = 'rgba(255, 159, 10, 0.15)';
+                            badge.style.color = 'var(--warning)';
+                            badge.innerText = '⚠️ 飞书告警已启用 (长连接就绪中)';
+                        }
                     } else {
                         badge.className = 'tag';
                         badge.style.background = 'rgba(142, 142, 147, 0.15)';
@@ -6299,7 +6342,7 @@
         }
     }
 
-    let currentFeishuBot = { enabled: false, webhook_url: '', secret: '', notify_new_listen_port: true, notify_ban_ip: false };
+    let currentFeishuBot = { enabled: false, app_id: '', app_secret: '', receive_id: '', use_ws: true, webhook_url: '', secret: '', notify_new_listen_port: true, notify_ban_ip: false };
 
     function toggleFeishuBotUI() {
         const toggle = document.getElementById('feishu-bot-enabled-toggle');
@@ -6309,7 +6352,7 @@
             badge.className = 'tag success';
             badge.style.background = '';
             badge.style.color = '';
-            badge.innerText = '🛡️ 飞书告警已开启';
+            badge.innerText = '🛡️ 飞书机器人已启用';
         } else {
             badge.className = 'tag';
             badge.style.background = 'rgba(142, 142, 147, 0.15)';
@@ -6321,21 +6364,24 @@
     async function saveFeishuSettingsOnly() {
         const btn = document.getElementById('btn-save-feishu');
         const enabled = !!document.getElementById('feishu-bot-enabled-toggle')?.checked;
+        const appId = document.getElementById('feishu-bot-appid-input')?.value.trim() || '';
+        const appSecret = document.getElementById('feishu-bot-appsecret-input')?.value.trim() || '';
+        const receiveId = document.getElementById('feishu-bot-receiveid-input')?.value.trim() || '';
+        const useWs = document.getElementById('feishu-bot-usews-toggle')?.checked !== false;
         const webhookUrl = document.getElementById('feishu-bot-webhook-input')?.value.trim() || '';
-        const secret = document.getElementById('feishu-bot-secret-input')?.value.trim() || '';
         const notifyPort = document.getElementById('feishu-notify-listen-port-toggle')?.checked !== false;
         const notifyBan = !!document.getElementById('feishu-notify-ban-toggle')?.checked;
         const autoManage = document.getElementById('feishu-auto-manage-listen-ports-toggle')?.checked !== false;
 
-        if (enabled && !webhookUrl) {
-            showToast('已启用飞书告警，请输入有效的 Webhook 地址', '⚠️');
-            document.getElementById('feishu-bot-webhook-input')?.focus();
+        if (enabled && !appId && !webhookUrl) {
+            showToast('已启用飞书机器人，请填写飞书应用的 App ID 与 App Secret', '⚠️');
+            document.getElementById('feishu-bot-appid-input')?.focus();
             return;
         }
 
         try {
             if (btn) { btn.disabled = true; btn.innerText = '⏳ 正在保存...'; }
-            showToast('正在保存飞书告警与业务端口纳管配置...', '⏳');
+            showToast('正在保存飞书应用机器人与长连接配置...', '⏳');
             const res = await fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -6343,8 +6389,13 @@
                     auto_manage_listen_ports: autoManage,
                     feishu_bot: {
                         enabled: enabled,
+                        bot_type: appId ? 'app' : 'webhook',
+                        app_id: appId,
+                        app_secret: appSecret,
+                        receive_id: receiveId,
+                        receive_id_type: receiveId.startsWith('ou_') ? 'open_id' : 'chat_id',
+                        use_ws: useWs,
                         webhook_url: webhookUrl,
-                        secret: secret,
                         notify_new_listen_port: notifyPort,
                         notify_ban_ip: notifyBan
                     }
@@ -6352,7 +6403,7 @@
             });
             const data = await res.json();
             if (data.success) {
-                showToast('飞书机器人配置与业务端口自动纳管策略已保存！', '🎉');
+                showToast('飞书机器人配置与 WebSocket 长连接服务已保存！', '🎉');
                 loadSystemSettings();
             } else {
                 showToast(data.msg || '保存失败', '⚠️');
@@ -6360,42 +6411,47 @@
         } catch (e) {
             showToast('保存异常: ' + e, '⚠️');
         } finally {
-            if (btn) { btn.disabled = false; btn.innerText = '💾 保存飞书通知配置'; }
+            if (btn) { btn.disabled = false; btn.innerText = '💾 保存飞书机器人配置'; }
         }
     }
 
     async function testFeishuNotification() {
         const btn = document.getElementById('btn-test-feishu');
+        const appId = document.getElementById('feishu-bot-appid-input')?.value.trim() || '';
+        const appSecret = document.getElementById('feishu-bot-appsecret-input')?.value.trim() || '';
+        const receiveId = document.getElementById('feishu-bot-receiveid-input')?.value.trim() || '';
         const webhookUrl = document.getElementById('feishu-bot-webhook-input')?.value.trim() || '';
-        const secret = document.getElementById('feishu-bot-secret-input')?.value.trim() || '';
 
-        if (!webhookUrl) {
-            showToast('请先输入飞书自定义机器人的 Webhook 地址', '⚠️');
-            document.getElementById('feishu-bot-webhook-input')?.focus();
+        if (!appId && !webhookUrl) {
+            showToast('请先输入飞书应用 App ID 或 Webhook 地址', '⚠️');
+            document.getElementById('feishu-bot-appid-input')?.focus();
             return;
         }
 
         try {
-            if (btn) { btn.disabled = true; btn.innerText = '⏳ 发送中...'; }
-            showToast('正在向飞书机器人发送测试卡片...', '⏳');
+            if (btn) { btn.disabled = true; btn.innerText = '⏳ 校验中...'; }
+            showToast('正在向飞书开放平台校验凭证与长连接...', '⏳');
             const res = await fetch('/api/settings/feishu/test', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    webhook_url: webhookUrl,
-                    secret: secret
+                    app_id: appId,
+                    app_secret: appSecret,
+                    receive_id: receiveId,
+                    webhook_url: webhookUrl
                 })
             });
             const data = await res.json();
             if (data.success) {
-                showToast(data.msg || '测试卡片发送成功！请在飞书客户端查收', '🎉');
+                showToast(data.msg || '测试与凭据校验成功！', '🎉');
+                loadSystemSettings();
             } else {
-                showToast('发送失败: ' + (data.msg || '未知错误'), '⚠️');
+                showToast('校验失败: ' + (data.msg || '未知错误'), '⚠️');
             }
         } catch (e) {
             showToast('测试异常: ' + e, '⚠️');
         } finally {
-            if (btn) { btn.disabled = false; btn.innerText = '🧪 发送测试卡片'; }
+            if (btn) { btn.disabled = false; btn.innerText = '🧪 校验长连接并测试发送'; }
         }
     }
 
@@ -6758,16 +6814,24 @@
             if (document.getElementById('feishu-auto-manage-listen-ports-toggle')) {
                 payload.auto_manage_listen_ports = document.getElementById('feishu-auto-manage-listen-ports-toggle').checked !== false;
             }
-            if (document.getElementById('feishu-bot-webhook-input')) {
+            if (document.getElementById('feishu-bot-appid-input') || document.getElementById('feishu-bot-webhook-input')) {
                 const fbEnabled = !!document.getElementById('feishu-bot-enabled-toggle')?.checked;
+                const appId = document.getElementById('feishu-bot-appid-input')?.value.trim() || '';
+                const appSecret = document.getElementById('feishu-bot-appsecret-input')?.value.trim() || '';
+                const receiveId = document.getElementById('feishu-bot-receiveid-input')?.value.trim() || '';
+                const useWs = document.getElementById('feishu-bot-usews-toggle')?.checked !== false;
                 const fbUrl = document.getElementById('feishu-bot-webhook-input')?.value.trim() || '';
-                const fbSecret = document.getElementById('feishu-bot-secret-input')?.value.trim() || '';
                 const fbPortNotify = document.getElementById('feishu-notify-listen-port-toggle')?.checked !== false;
                 const fbBanNotify = !!document.getElementById('feishu-notify-ban-toggle')?.checked;
                 payload.feishu_bot = {
                     enabled: fbEnabled,
+                    bot_type: appId ? 'app' : 'webhook',
+                    app_id: appId,
+                    app_secret: appSecret,
+                    receive_id: receiveId,
+                    receive_id_type: receiveId.startsWith('ou_') ? 'open_id' : 'chat_id',
+                    use_ws: useWs,
                     webhook_url: fbUrl,
-                    secret: fbSecret,
                     notify_new_listen_port: fbPortNotify,
                     notify_ban_ip: fbBanNotify
                 };

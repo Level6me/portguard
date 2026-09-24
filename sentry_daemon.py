@@ -70,7 +70,9 @@ from core.mesh import (
 )
 
 from core.notify import (
-    send_feishu_webhook, notify_new_listening_port, notify_ban_alert
+    send_feishu_webhook, notify_new_listening_port, notify_ban_alert,
+    start_feishu_ws, stop_feishu_ws, reload_feishu_ws, is_feishu_ws_connected,
+    send_test_feishu_message
 )
 
 # 核心防御高优先级线程池 (限制并发，避免扫描风暴下线程爆炸)

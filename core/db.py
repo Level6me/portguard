@@ -84,6 +84,12 @@ DEFAULT_CONFIG = {
     },
     "feishu_bot": {
         "enabled": False,
+        "bot_type": "app",
+        "app_id": "",
+        "app_secret": "",
+        "receive_id": "",
+        "receive_id_type": "chat_id",
+        "use_ws": True,
         "webhook_url": "",
         "secret": "",
         "notify_new_listen_port": True,

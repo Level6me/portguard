@@ -7,7 +7,7 @@ from sentry_daemon import (
     site_collector_instance, init_firewall_ipset, flush_firewall_blocks,
     validate_cluster_target, normalize_cluster_node
 )
-from core.notify import send_test_feishu_message
+from core.notify import send_test_feishu_message, is_feishu_ws_connected, reload_feishu_ws
 
 def handle_settings_get(req, parsed):
     cfg = load_config()
@@ -24,6 +24,12 @@ def handle_settings_get(req, parsed):
 
     feishu_bot = cfg.get("feishu_bot", {
         "enabled": False,
+        "bot_type": "app",
+        "app_id": "",
+        "app_secret": "",
+        "receive_id": "",
+        "receive_id_type": "chat_id",
+        "use_ws": True,
         "webhook_url": "",
         "secret": "",
         "notify_new_listen_port": True,
@@ -31,9 +37,13 @@ def handle_settings_get(req, parsed):
     })
     if isinstance(feishu_bot, dict):
         feishu_bot = feishu_bot.copy()
+        raw_app_secret = feishu_bot.get("app_secret", "").strip()
         raw_secret = feishu_bot.get("secret", "").strip()
+        feishu_bot["app_secret"] = ("*" * len(raw_app_secret)) if raw_app_secret else ""
         feishu_bot["secret"] = ("*" * len(raw_secret)) if raw_secret else ""
+        feishu_bot["app_secret_configured"] = bool(raw_app_secret)
         feishu_bot["secret_configured"] = bool(raw_secret)
+        feishu_bot["ws_connected"] = is_feishu_ws_connected()
 
     req._send_json({
         "trap_threshold": int(cfg.get("trap_threshold", 2) or 2),
@@ -182,20 +192,38 @@ def handle_settings_post(req, parsed, req_data):
         old_fb = cfg.get("feishu_bot", {})
         if not isinstance(old_fb, dict):
             old_fb = {}
+
+        old_app_secret = old_fb.get("app_secret", "").strip()
+        incoming_app_secret = str(incoming_fb.get("app_secret", "")).strip()
+
         old_secret = old_fb.get("secret", "").strip()
         incoming_secret = str(incoming_fb.get("secret", "")).strip()
 
         fb_dict = {
             "enabled": bool(incoming_fb.get("enabled", False)),
+            "bot_type": str(incoming_fb.get("bot_type", "app")).strip(),
+            "app_id": str(incoming_fb.get("app_id", "")).strip(),
+            "receive_id": str(incoming_fb.get("receive_id", "")).strip(),
+            "receive_id_type": str(incoming_fb.get("receive_id_type", "chat_id")).strip(),
+            "use_ws": bool(incoming_fb.get("use_ws", True)),
             "webhook_url": str(incoming_fb.get("webhook_url", "")).strip(),
             "notify_new_listen_port": bool(incoming_fb.get("notify_new_listen_port", True)),
             "notify_ban_ip": bool(incoming_fb.get("notify_ban_ip", False))
         }
+
+        if not incoming_app_secret or all(ch == '*' for ch in incoming_app_secret):
+            fb_dict["app_secret"] = old_app_secret
+        else:
+            fb_dict["app_secret"] = incoming_app_secret
+
         if not incoming_secret or all(ch == '*' for ch in incoming_secret):
             fb_dict["secret"] = old_secret
         else:
             fb_dict["secret"] = incoming_secret
+
         cfg["feishu_bot"] = fb_dict
+        reload_feishu_ws(cfg)
+
     save_config(cfg)
     req._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
     return
@@ -203,24 +231,33 @@ def handle_settings_post(req, parsed, req_data):
 
 def handle_feishu_test(req, parsed, req_data):
     cfg = load_config()
-    webhook_url = str(req_data.get("webhook_url", "")).strip()
-    secret = str(req_data.get("secret", "")).strip()
-
     old_fb = cfg.get("feishu_bot", {})
     if not isinstance(old_fb, dict):
         old_fb = {}
 
-    if not webhook_url:
-        webhook_url = old_fb.get("webhook_url", "").strip()
+    app_id = str(req_data.get("app_id", "")).strip() or old_fb.get("app_id", "").strip()
+    app_secret = str(req_data.get("app_secret", "")).strip()
+    if not app_secret or all(ch == '*' for ch in app_secret):
+        app_secret = old_fb.get("app_secret", "").strip()
 
+    receive_id = str(req_data.get("receive_id", "")).strip() or old_fb.get("receive_id", "").strip()
+    webhook_url = str(req_data.get("webhook_url", "")).strip() or old_fb.get("webhook_url", "").strip()
+    secret = str(req_data.get("secret", "")).strip()
     if not secret or all(ch == '*' for ch in secret):
         secret = old_fb.get("secret", "").strip()
 
-    if not webhook_url:
-        req._send_json({"success": False, "msg": "请提供有效的 Webhook URL 或先填写飞书机器人配置"}, status=400)
+    if not app_id and not webhook_url:
+        req._send_json({"success": False, "msg": "请提供飞书应用的 App ID 与 App Secret，或提供 Webhook URL"}, status=400)
         return
 
-    ok, msg = send_test_feishu_message(webhook_url, secret=secret, cfg=cfg)
+    ok, msg = send_test_feishu_message(
+        app_id=app_id,
+        app_secret=app_secret,
+        receive_id=receive_id,
+        webhook_url=webhook_url,
+        secret=secret,
+        cfg=cfg
+    )
     req._send_json({"success": ok, "msg": msg})
     return
 

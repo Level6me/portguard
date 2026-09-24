@@ -41,7 +41,7 @@ from sentry_daemon import (
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
     get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections,
     generate_cluster_response_token, verify_cluster_response_token, safe_cluster_urlopen,
-    auto_heal_whitelist_ips, start_listen_port_watcher
+    auto_heal_whitelist_ips, start_listen_port_watcher, start_feishu_ws
 )
 
 def parse_loose_json_or_lines(text):
@@ -877,6 +877,11 @@ def run_server():
     start_cluster_autosync_worker()
     # 启动内核新增监听端口自动感知与告警守护线程
     start_listen_port_watcher()
+    # 启动飞书应用机器人长连接守护 (WebSocket)
+    try:
+        start_feishu_ws(cfg)
+    except Exception as e:
+        print(f"[PortGuard] 启动飞书长连接异常: {e}")
 
     # 后台平滑增量重放黑名单到 iptables / 黑洞路由（彻底杜绝进程风暴与 CPU 脉冲）
     def _async_replay_blacklist():
