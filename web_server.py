@@ -41,7 +41,7 @@ from sentry_daemon import (
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
     get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections,
     generate_cluster_response_token, verify_cluster_response_token, safe_cluster_urlopen,
-    auto_heal_whitelist_ips
+    auto_heal_whitelist_ips, start_listen_port_watcher
 )
 
 def parse_loose_json_or_lines(text):
@@ -875,6 +875,8 @@ def run_server():
     threading.Thread(target=config_watcher_loop, daemon=True, name="ConfigWatcherLoop").start()
     # 启动多机集群黑白名单全量双向定时自动对齐巡检
     start_cluster_autosync_worker()
+    # 启动内核新增监听端口自动感知与告警守护线程
+    start_listen_port_watcher()
 
     # 后台平滑增量重放黑名单到 iptables / 黑洞路由（彻底杜绝进程风暴与 CPU 脉冲）
     def _async_replay_blacklist():

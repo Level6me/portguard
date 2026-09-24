@@ -69,6 +69,10 @@ from core.mesh import (
     sync_cluster_mesh_state, start_cluster_autosync_worker,
 )
 
+from core.notify import (
+    send_feishu_webhook, notify_new_listening_port, notify_ban_alert
+)
+
 # 核心防御高优先级线程池 (限制并发，避免扫描风暴下线程爆炸)
 _EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="SentryWorker")
 # 外部网络 I/O 隔离线程池 (GeoIP 溯源查询、慢速外网请求，与核心防御彻底隔离)
@@ -934,20 +938,38 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     # 5. 向集群联防节点异步广播黑名单情报
     broadcast_cluster_ban(ip, ban_reason, event_level, port=port_val, proto="TCP", category=event_category)
 
+    # 6. 飞书自定义机器人告警通知 (若开启 notify_ban_ip)
+    try:
+        from core.notify import notify_ban_alert
+        loc_str = f"{geo_country} {geo_region} {geo_city}".strip()
+        notify_ban_alert(ip, port=port_val, reason=ban_reason, geo=loc_str, level=event_level, cfg=cfg)
+    except Exception:
+        pass
+
 _SYSTEM_PORTS_CACHE = {}
 _SYSTEM_PORTS_CACHE_TIME = 0
 _SYSTEM_PORTS_LOCK = threading.Lock()
 
 KNOWN_SYSTEM_SERVICES = {
     9099: "PortGuard Web控制台",
+    9098: "PortGuard 集群通信服务",
     22: "SSH 远程管理",
+    29675: "SSH 非标管理端口",
     80: "HTTP 网站服务 (OpenResty/Nginx)",
     443: "HTTPS 加密网站服务",
     15633: "1Panel 运维控制面板",
     10232: "1Panel 运维控制面板",
+    33941: "1Panel 运维管理面板",
     8080: "Web 业务应用端口",
+    8085: "业务反向代理端口 (HSS)",
+    8086: "数据/业务服务端口",
+    8088: "业务服务端口",
+    7000: "FRPS 内网穿透服务",
     9090: "Prometheus / 日志监控服务",
     1688: "KMS 激活服务",
+    3306: "MySQL 数据库服务",
+    5432: "PostgreSQL 数据库服务",
+    6881: "BT/下载服务",
     9000: "Portainer 控制台",
     9443: "Portainer HTTPS 管理"
 }
@@ -1052,6 +1074,238 @@ def get_active_system_ports():
         _SYSTEM_PORTS_CACHE = ports_map
         _SYSTEM_PORTS_CACHE_TIME = now
         return ports_map
+
+def invalidate_system_ports_cache():
+    """使系统监听端口缓存立即失效，促使下次调用重新扫描感知"""
+    global _SYSTEM_PORTS_CACHE_TIME
+    with _SYSTEM_PORTS_LOCK:
+        _SYSTEM_PORTS_CACHE_TIME = 0.0
+
+_KNOWN_KERNEL_LISTEN_PORTS = set()
+_INITIAL_KERNEL_PORTS_SCANNED = False
+_LISTEN_PORT_SCAN_LOCK = threading.Lock()
+
+def get_raw_kernel_listen_ports_with_details():
+    """
+    零开销直接解析 Linux 原生 /proc/net/tcp 和 /proc/net/tcp6 中的所有处于 0A (TCP_LISTEN) 状态的端口。
+    同时尽力通过 /proc/ 关联进程名称与 PID。
+    返回: dict of port -> {"port": port, "inode": inode, "process": proc_name, "pid": pid}
+    """
+    inode_port_map = {}
+    port_details = {}
+    for proc_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+        if not os.path.exists(proc_file):
+            continue
+        try:
+            with open(proc_file, "r") as f:
+                lines = f.readlines()
+            for line in lines[1:]:
+                parts = line.strip().split()
+                if len(parts) >= 10 and parts[3] == "0A":
+                    hex_port = parts[1].split(":")[-1]
+                    try:
+                        port_num = int(hex_port, 16)
+                    except Exception:
+                        continue
+                    if 1 <= port_num <= 65535:
+                        inode = parts[9]
+                        inode_port_map[inode] = port_num
+                        if port_num not in port_details:
+                            port_details[port_num] = {
+                                "port": port_num,
+                                "inode": inode,
+                                "process": None,
+                                "proc": None,
+                                "pid": None
+                            }
+        except Exception:
+            pass
+
+    # 尽力匹配 PID / Process comm (轻量快速扫描 /proc/[0-9]*)
+    if inode_port_map:
+        try:
+            for pid_entry in os.listdir("/proc"):
+                if not pid_entry.isdigit():
+                    continue
+                fd_dir = os.path.join("/proc", pid_entry, "fd")
+                if not os.path.isdir(fd_dir):
+                    continue
+                try:
+                    for fd in os.listdir(fd_dir):
+                        try:
+                            target = os.readlink(os.path.join(fd_dir, fd))
+                            if target.startswith("socket:["):
+                                inode = target[8:-1]
+                                if inode in inode_port_map:
+                                    port = inode_port_map[inode]
+                                    if port in port_details and port_details[port]["process"] is None:
+                                        comm_path = os.path.join("/proc", pid_entry, "comm")
+                                        comm = None
+                                        if os.path.exists(comm_path):
+                                            try:
+                                                with open(comm_path, "r", encoding="utf-8", errors="replace") as cf:
+                                                    comm = cf.read().strip()
+                                            except Exception:
+                                                pass
+                                        port_details[port]["process"] = comm
+                                        port_details[port]["proc"] = comm
+                                        port_details[port]["pid"] = int(pid_entry)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return port_details
+
+def check_and_sync_new_listen_ports():
+    """
+    实时巡检内核监听端口变化：
+    当检测到内核新增监听端口且启用了 auto_manage_listen_ports 时：
+    1. 过滤蜜罐探针端口与 PortGuard 自身控制台/集群端口；
+    2. 自动将其写入 config.json 中的 business_ports 业务放行列表；
+    3. 触发飞书自定义机器人告警提醒通知；
+    4. 刷新内部端口缓存。
+    """
+    global _KNOWN_KERNEL_LISTEN_PORTS, _INITIAL_KERNEL_PORTS_SCANNED
+    with _LISTEN_PORT_SCAN_LOCK:
+        try:
+            cfg = load_config()
+            auto_manage = bool(cfg.get("auto_manage_listen_ports", True))
+            web_port = int(cfg.get("web_port", 9099) or 9099)
+            cluster_port = int(cfg.get("cluster_sync", {}).get("port", 9098) or 9098)
+
+            port_details = get_raw_kernel_listen_ports_with_details()
+            current_ports = set(port_details.keys())
+
+            # 首次启动初始化已发现的端口集合
+            if not _INITIAL_KERNEL_PORTS_SCANNED:
+                _KNOWN_KERNEL_LISTEN_PORTS = set(current_ports)
+                _INITIAL_KERNEL_PORTS_SCANNED = True
+
+                # 若开启了自动纳管，检查当前是否有遗漏的活跃系统端口未在 business_ports 中（如非标 SSH 端口等）
+                if auto_manage:
+                    biz_ports = cfg.get("business_ports", [])
+                    biz_set = set()
+                    for b in biz_ports:
+                        if isinstance(b, int):
+                            biz_set.add(b)
+                        elif isinstance(b, dict) and "port" in b:
+                            try:
+                                biz_set.add(int(b["port"]))
+                            except Exception:
+                                pass
+
+                    added_any = False
+                    for p, det in port_details.items():
+                        if p in biz_set or p in (web_port, cluster_port):
+                            continue
+                        if is_trap_port(p, cfg):
+                            continue
+                        if trap_instance and (p in getattr(trap_instance, "trap_map", {}) or p in [s_p for s, s_p in getattr(trap_instance, "sockets", {}).values()]):
+                            continue
+
+                        # 自动补全加入业务端口列表
+                        svc_name = KNOWN_SYSTEM_SERVICES.get(p, f"系统原生服务 ({p})")
+                        proc_name = det.get("process")
+                        biz_ports.append({
+                            "port": p,
+                            "name": proc_name or svc_name,
+                            "category": "system",
+                            "remark": f"内核系统监听自动纳管 ({proc_name})" if proc_name else "内核系统监听自动纳管",
+                            "block_idc": False,
+                            "block_scanner": True,
+                            "is_system": False,
+                            "enabled": True
+                        })
+                        biz_set.add(p)
+                        added_any = True
+                        print(f"[PortGuard Sentry] 启动自愈：自动将现有内核活跃服务端口 {p} ({proc_name or svc_name}) 纳管至业务端口")
+
+                    if added_any:
+                        cfg["business_ports"] = biz_ports
+                        save_config(cfg)
+                        invalidate_system_ports_cache()
+                return
+
+            # 非首次启动：计算真正新增的监听端口
+            new_ports = current_ports - _KNOWN_KERNEL_LISTEN_PORTS
+            if not new_ports:
+                return
+
+            # 更新已知集合
+            _KNOWN_KERNEL_LISTEN_PORTS.update(current_ports)
+
+            biz_ports = cfg.get("business_ports", [])
+            biz_set = set()
+            for b in biz_ports:
+                if isinstance(b, int):
+                    biz_set.add(b)
+                elif isinstance(b, dict) and "port" in b:
+                    try:
+                        biz_set.add(int(b["port"]))
+                    except Exception:
+                        pass
+
+            added_ports = []
+            for p in sorted(list(new_ports)):
+                if p in biz_set or p in (web_port, cluster_port):
+                    continue
+                if is_trap_port(p, cfg):
+                    continue
+                if trap_instance and (p in getattr(trap_instance, "trap_map", {}) or p in [s_p for s, s_p in getattr(trap_instance, "sockets", {}).values()]):
+                    continue
+
+                det = port_details.get(p, {})
+                proc_name = det.get("process")
+                pid = det.get("pid")
+                svc_name = KNOWN_SYSTEM_SERVICES.get(p, f"服务端口 ({p})")
+                display_name = proc_name or svc_name
+
+                if auto_manage:
+                    biz_ports.append({
+                        "port": p,
+                        "name": display_name,
+                        "category": "custom",
+                        "remark": f"内核新增监听自动纳管 ({proc_name})" if proc_name else "内核新增监听自动纳管",
+                        "block_idc": False,
+                        "block_scanner": True,
+                        "is_system": False,
+                        "enabled": True
+                    })
+                    biz_set.add(p)
+                    added_ports.append((p, display_name, proc_name, pid))
+                    print(f"[PortGuard Sentry] 🔔 感知到内核新增监听端口 {p} ({display_name})，已自动纳管至业务端口！")
+
+                # 触发飞书通知
+                try:
+                    notify_new_listening_port(p, display_name, proc_name=proc_name, pid=pid, cfg=cfg)
+                except Exception as e:
+                    print(f"[PortGuard Sentry] 飞书告警通知分发异常: {e}")
+
+            if added_ports:
+                cfg["business_ports"] = biz_ports
+                save_config(cfg)
+                invalidate_system_ports_cache()
+
+        except Exception as e:
+            print(f"[PortGuard Sentry] 巡检内核监听端口异常: {e}")
+
+def listen_port_watcher_loop():
+    """后台监听端口自动巡检循环"""
+    while True:
+        try:
+            check_and_sync_new_listen_ports()
+        except Exception as e:
+            print(f"[ListenPortWatcher] 异常: {e}")
+        time.sleep(5)
+
+def start_listen_port_watcher():
+    """启动内核监听端口巡检守护线程"""
+    t = threading.Thread(target=listen_port_watcher_loop, daemon=True, name="ListenPortWatcher")
+    t.start()
+    return t
 
 def get_all_business_ports_info():
     """

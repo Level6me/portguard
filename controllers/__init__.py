@@ -5,7 +5,8 @@ from controllers.stats_controller import (
 from controllers.settings_controller import (
     handle_settings_get, handle_config_snapshots, handle_config_backup,
     handle_compromise_check, handle_defense_toggle, handle_settings_post,
-    handle_config_rollback, handle_auth_status, handle_auth_login, handle_auth_logout
+    handle_config_rollback, handle_auth_status, handle_auth_login, handle_auth_logout,
+    handle_feishu_test
 )
 from controllers.logs_controller import (
     handle_events, handle_access_logs, handle_access_logs_clear
@@ -74,6 +75,7 @@ POST_ROUTES = {
     "/api/ban": handle_ban,
     "/api/defense/toggle_pause": handle_defense_toggle,
     "/api/settings": handle_settings_post,
+    "/api/settings/feishu/test": handle_feishu_test,
     "/api/config/rollback": handle_config_rollback,
     "/api/blacklist/ban_subnet": handle_ban_subnet,
     "/api/blacklist/batch_ban_all": handle_batch_ban_all,

@@ -7,6 +7,7 @@ from sentry_daemon import (
     site_collector_instance, init_firewall_ipset, flush_firewall_blocks,
     validate_cluster_target, normalize_cluster_node
 )
+from core.notify import send_test_feishu_message
 
 def handle_settings_get(req, parsed):
     cfg = load_config()
@@ -20,6 +21,20 @@ def handle_settings_get(req, parsed):
         raw_secret = cluster_sync.get("cluster_secret", "").strip()
         cluster_sync["cluster_secret"] = ("*" * len(raw_secret)) if raw_secret else ""
         cluster_sync["cluster_secret_configured"] = bool(raw_secret)
+
+    feishu_bot = cfg.get("feishu_bot", {
+        "enabled": False,
+        "webhook_url": "",
+        "secret": "",
+        "notify_new_listen_port": True,
+        "notify_ban_ip": False
+    })
+    if isinstance(feishu_bot, dict):
+        feishu_bot = feishu_bot.copy()
+        raw_secret = feishu_bot.get("secret", "").strip()
+        feishu_bot["secret"] = ("*" * len(raw_secret)) if raw_secret else ""
+        feishu_bot["secret_configured"] = bool(raw_secret)
+
     req._send_json({
         "trap_threshold": int(cfg.get("trap_threshold", 2) or 2),
         "trap_window_seconds": int(cfg.get("trap_window_seconds", 30) or 30),
@@ -35,6 +50,8 @@ def handle_settings_get(req, parsed):
         "ban_action_blackhole": bool(cfg.get("ban_action_blackhole", True)),
         "enable_tarpit_delay": bool(cfg.get("enable_tarpit_delay", False)),
         "dynamic_honeypot_ports": bool(cfg.get("dynamic_honeypot_ports", True)),
+        "auto_manage_listen_ports": bool(cfg.get("auto_manage_listen_ports", True)),
+        "feishu_bot": feishu_bot,
         "defense_paused": bool(cfg.get("defense_paused", False)),
         "node_name": str(cfg.get("node_name", "本机节点") or "本机节点"),
         "cluster_sync": cluster_sync,
@@ -158,8 +175,53 @@ def handle_settings_post(req, parsed, req_data):
                         safe_nodes.append(norm)
             cs["cluster_nodes"] = safe_nodes
         cfg["cluster_sync"] = cs
+    if "auto_manage_listen_ports" in req_data:
+        cfg["auto_manage_listen_ports"] = bool(req_data["auto_manage_listen_ports"])
+    if "feishu_bot" in req_data and isinstance(req_data["feishu_bot"], dict):
+        incoming_fb = req_data["feishu_bot"]
+        old_fb = cfg.get("feishu_bot", {})
+        if not isinstance(old_fb, dict):
+            old_fb = {}
+        old_secret = old_fb.get("secret", "").strip()
+        incoming_secret = str(incoming_fb.get("secret", "")).strip()
+
+        fb_dict = {
+            "enabled": bool(incoming_fb.get("enabled", False)),
+            "webhook_url": str(incoming_fb.get("webhook_url", "")).strip(),
+            "notify_new_listen_port": bool(incoming_fb.get("notify_new_listen_port", True)),
+            "notify_ban_ip": bool(incoming_fb.get("notify_ban_ip", False))
+        }
+        if not incoming_secret or all(ch == '*' for ch in incoming_secret):
+            fb_dict["secret"] = old_secret
+        else:
+            fb_dict["secret"] = incoming_secret
+        cfg["feishu_bot"] = fb_dict
     save_config(cfg)
     req._send_json({"success": True, "msg": "系统防御设置已成功保存并立即生效！"})
+    return
+
+
+def handle_feishu_test(req, parsed, req_data):
+    cfg = load_config()
+    webhook_url = str(req_data.get("webhook_url", "")).strip()
+    secret = str(req_data.get("secret", "")).strip()
+
+    old_fb = cfg.get("feishu_bot", {})
+    if not isinstance(old_fb, dict):
+        old_fb = {}
+
+    if not webhook_url:
+        webhook_url = old_fb.get("webhook_url", "").strip()
+
+    if not secret or all(ch == '*' for ch in secret):
+        secret = old_fb.get("secret", "").strip()
+
+    if not webhook_url:
+        req._send_json({"success": False, "msg": "请提供有效的 Webhook URL 或先填写飞书机器人配置"}, status=400)
+        return
+
+    ok, msg = send_test_feishu_message(webhook_url, secret=secret, cfg=cfg)
+    req._send_json({"success": ok, "msg": msg})
     return
 
 

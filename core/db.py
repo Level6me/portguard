@@ -82,6 +82,14 @@ DEFAULT_CONFIG = {
         "cluster_secret": "",
         "cluster_nodes": []
     },
+    "feishu_bot": {
+        "enabled": False,
+        "webhook_url": "",
+        "secret": "",
+        "notify_new_listen_port": True,
+        "notify_ban_ip": False
+    },
+    "auto_manage_listen_ports": True,
     "business_ports": [
         {"port": 80, "name": "HTTP 网站服务", "category": "web", "remark": "默认Web服务"},
         {"port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "默认加密Web服务"}
