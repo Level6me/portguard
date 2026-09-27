@@ -941,7 +941,8 @@ def run_server():
     trap_instance.start()
     sniffer_instance.start()
     site_collector_instance.start()
-    cleanup_expired_bans()
+    # 后台异步执行过期清理与日志归档瘦身，避免阻塞 Web 服务端口响应
+    threading.Thread(target=cleanup_expired_bans, daemon=True, name="StartupCleanup").start()
     # 启动后台自动清理守护线程 (定期清理过期黑名单/过期日志/VACUUM) 与配置变动热加载线程
     threading.Thread(target=cleanup_loop, daemon=True, name="CleanupLoop").start()
     threading.Thread(target=config_watcher_loop, daemon=True, name="ConfigWatcherLoop").start()
