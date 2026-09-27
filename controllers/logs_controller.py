@@ -1,11 +1,27 @@
-# -*- coding: utf-8 -*-
+import time
+import threading
 from urllib.parse import parse_qs
 from sentry_daemon import (
     get_db, _GEO_CACHE, get_ip_threat_tags, _EXECUTOR,
     resolve_ip_geo, resolve_ip_geo_local
 )
 
+_EVENTS_CACHE = None
+_EVENTS_CACHE_TIME = 0.0
+_EVENTS_CACHE_LOCK = threading.Lock()
+
 def handle_events(req, parsed):
+    global _EVENTS_CACHE, _EVENTS_CACHE_TIME
+    now_mono = time.monotonic()
+    query = parse_qs(parsed.query) if parsed.query else {}
+    if not query:
+        with _EVENTS_CACHE_LOCK:
+            if _EVENTS_CACHE is not None and (now_mono - _EVENTS_CACHE_TIME) < 5.0:
+                req._send_json(_EVENTS_CACHE)
+                return
+
+    limit_cnt = min(int(query.get("limit", [100])[0]), 200) if query.get("limit") else 100
+
     conn = get_db()
     c = conn.cursor()
     c.execute("""
@@ -14,8 +30,8 @@ def handle_events(req, parsed):
         FROM events e 
         WHERE e.ip NOT IN (SELECT ip FROM hidden_ips)
         ORDER BY e.id DESC 
-        LIMIT 200
-    """)
+        LIMIT ?
+    """, (limit_cnt,))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     for r in rows:
@@ -32,6 +48,12 @@ def handle_events(req, parsed):
                 _EXECUTOR.submit(resolve_ip_geo, r["ip"])
         # 动态植入威胁信誉指纹标签
         r["threat_tags"] = get_ip_threat_tags(r["ip"], r)
+
+    if not query:
+        with _EVENTS_CACHE_LOCK:
+            _EVENTS_CACHE = rows
+            _EVENTS_CACHE_TIME = time.monotonic()
+
     req._send_json(rows)
     return
 

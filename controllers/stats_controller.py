@@ -22,7 +22,7 @@ def handle_stats(req, parsed):
     global _STATS_CACHE, _STATS_CACHE_TIME
     now_mono = time.monotonic()
     with _STATS_CACHE_LOCK:
-        if _STATS_CACHE is not None and (now_mono - _STATS_CACHE_TIME) < 15.0:
+        if _STATS_CACHE is not None and (now_mono - _STATS_CACHE_TIME) < 30.0:
             req._send_json(_STATS_CACHE)
             return
 
