@@ -665,8 +665,47 @@ def cleanup_loop():
 
 # [REFACTORED] save_config and snapshots moved to core/db.py
 
-def check_c2_compromise_connections():
-    """反向连线检测 (Compromise Assessment)：定时审计本机所有活跃 TCP 连接，检测是否存在内网主机失陷、恶意反弹 C2 或黑名单异常连线"""
+_C2_CACHE = None
+_C2_CACHE_TIME = 0.0
+_C2_CACHE_LOCK = threading.Lock()
+
+def _find_process_by_socket_inode(target_inode):
+    """按需反查目标 socket 对应的进程 PID 与名称，彻底避免无差别全盘深度扫描 /proc"""
+    target = f"socket:[{target_inode}]"
+    try:
+        for p in glob.glob("/proc/[0-9]*"):
+            pid = os.path.basename(p)
+            fd_dir = os.path.join(p, "fd")
+            if not os.path.isdir(fd_dir):
+                continue
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        if os.readlink(os.path.join(fd_dir, fd)) == target:
+                            comm = ""
+                            try:
+                                with open(os.path.join(p, "comm"), "r") as cf:
+                                    comm = cf.read().strip()
+                            except Exception:
+                                pass
+                            return {"pid": pid, "process": comm or "未知进程"}
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return {"pid": "--", "process": "未知进程"}
+
+def check_c2_compromise_connections(force=False):
+    """反向连线检测 (Compromise Assessment)：轻量级审计本机活跃 TCP 连接，检测是否存在内网主机失陷、恶意反弹 C2 或黑名单异常连线"""
+    global _C2_CACHE, _C2_CACHE_TIME
+    now_mono = time.monotonic()
+    if not force:
+        with _C2_CACHE_LOCK:
+            if _C2_CACHE is not None and (now_mono - _C2_CACHE_TIME) < 30.0:
+                return list(_C2_CACHE)
+
     alerts = []
     try:
         conn = get_db()
@@ -676,40 +715,23 @@ def check_c2_compromise_connections():
         conn.close()
 
         if not black_dict:
+            with _C2_CACHE_LOCK:
+                _C2_CACHE = []
+                _C2_CACHE_TIME = now_mono
             return alerts
 
-        # 扫描并建立 socket inode -> (pid, comm) 快速映射
-        sock_proc_map = {}
-        for p in glob.glob("/proc/[0-9]*"):
-            pid = os.path.basename(p)
-            comm = ""
-            try:
-                with open(os.path.join(p, "comm"), "r") as cf:
-                    comm = cf.read().strip()
-            except Exception:
-                pass
-            fd_dir = os.path.join(p, "fd")
-            if os.path.isdir(fd_dir):
-                try:
-                    for fd in os.listdir(fd_dir):
-                        try:
-                            t = os.readlink(os.path.join(fd_dir, fd))
-                            if t.startswith("socket:["):
-                                inode = t[8:-1]
-                                sock_proc_map[inode] = {"pid": pid, "process": comm}
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-        active_system_ports = get_active_system_ports()
+        active_system_ports = None
 
         # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的 ESTABLISHED 连接 (状态 01)
         for proc_file, is_v6 in [("/proc/net/tcp", False), ("/proc/net/tcp6", True)]:
             if not os.path.exists(proc_file):
                 continue
-            with open(proc_file, "r") as f:
-                lines = f.readlines()[1:]
+            try:
+                with open(proc_file, "r") as f:
+                    lines = f.readlines()[1:]
+            except Exception:
+                continue
+
             for line in lines:
                 parts = line.strip().split()
                 if len(parts) < 10:
@@ -733,7 +755,9 @@ def check_c2_compromise_connections():
                         continue # 重点监控 IPv4 外连
                     
                     if remote_ip in black_dict:
-                        proc_info = sock_proc_map.get(inode, {"pid": "--", "process": "未知进程"})
+                        if active_system_ports is None:
+                            active_system_ports = get_active_system_ports()
+                        proc_info = _find_process_by_socket_inode(inode)
                         is_inbound = local_port in active_system_ports
                         direction = "INBOUND" if is_inbound else "OUTBOUND"
                         direction_desc = f"入站连接 (对端访问本机监听端口 {local_port})" if is_inbound else f"出站反连 (本机主动连向外部端口 {remote_port})"
@@ -765,6 +789,10 @@ def check_c2_compromise_connections():
                     pass
     except Exception:
         pass
+
+    with _C2_CACHE_LOCK:
+        _C2_CACHE = alerts
+        _C2_CACHE_TIME = now_mono
     return alerts
 
 # [REFACTORED] ssh protection, gateway, ip_in_whitelist moved to core/firewall.py
