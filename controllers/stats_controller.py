@@ -94,7 +94,10 @@ def handle_stats(req, parsed):
         full_labels.append(full_label)
         data_points.append(slot_map.get(slot_idx, 0))
 
-    c.execute(f"SELECT COUNT(DISTINCT ip) FROM events {hidden_where}")
+    if has_hidden:
+        c.execute("SELECT count(*) FROM (SELECT DISTINCT ip FROM events WHERE ip NOT IN (SELECT ip FROM hidden_ips))")
+    else:
+        c.execute("SELECT count(*) FROM (SELECT DISTINCT ip FROM events)")
     unique_attackers = c.fetchone()[0] or 0
 
     cfg = load_config()

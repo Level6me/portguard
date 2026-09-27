@@ -247,6 +247,8 @@ def init_db(auto_heal=True):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_port ON events(port)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country ON events(country)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_name ON events(port, port_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_cov3 ON events(port, port_name, ip)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country_ip ON events(country, ip)")
     
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS blacklist (
