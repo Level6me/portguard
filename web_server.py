@@ -127,6 +127,17 @@ def load_html_template():
 
 HTML_TEMPLATE = load_html_template()
 
+_RAW_CHART_CACHE = None
+_GZIP_CHART_CACHE = None
+chart_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.min.js")
+if os.path.exists(chart_file):
+    try:
+        with open(chart_file, "rb") as f:
+            _RAW_CHART_CACHE = f.read()
+        _GZIP_CHART_CACHE = gzip.compress(_RAW_CHART_CACHE, compresslevel=6)
+    except Exception:
+        pass
+
 def load_report_template():
     report_path = os.path.join(TEMPLATES_DIR, "report.html")
     if not os.path.exists(report_path):
@@ -325,6 +336,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_response_data(b"", status=204)
 
     def do_HEAD(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/chart.min.js":
+            if _RAW_CHART_CACHE:
+                accept_encoding = self.headers.get('Accept-Encoding', '')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
+                if 'gzip' in accept_encoding and _GZIP_CHART_CACHE:
+                    self.send_header('Content-Encoding', 'gzip')
+                    self.send_header('Content-Length', str(len(_GZIP_CHART_CACHE)))
+                else:
+                    self.send_header('Content-Length', str(len(_RAW_CHART_CACHE)))
+                self.end_headers()
+                return
+            self.send_response(404)
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
@@ -343,16 +372,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "/backup_internal_2026.tar.gz": "全站源码与数据库备份包"
             }
             if path == "/chart.min.js":
-                chart_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.min.js")
-                if os.path.exists(chart_path):
-                    with open(chart_path, "rb") as f:
-                        chart_bytes = f.read()
+                if _RAW_CHART_CACHE:
+                    accept_encoding = self.headers.get('Accept-Encoding', '')
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/javascript; charset=utf-8')
                     self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
-                    self.send_header('Content-Length', str(len(chart_bytes)))
-                    self.end_headers()
-                    self.wfile.write(chart_bytes)
+                    if 'gzip' in accept_encoding and _GZIP_CHART_CACHE:
+                        self.send_header('Content-Encoding', 'gzip')
+                        self.send_header('Content-Length', str(len(_GZIP_CHART_CACHE)))
+                        self.end_headers()
+                        self.wfile.write(_GZIP_CHART_CACHE)
+                    else:
+                        self.send_header('Content-Length', str(len(_RAW_CHART_CACHE)))
+                        self.end_headers()
+                        self.wfile.write(_RAW_CHART_CACHE)
                     return
                 self.send_response(404)
                 self.end_headers()
