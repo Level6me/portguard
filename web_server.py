@@ -112,15 +112,10 @@ def load_html_template():
                 html = f.read()
             chart_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.min.js")
             if os.path.exists(chart_path):
-                try:
-                    with open(chart_path, "r", encoding="utf-8") as cf:
-                        chart_src = cf.read()
-                    html = html.replace(
-                        '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
-                        "<script>" + chart_src + "</script>"
-                    )
-                except Exception:
-                    pass
+                html = html.replace(
+                    '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+                    '<script src="/chart.min.js"></script>'
+                )
             _HTML_TEMPLATE_CACHE = html
             _HTML_TEMPLATE_MTIME = mtime
             _RAW_HTML_CACHE = html.encode("utf-8")
@@ -347,6 +342,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "/api/v1/internal_debug_auth": "内部调试授权接口",
                 "/backup_internal_2026.tar.gz": "全站源码与数据库备份包"
             }
+            if path == "/chart.min.js":
+                chart_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chart.min.js")
+                if os.path.exists(chart_path):
+                    with open(chart_path, "rb") as f:
+                        chart_bytes = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                    self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
+                    self.send_header('Content-Length', str(len(chart_bytes)))
+                    self.end_headers()
+                    self.wfile.write(chart_bytes)
+                    return
+                self.send_response(404)
+                self.end_headers()
+                return
+
             if path == "/robots.txt":
                 robots_content = (
                     "User-agent: *\n"

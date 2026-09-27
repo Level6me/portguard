@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no, viewport-fit=cover">
     <title>PortGuard · 智能主动诱捕防御系统</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/chart.min.js"></script>
     <style>
         :root {
             --bg: #000000;
@@ -3781,7 +3781,7 @@
             if (isAutoRefreshEnabled) {
                 fetchData(false, true);
             }
-        }, 5000);
+        }, 15000);
     }
 
     function toggleAutoRefresh() {
@@ -3793,8 +3793,8 @@
         if (isAutoRefreshEnabled) {
             if (btn) btn.className = 'pill-btn accent';
             if (icon) icon.innerText = '⏱️';
-            if (label) label.innerText = '5s 实时';
-            showToast('已开启 5 秒自动实时刷新', '⚡');
+            if (label) label.innerText = '15s 实时';
+            showToast('已开启 15 秒自动实时刷新', '⚡');
             fetchData(false, false);
             startAutoRefresh();
         } else {

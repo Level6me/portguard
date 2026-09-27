@@ -71,20 +71,28 @@ def handle_stats(req, parsed):
     """)
     geo_rank = [{"country": row["country"], "count": row["cnt"]} for row in c.fetchall()]
 
-    # 24小时趋势 (利用 timestamp 索引)
+    # 24小时趋势优化：单次聚合查询，避免循环执行 24 次独立 SQL
     labels = []
     full_labels = []
     data_points = []
     now_ts = int(time.time())
+    start_24h = now_ts - 24 * 3600
+    c.execute(f"""
+        SELECT ((timestamp - ?) / 3600) as slot, COUNT(*) as cnt 
+        FROM events 
+        WHERE timestamp >= ? AND timestamp < ? {hidden_filter}
+        GROUP BY slot
+    """, (start_24h, start_24h, now_ts))
+    slot_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
+
     for i in range(23, -1, -1):
         hour_start = now_ts - (i * 3600)
-        hour_end = hour_start + 3600
+        slot_idx = (hour_start - start_24h) // 3600
         hour_label = time.strftime("%H:00", time.localtime(hour_start))
         full_label = time.strftime("%Y-%m-%d %H:00", time.localtime(hour_start))
-        c.execute(f"SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? {hidden_filter}", (hour_start, hour_end))
         labels.append(hour_label)
         full_labels.append(full_label)
-        data_points.append(c.fetchone()[0] or 0)
+        data_points.append(slot_map.get(slot_idx, 0))
 
     c.execute(f"SELECT COUNT(DISTINCT ip) FROM events {hidden_where}")
     unique_attackers = c.fetchone()[0] or 0
@@ -190,10 +198,21 @@ def handle_report_export(req, parsed):
     return
 
 
+_ANALYTICS_CACHE = {}
+_ANALYTICS_CACHE_LOCK = threading.Lock()
+
 def handle_analytics(req, parsed):
+    global _ANALYTICS_CACHE
     query_params = parse_qs(parsed.query)
     range_param = query_params.get("range", ["7d"])[0]
     now_ts = int(time.time())
+
+    with _ANALYTICS_CACHE_LOCK:
+        cached_entry = _ANALYTICS_CACHE.get(range_param)
+        if cached_entry and (now_ts < cached_entry[0]):
+            req._send_json(cached_entry[1])
+            return
+
     now_dt = time.localtime(now_ts)
     today_str = time.strftime("%Y-%m-%d", now_dt)
     today_midnight = int(time.mktime(time.strptime(f"{today_str} 00:00:00", "%Y-%m-%d %H:%M:%S")))
@@ -278,15 +297,10 @@ def handle_analytics(req, parsed):
     c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     abnormal_web_requests = c.fetchone()[0]
 
-    # 统计口径科学对齐：
-    # 探测捕获总量（全网威胁感知总量）由本地端口探测、拦截阻断事件、外部集群协同情报以及未阻断连接组成
-    # 自动排除 WHITELIST（白名单信任流量，如集群节点内部同步、管理员 IP 等），防止内部高频心跳稀释安全拦截率
-    # 逻辑底线：探测捕获总量 >= 安全拦截总量，且 探测捕获总量 >= 独立威胁源 IP 数
     c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED', 'WHITELIST') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
     non_intercepted_probes = c.fetchone()[0]
     total_probes = max(raw_port_probes, total_intercepted + non_intercepted_probes, unique_attackers)
 
-    # 威胁拦截比率：严格约束在 0.0% ~ 100.0% 之间，科学反映系统感知威胁中已被处置阻断的比率
     if total_probes > 0:
         ban_rate = round(min(100.0, max(0.0, (total_intercepted / total_probes) * 100)), 1)
     else:
@@ -297,24 +311,45 @@ def handle_analytics(req, parsed):
     events_trend = []
     probes_trend = []
     web_trend = []
+
+    # 单次聚合查询替代 90 次循环 SQL
+    start_steps_ts = end_ts - (num_steps * step_seconds)
+    c.execute("""
+        SELECT CAST((timestamp - ?) / ? AS INTEGER) as step_idx, COUNT(*) 
+        FROM events 
+        WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
+        GROUP BY step_idx
+    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    ev_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
+
+    c.execute("""
+        SELECT CAST((timestamp - ?) / ? AS INTEGER) as step_idx, COUNT(*) 
+        FROM port_access_logs 
+        WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)
+        GROUP BY step_idx
+    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    pb_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
+
+    c.execute("""
+        SELECT CAST((timestamp - ?) / ? AS INTEGER) as step_idx, COUNT(*) 
+        FROM access_logs 
+        WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
+        GROUP BY step_idx
+    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    web_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
+
     for i in range(num_steps - 1, -1, -1):
-        s_ts = end_ts - ((i + 1) * step_seconds)
+        step_idx = num_steps - 1 - i
         e_ts = end_ts - (i * step_seconds)
         label = time.strftime(date_format, time.localtime(e_ts))
         labels.append(label)
         full_labels.append(time.strftime("%Y-%m-%d %H:%M" if step_seconds < 86400 else "%Y-%m-%d", time.localtime(e_ts)))
 
-        c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
-        ev_cnt = c.fetchone()[0]
+        ev_cnt = ev_map.get(step_idx, 0)
         events_trend.append(ev_cnt)
-
-        c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
-        pb_cnt = c.fetchone()[0]
-        # 趋势图中“探测捕获”作为全集威胁感知量，必须 >= 内部实际拦截量
+        pb_cnt = pb_map.get(step_idx, 0)
         probes_trend.append(max(pb_cnt, ev_cnt))
-
-        c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (s_ts, e_ts))
-        web_trend.append(c.fetchone()[0])
+        web_trend.append(web_map.get(step_idx, 0))
 
     c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (cutoff_ts, end_ts))
     hourly_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
@@ -485,7 +520,7 @@ def handle_analytics(req, parsed):
 
     conn.close()
 
-    req._send_json({
+    result_data = {
         "range": range_param,
         "date_info": {
             "start_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(cutoff_ts)),
@@ -521,6 +556,9 @@ def handle_analytics(req, parsed):
         "top_sensitive_paths": top_paths,
         "top_user_agents": top_uas,
         "top_attackers": top_attackers
-    })
+    }
+    with _ANALYTICS_CACHE_LOCK:
+        _ANALYTICS_CACHE[range_param] = (now_ts + 15, result_data)
+    req._send_json(result_data)
     return
 
