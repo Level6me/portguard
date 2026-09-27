@@ -425,9 +425,15 @@ class FeishuWsManager:
             try:
                 self.client._auto_reconnect = False
                 if getattr(self.client, "_conn", None):
-                    asyncio.run(self.client._disconnect())
-            except Exception:
-                pass
+                    try:
+                        if hasattr(asyncio, "run"):
+                            asyncio.run(self.client._disconnect())
+                        else:
+                            loop = asyncio.new_event_loop()
+                            loop.run_until_complete(self.client._disconnect())
+                            loop.close()
+                    except Exception:
+                        pass
             self.client = None
         self.thread = None
 
