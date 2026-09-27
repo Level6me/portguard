@@ -36,7 +36,7 @@ from sentry_daemon import (
     cleanup_expired_bans, cleanup_loop, config_watcher_loop, ip_in_whitelist, resolve_ip_geo, resolve_ip_geo_local, _GEO_CACHE, _EXECUTOR,
     get_hidden_ips, get_hidden_ips_set, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
     get_all_business_ports_info, get_active_system_ports, unban_ip_core,
-    ban_ip_firewall, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
+    ban_ip_firewall, batch_ban_ip_firewall, get_compiled_whitelist, init_firewall_ipset, flush_firewall_blocks, verify_cluster_token, generate_cluster_token, ban_ip,
     normalize_cluster_node, broadcast_cluster_whitelist, broadcast_cluster_ban,
     broadcast_cluster_unban, sync_cluster_mesh_state, start_cluster_autosync_worker,
     get_ip_threat_tags, get_config_snapshots, rollback_config_snapshot, check_c2_compromise_connections,
@@ -479,6 +479,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 pass
 
 
+_CLUSTER_SERVER_SYNC_LOCK = threading.Lock()
+
 class ClusterRequestHandler(BaseHTTPRequestHandler):
     """
     专门处理多机网格情报联防的独立安全通信通道 (与 Web UI 完全隔离)
@@ -655,109 +657,135 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
                     return
 
-                source_node = req_data.get("source_node", "远程节点").strip()
-                remote_bans = req_data.get("blacklist", [])
-                remote_unbanned = req_data.get("unbanned_list", [])
-                remote_whites = req_data.get("whitelist", [])
+                if not _CLUSTER_SERVER_SYNC_LOCK.acquire(blocking=False):
+                    self._send_json({
+                        "success": True,
+                        "msg": "集群状态对齐正在进行中，已自动合并防并发",
+                        "added_bans": 0,
+                        "added_whites": 0,
+                        "remote_blacklist": [],
+                        "remote_unbanned": [],
+                        "remote_whitelist": []
+                    })
+                    return
 
-                conn = get_db()
-                c = conn.cursor()
-                c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
-                c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
-                local_rows = c.fetchall()
-                local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
-                c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
-                local_unbanned_rows = c.fetchall()
-                local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
-                conn.close()
+                try:
+                    source_node = req_data.get("source_node", "远程节点").strip()
+                    remote_bans = req_data.get("blacklist", [])
+                    remote_unbanned = req_data.get("unbanned_list", [])
+                    remote_whites = req_data.get("whitelist", [])
 
-                # 1. 优先对齐远端发来的解封墓碑
-                for ru in remote_unbanned:
-                    ru_ip = validate_ip(ru.get("ip", ""))
-                    ru_ts = int(ru.get("timestamp", 0) or 0)
-                    if ru_ip:
-                        if ru_ip in local_bans_map:
-                            local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
-                            if ru_ts >= local_ban_ts:
-                                unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
-                        local_unbanned_map[ru_ip] = ru_ts
+                    conn = get_db()
+                    c = conn.cursor()
+                    c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
+                    c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
+                    local_rows = c.fetchall()
+                    local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
+                    c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
+                    local_unbanned_rows = c.fetchall()
+                    local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
+                    conn.close()
 
-                # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑)
-                added_bans = 0
-                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                now_ts = int(time.time())
-                
-                conn = get_db()
-                c = conn.cursor()
-                for rb in remote_bans:
-                    rb_ip = validate_ip(rb.get("ip", ""))
-                    if not rb_ip or ip_in_whitelist(rb_ip):
-                        continue
-                    rb_ts = int(rb.get("timestamp", 0) or 0)
-                    local_unban_ts = local_unbanned_map.get(rb_ip)
-                    if local_unban_ts is not None and local_unban_ts >= rb_ts:
-                        continue
+                    # 1. 优先对齐远端发来的解封墓碑
+                    for ru in remote_unbanned:
+                        ru_ip = validate_ip(ru.get("ip", ""))
+                        ru_ts = int(ru.get("timestamp", 0) or 0)
+                        if ru_ip:
+                            if ru_ip in local_bans_map:
+                                local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
+                                if ru_ts >= local_ban_ts:
+                                    unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
+                            local_unbanned_map[ru_ip] = ru_ts
 
-                    if rb_ip not in local_bans_map:
-                        ban_ip_firewall(rb_ip)
-                        src = rb.get("source_node", source_node)
-                        geo_country = rb.get("country")
-                        if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
-                            geo = resolve_ip_geo(rb_ip) or {}
-                            geo_country = geo.get("country") or "公网探测"
+                    # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑，批量极速下发内核)
+                    added_bans = 0
+                    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    now_ts = int(time.time())
+                    
+                    exact_whitelist, nets_whitelist = get_compiled_whitelist()
+                    new_ban_ips = []
+                    new_db_rows = []
 
-                        c.execute("""
+                    for rb in remote_bans:
+                        rb_ip = validate_ip(rb.get("ip", ""))
+                        if not rb_ip or rb_ip in exact_whitelist or ip_in_whitelist(rb_ip):
+                            continue
+                        rb_ts = int(rb.get("timestamp", 0) or 0)
+                        local_unban_ts = local_unbanned_map.get(rb_ip)
+                        if local_unban_ts is not None and local_unban_ts >= rb_ts:
+                            continue
+
+                        if rb_ip not in local_bans_map:
+                            new_ban_ips.append(rb_ip)
+                            src = rb.get("source_node", source_node)
+                            geo_country = rb.get("country")
+                            if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
+                                geo = resolve_ip_geo_local(rb_ip) or {}
+                                geo_country = geo.get("country") or "公网探测"
+
+                            new_db_rows.append((
+                                rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), geo_country,
+                                rb.get("level", "极高危"), rb.get("ban_time", now_str),
+                                rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
+                            ))
+                            if len(new_ban_ips) <= 20 and geo_country == "公网探测":
+                                _EXECUTOR.submit(resolve_ip_geo, rb_ip)
+                            added_bans += 1
+
+                    if new_ban_ips:
+                        batch_ban_ip_firewall(new_ban_ips)
+                        conn = get_db()
+                        c = conn.cursor()
+                        c.executemany("""
                         INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), geo_country,
-                            rb.get("level", "极高危"), rb.get("ban_time", now_str),
-                            rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
-                        ))
-                        c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (rb_ip,))
-                        _EXECUTOR.submit(resolve_ip_geo, rb_ip)
-                        added_bans += 1
-                conn.commit()
-                conn.close()
+                        """, new_db_rows)
+                        c.executemany("DELETE FROM unbanned_ips WHERE ip = ?", [(ip,) for ip in new_ban_ips])
+                        conn.commit()
+                        conn.close()
 
-                # 3. 合并白名单
-                whitelist = cfg.get("whitelist", [])
-                w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
-                added_whites = 0
-                for rw in remote_whites:
-                    rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
-                    if not rw_ip:
-                        continue
-                    unban_ip_core(rw_ip, status_event="WHITELIST")
-                    rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
-                    if rw_ip not in w_map:
-                        w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
-                        added_whites += 1
-                cfg["whitelist"] = list(w_map.values())
-                save_config(cfg)
+                    # 3. 合并白名单
+                    whitelist = cfg.get("whitelist", [])
+                    w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
+                    added_whites = 0
+                    for rw in remote_whites:
+                        rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
+                        if not rw_ip:
+                            continue
+                        unban_ip_core(rw_ip, status_event="WHITELIST")
+                        rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
+                        if rw_ip not in w_map:
+                            w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
+                            added_whites += 1
+                    if added_whites > 0:
+                        cfg["whitelist"] = list(w_map.values())
+                        save_config(cfg)
 
-                # 返回本地独有的黑名单、解封墓碑与白名单给发起端
-                remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
-                missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips and ip_k not in local_unbanned_map ]
+                    # 返回本地独有的黑名单、解封墓碑与白名单给发起端
+                    remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
+                    missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips and ip_k not in local_unbanned_map ]
 
-                remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
-                missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
+                    remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
+                    missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
 
-                # 本地解封墓碑数据
-                local_unbanned_resp = [
-                    { "ip": r[0], "unban_time": r[1], "timestamp": r[2], "source_node": r[3] }
-                    for r in local_unbanned_rows if r[0]
-                ]
+                    # 本地解封墓碑数据（只返回最近 48 小时内的墓碑，避免大体积冗余传输）
+                    cutoff_unban_ts = now_ts - (48 * 3600)
+                    local_unbanned_resp = [
+                        { "ip": r[0], "unban_time": r[1], "timestamp": r[2], "source_node": r[3] }
+                        for r in local_unbanned_rows if r[0] and (int(r[2] or 0) >= cutoff_unban_ts)
+                    ]
 
-                self._send_json({
-                    "success": True,
-                    "added_bans": added_bans,
-                    "added_whites": added_whites,
-                    "remote_blacklist": missing_for_remote_bans,
-                    "remote_unbanned": local_unbanned_resp,
-                    "remote_whitelist": missing_for_remote_whites
-                })
-                return
+                    self._send_json({
+                        "success": True,
+                        "added_bans": added_bans,
+                        "added_whites": added_whites,
+                        "remote_blacklist": missing_for_remote_bans,
+                        "remote_unbanned": local_unbanned_resp,
+                        "remote_whitelist": missing_for_remote_whites
+                    })
+                    return
+                finally:
+                    _CLUSTER_SERVER_SYNC_LOCK.release()
 
             if path == "/api/cluster/sync_whitelist":
                 token = self.headers.get("X-Cluster-Token", "").strip()

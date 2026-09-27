@@ -540,57 +540,62 @@ def get_system_ssh_ports():
         pass
     return ports
 
-_DYNAMIC_SSH_IPS_CACHE = set()
-_DYNAMIC_SSH_IPS_LAST_CHECK = 0
+_DYNAMIC_SSH_IPS_CACHE = None
+_DYNAMIC_SSH_IPS_LAST_CHECK = 0.0
+_DYNAMIC_SSH_IPS_LOCK = threading.Lock()
 
 def get_active_ssh_client_ips():
-    """动态探测当前系统真正已认证登录的管理员 SSH 客户端 IP (防管理员自杀保护机制)"""
+    """动态探测当前系统真正已认证登录的管理员 SSH 客户端 IP (防管理员自杀保护机制，带10秒线程安全缓存)"""
     global _DYNAMIC_SSH_IPS_CACHE, _DYNAMIC_SSH_IPS_LAST_CHECK
     now = time.time()
-    if (now - _DYNAMIC_SSH_IPS_LAST_CHECK < 5) and _DYNAMIC_SSH_IPS_CACHE:
+    if (now - _DYNAMIC_SSH_IPS_LAST_CHECK < 10.0) and (_DYNAMIC_SSH_IPS_CACHE is not None):
         return _DYNAMIC_SSH_IPS_CACHE
     
-    ips = set()
-    try:
-        res = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
-        for line in res.stdout.splitlines():
-            m = re.search(r'\(([\d\w\.\:]+)\)', line)
-            if m:
-                clean_ip = m.group(1).split(':')[0].strip('[]').replace('::ffff:', '')
-                if clean_ip and not clean_ip.startswith("127."):
-                    ips.add(clean_ip)
-    except Exception:
-        pass
+    with _DYNAMIC_SSH_IPS_LOCK:
+        if (now - _DYNAMIC_SSH_IPS_LAST_CHECK < 10.0) and (_DYNAMIC_SSH_IPS_CACHE is not None):
+            return _DYNAMIC_SSH_IPS_CACHE
 
-    try:
-        for env_var in ("SSH_CLIENT", "SSH_CONNECTION"):
-            val = os.environ.get(env_var, "").strip()
-            if val:
-                c_ip = val.split()[0].replace('::ffff:', '')
-                if c_ip and not c_ip.startswith("127."):
-                    ips.add(c_ip)
-    except Exception:
-        pass
+        ips = set()
+        try:
+            res = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
+            for line in res.stdout.splitlines():
+                m = re.search(r'\(([\d\w\.\:]+)\)', line)
+                if m:
+                    clean_ip = m.group(1).split(':')[0].strip('[]').replace('::ffff:', '')
+                    if clean_ip and not clean_ip.startswith("127."):
+                        ips.add(clean_ip)
+        except Exception:
+            pass
 
-    try:
-        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
-        for line in res.stdout.splitlines():
-            parts = line.split()
-            if parts:
-                s_id = parts[0]
-                if not s_id.isalnum():
-                    continue
-                s_res = subprocess.run(["loginctl", "show-session", s_id, "-p", "RemoteHost"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
-                if "RemoteHost=" in s_res.stdout:
-                    r_host = s_res.stdout.split("RemoteHost=", 1)[1].strip()
-                    if r_host and not r_host.startswith("127."):
-                        ips.add(r_host.replace('::ffff:', ''))
-    except Exception:
-        pass
-    
-    _DYNAMIC_SSH_IPS_CACHE = ips
-    _DYNAMIC_SSH_IPS_LAST_CHECK = now
-    return ips
+        try:
+            for env_var in ("SSH_CLIENT", "SSH_CONNECTION"):
+                val = os.environ.get(env_var, "").strip()
+                if val:
+                    c_ip = val.split()[0].replace('::ffff:', '')
+                    if c_ip and not c_ip.startswith("127."):
+                        ips.add(c_ip)
+        except Exception:
+            pass
+
+        try:
+            res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
+            for line in res.stdout.splitlines():
+                parts = line.split()
+                if parts:
+                    s_id = parts[0]
+                    if not s_id.isalnum():
+                        continue
+                    s_res = subprocess.run(["loginctl", "show-session", s_id, "-p", "RemoteHost"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
+                    if "RemoteHost=" in s_res.stdout:
+                        r_host = s_res.stdout.split("RemoteHost=", 1)[1].strip()
+                        if r_host and not r_host.startswith("127."):
+                            ips.add(r_host.replace('::ffff:', ''))
+        except Exception:
+            pass
+        
+        _DYNAMIC_SSH_IPS_CACHE = ips
+        _DYNAMIC_SSH_IPS_LAST_CHECK = now
+        return ips
 
 _DEFAULT_GATEWAY_CACHE = None
 _DEFAULT_GATEWAY_LAST_CHECK = 0.0
@@ -621,6 +626,75 @@ def get_default_gateway():
     _DEFAULT_GATEWAY_LAST_CHECK = now
     return gw
 
+_CLUSTER_NODES_IPS_CACHE = None
+_CLUSTER_NODES_IPS_LAST_CHECK = 0.0
+_CLUSTER_NODES_IPS_LOCK = threading.Lock()
+
+def get_cluster_nodes_ips():
+    """获取所有协同集群节点的 IP 集合（带10秒内存缓存，防止频繁读取配置造成锁竞争）"""
+    global _CLUSTER_NODES_IPS_CACHE, _CLUSTER_NODES_IPS_LAST_CHECK
+    now = time.time()
+    if (now - _CLUSTER_NODES_IPS_LAST_CHECK < 10.0) and (_CLUSTER_NODES_IPS_CACHE is not None):
+        return _CLUSTER_NODES_IPS_CACHE
+    with _CLUSTER_NODES_IPS_LOCK:
+        if (now - _CLUSTER_NODES_IPS_LAST_CHECK < 10.0) and (_CLUSTER_NODES_IPS_CACHE is not None):
+            return _CLUSTER_NODES_IPS_CACHE
+        node_ips = set()
+        try:
+            from core.mesh import normalize_cluster_node
+            cfg = load_config()
+            c_nodes = cfg.get("cluster_sync", {}).get("cluster_nodes", [])
+            for raw_n in c_nodes:
+                norm_n = normalize_cluster_node(raw_n)
+                if norm_n and norm_n.get("ip"):
+                    node_ips.add(norm_n.get("ip"))
+        except Exception:
+            pass
+        _CLUSTER_NODES_IPS_CACHE = node_ips
+        _CLUSTER_NODES_IPS_LAST_CHECK = now
+        return node_ips
+
+_WHITELIST_CACHE_TIME = 0.0
+_WHITELIST_EXACT_IPS = set()
+_WHITELIST_NETS = []
+_WHITELIST_LOCK = threading.Lock()
+
+def compile_whitelist_rules(whitelist_items):
+    """预编译白名单规则，提取精确 IP set 和网络段 list，支持 O(1) 检索"""
+    exact = set()
+    nets = []
+    for item in whitelist_items or []:
+        val = item.get("ip") if isinstance(item, dict) else item
+        if not val:
+            continue
+        val_str = str(val).strip()
+        if "/" in val_str:
+            try:
+                nets.append(ipaddress.ip_network(val_str, strict=False))
+            except Exception:
+                pass
+        else:
+            exact.add(val_str)
+    return exact, nets
+
+def get_compiled_whitelist():
+    """获取已预编译的系统全局白名单（5秒内存缓存，极速匹配零磁盘与锁消耗）"""
+    global _WHITELIST_CACHE_TIME, _WHITELIST_EXACT_IPS, _WHITELIST_NETS
+    now = time.time()
+    if _WHITELIST_CACHE_TIME > 0 and (now - _WHITELIST_CACHE_TIME < 5.0):
+        return _WHITELIST_EXACT_IPS, _WHITELIST_NETS
+    with _WHITELIST_LOCK:
+        if _WHITELIST_CACHE_TIME > 0 and (now - _WHITELIST_CACHE_TIME < 5.0):
+            return _WHITELIST_EXACT_IPS, _WHITELIST_NETS
+        try:
+            cfg = load_config()
+            items = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
+        except Exception:
+            items = DEFAULT_CONFIG.get("whitelist", [])
+        _WHITELIST_EXACT_IPS, _WHITELIST_NETS = compile_whitelist_rules(items)
+        _WHITELIST_CACHE_TIME = now
+        return _WHITELIST_EXACT_IPS, _WHITELIST_NETS
+
 def ip_in_whitelist(ip, whitelist_items=None):
     if not ip or ip in ("127.0.0.1", "::1", "localhost") or str(ip).startswith("127."):
         return True
@@ -636,38 +710,73 @@ def ip_in_whitelist(ip, whitelist_items=None):
     if ip in active_ssh_ips:
         return True
 
-    try:
-        from core.mesh import normalize_cluster_node
-        cfg_obj = load_config() if whitelist_items is None else None
-        if cfg_obj:
-            c_nodes = cfg_obj.get("cluster_sync", {}).get("cluster_nodes", [])
-            for raw_n in c_nodes:
-                norm_n = normalize_cluster_node(raw_n)
-                if norm_n and norm_n.get("ip") == ip:
-                    return True
-    except Exception:
-        pass
+    cluster_ips = get_cluster_nodes_ips()
+    if ip in cluster_ips:
+        return True
 
-    if whitelist_items is None:
+    if whitelist_items is not None:
+        exact, nets = compile_whitelist_rules(whitelist_items)
+    else:
+        exact, nets = get_compiled_whitelist()
+
+    if ip in exact:
+        return True
+
+    if nets:
         try:
-            cfg = load_config()
-            whitelist_items = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
-        except Exception:
-            whitelist_items = DEFAULT_CONFIG.get("whitelist", [])
-    for item in whitelist_items:
-        val = item.get("ip") if isinstance(item, dict) else item
-        if not val:
-            continue
-        if "/" in val:
-            try:
-                if ipaddress.ip_address(ip) in ipaddress.ip_network(val, strict=False):
+            ip_obj = ipaddress.ip_address(ip)
+            for net in nets:
+                if ip_obj in net:
                     return True
-            except Exception:
-                pass
-        else:
-            if val == ip:
-                return True
+        except Exception:
+            pass
+
     return False
+
+def batch_ban_ip_firewall(ips, expire_seconds=None):
+    """批量向内核 ipset 下发封禁规则，单次进程通信下发成百上千条，杜绝频繁 fork 造成的 CPU 脉冲"""
+    if not ips:
+        return
+    if not is_ipset_available():
+        for single_ip in ips:
+            ban_ip_firewall(single_ip, expire_seconds=expire_seconds)
+        return
+
+    timeout_val = min(2147483, max(60, int(expire_seconds))) if expire_seconds and expire_seconds > 0 else 2147483
+    v4_cmds = []
+    v6_cmds = []
+    
+    exact_w, nets_w = get_compiled_whitelist()
+    infra_set = PUBLIC_INFRASTRUCTURE_IPS
+    gw = get_default_gateway()
+    ssh_ips = get_active_ssh_client_ips()
+    c_ips = get_cluster_nodes_ips()
+
+    for raw_ip in ips:
+        val_ip = validate_ip(raw_ip)
+        if not val_ip or val_ip in infra_set or val_ip == gw or val_ip in ssh_ips or val_ip in c_ips or val_ip in exact_w:
+            continue
+        try:
+            addr = ipaddress.ip_address(val_ip)
+            if addr.version == 6:
+                v6_cmds.append(f"add portguard_blacklist_v6 {val_ip} timeout {timeout_val} -exist\n")
+            else:
+                v4_cmds.append(f"add portguard_blacklist_v4 {val_ip} timeout {timeout_val} -exist\n")
+        except Exception:
+            continue
+
+    if v4_cmds:
+        try:
+            p = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p.communicate("".join(v4_cmds).encode("utf-8"), timeout=5)
+        except Exception:
+            pass
+    if v6_cmds:
+        try:
+            p = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p.communicate("".join(v6_cmds).encode("utf-8"), timeout=5)
+        except Exception:
+            pass
 
 def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
     """彻底解除对指定 IP 的内核防火墙封禁、ipset、黑洞路由及数据库黑名单记录，并登记防回潮墓碑。"""
