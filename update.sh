@@ -166,6 +166,12 @@ if [ "$ARCHIVE_OK" = false ]; then
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/db.py" "core/db.py" 5000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/firewall.py" "core/firewall.py" 5000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/mesh.py" "core/mesh.py" 5000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/notify.py" "core/notify.py" 10000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_client.py" "core/ws_client.py" 3000 || true
+    mkdir -p core/ws_pb
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/__init__.py" "core/ws_pb/__init__.py" 10 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/pbbp2_pb2.py" "core/ws_pb/pbbp2_pb2.py" 2000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/gogo_pb2.py" "core/ws_pb/gogo_pb2.py" 10000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
 fi

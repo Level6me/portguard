@@ -423,14 +423,17 @@ class FeishuWsManager:
         self.is_connected = False
         if self.client:
             try:
-                self.client._auto_reconnect = False
-                if getattr(self.client, "_conn", None):
-                    if hasattr(asyncio, "run"):
-                        asyncio.run(self.client._disconnect())
-                    else:
-                        loop = asyncio.new_event_loop()
-                        loop.run_until_complete(self.client._disconnect())
-                        loop.close()
+                if hasattr(self.client, "stop"):
+                    self.client.stop()
+                elif hasattr(self.client, "_auto_reconnect"):
+                    self.client._auto_reconnect = False
+                    if getattr(self.client, "_conn", None):
+                        if hasattr(asyncio, "run"):
+                            asyncio.run(self.client._disconnect())
+                        else:
+                            loop = asyncio.new_event_loop()
+                            loop.run_until_complete(self.client._disconnect())
+                            loop.close()
             except Exception:
                 pass
             self.client = None
@@ -438,11 +441,60 @@ class FeishuWsManager:
 
     def _run_ws(self):
         """长连接后台工作线程"""
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+
+        # 优先使用 PortGuard 内置原生 WebSocket 客户端 (兼容 Python 3.6+，零外部依赖包)
+        try:
+            from core.ws_client import FeishuWebSocketClient
+            
+            def _on_event(event_dict):
+                try:
+                    self.last_active_ts = time.time()
+                    self.is_connected = True
+                    header = event_dict.get("header", {})
+                    evt_type = header.get("event_type")
+                    if evt_type != "im.message.receive_v1":
+                        return
+                    
+                    event = event_dict.get("event", {})
+                    msg = event.get("message", {})
+                    chat_id = msg.get("chat_id", "")
+                    content_str = msg.get("content", "{}")
+                    sender = event.get("sender", {})
+                    sender_id = sender.get("sender_id", {})
+                    open_id = sender_id.get("open_id", "")
+
+                    try:
+                        c_dict = json.loads(content_str)
+                        raw_text = c_dict.get("text", "").strip()
+                    except Exception:
+                        raw_text = content_str.strip()
+
+                    self._handle_auto_bind_and_command(chat_id, open_id, raw_text)
+                except Exception as e:
+                    print(f"[Feishu WS] 处理消息异常: {e}")
+
+            ws_cli = FeishuWebSocketClient(
+                self.app_id,
+                self.app_secret,
+                message_callback=_on_event,
+                loop=new_loop
+            )
+            self.client = ws_cli
+            print(f"[Feishu WS] 🚀 正在启动 PortGuard 原生飞书长连接网关 (AppID: {self.app_id})...")
+            self.is_connected = True
+            new_loop.run_until_complete(ws_cli.start())
+            return
+        except Exception as native_e:
+            print(f"[Feishu WS] 原生长连接启动受阻 ({native_e})，尝试回退检查 lark_oapi...")
+
+        # 回退至 lark_oapi 方案
         try:
             import lark_oapi as lark
             from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
         except ImportError:
-            self.last_error = "未安装 lark_oapi 依赖"
+            self.last_error = "未安装 WebSocket 长连接支持库"
             self.is_running = False
             print(f"[Feishu WS] 错误: {self.last_error}")
             return
@@ -492,9 +544,6 @@ class FeishuWsManager:
             auto_reconnect=True
         )
         self.client = ws_cli
-
-        new_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(new_loop)
         ws_client_mod.loop = new_loop
 
         try:
