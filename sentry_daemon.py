@@ -256,6 +256,9 @@ def verify_search_engine_crawler(ip, user_agent):
         res = (False, f"伪造 {crawler_name} 爬虫 (无权威PTR反向记录)")
 
     with _CRAWLER_CACHE_LOCK:
+        # 容量保护：缓存只做加速用途，超限直接清空防止长期运行内存无界增长
+        if len(_CRAWLER_VERIFY_CACHE) > 10000:
+            _CRAWLER_VERIFY_CACHE.clear()
         _CRAWLER_VERIFY_CACHE[cache_key] = (time.time(), res[0], res[1])
     return res
 
@@ -442,6 +445,10 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
                     history = _IP_404_RATE_CACHE.setdefault(cache_key, [])
                     history = [item for item in history if now - item[0] <= window]
                     history.append((now, path, status_code))
+                    # 容量保护：防止海量唯一 (ip, rule) 键导致缓存无界增长
+                    if len(_IP_404_RATE_CACHE) > 20000:
+                        for stale_key in list(_IP_404_RATE_CACHE.keys())[:10000]:
+                            _IP_404_RATE_CACHE.pop(stale_key, None)
                     _IP_404_RATE_CACHE[cache_key] = history
                     if len(history) >= threshold:
                         _IP_404_RATE_CACHE[cache_key] = []
@@ -504,6 +511,8 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
         
         # 同时以 5 秒防抖在 port_access_logs 中记录 Web 控制台业务连接
         global _WEB_PORT_LOG_CACHE
+        if len(_WEB_PORT_LOG_CACHE) > 50000:
+            _WEB_PORT_LOG_CACHE.clear()
         last_t = _WEB_PORT_LOG_CACHE.get(ip, 0)
         if (now_ts - last_t) >= 5:
             _WEB_PORT_LOG_CACHE[ip] = now_ts
@@ -1754,6 +1763,10 @@ def check_port_scan_attack(src_ip, dst_port, cfg):
     cutoff = now - window
 
     with _SCAN_RECORDS_LOCK:
+        # 容量保护：分布式扫描风暴下按 IP 建立的键永不清除会导致内存无界增长
+        if len(_SCAN_RECORDS) > 20000:
+            for stale_ip in list(_SCAN_RECORDS.keys())[:10000]:
+                _SCAN_RECORDS.pop(stale_ip, None)
         if src_ip not in _SCAN_RECORDS:
             _SCAN_RECORDS[src_ip] = []
         # 清理超出时间窗口的记录
@@ -2188,11 +2201,12 @@ class SiteLogCollector:
                             raw_ip = m.group("ip")
                             xff = (m.group("xff") or "").strip()
                             
-                            # 智能识别 CDN 与真实客户端 IP
+                            # 智能识别 CDN 与真实客户端 IP (从最右侧条目反向取值：XFF 最左端可被客户端任意伪造，
+                            # 防止伪造 X-Forwarded-For 借状态码/路径规则触发对任意 IP 的误封；CDN 边缘节点会被过滤跳过)
                             client_ip = raw_ip
                             if xff and xff not in ("-", "null", "None"):
                                 candidate_ips = [x.strip() for x in xff.split(",") if x.strip()]
-                                for cand in candidate_ips:
+                                for cand in reversed(candidate_ips):
                                     v_cand = validate_ip(cand)
                                     if v_cand and not is_infrastructure_or_cdn_ip(v_cand):
                                         client_ip = v_cand

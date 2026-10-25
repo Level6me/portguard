@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import hmac
 import json
 import time
 from sentry_daemon import (
@@ -299,7 +300,8 @@ def handle_auth_login(req, parsed, req_data):
         return
 
     password = str(req_data.get("password", "")).strip()
-    if password == admin_pwd:
+    # 常数时间比较，避免逐字节计时侧信道泄露管理密码
+    if hmac.compare_digest(password.encode("utf-8"), admin_pwd.encode("utf-8")):
         token = ""
         if hasattr(req, "_create_auth_session"):
             token = req._create_auth_session()

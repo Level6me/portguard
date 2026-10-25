@@ -432,6 +432,15 @@ def format_isp_name(raw_isp):
 
 _GEO_CACHE = {}
 _GEO_CACHE_LOCK = threading.Lock()
+_GEO_CACHE_MAX_ENTRIES = 100000
+
+def _geo_cache_put(ip, res):
+    """带容量上限的 Geo 缓存写入：防止海量唯一攻击 IP 导致长期运行内存无界增长 (超出时淘汰最早写入的条目)"""
+    with _GEO_CACHE_LOCK:
+        if len(_GEO_CACHE) >= _GEO_CACHE_MAX_ENTRIES:
+            for old_ip in list(_GEO_CACHE.keys())[:_GEO_CACHE_MAX_ENTRIES // 5]:
+                _GEO_CACHE.pop(old_ip, None)
+        _GEO_CACHE[ip] = res
 
 def resolve_ip_geo_local(ip):
     """双引擎融合本地极速解析：MaxMind GeoLite2 (City+ASN) 全球高精 + IP2Region 国内省市 (0ms 延时)"""
@@ -512,8 +521,7 @@ def resolve_ip_geo_local(ip):
             "city": city,
             "isp": isp
         }
-        with _GEO_CACHE_LOCK:
-            _GEO_CACHE[ip] = res
+        _geo_cache_put(ip, res)
         return res
     return None
 
@@ -532,8 +540,7 @@ def resolve_ip_geo(ip):
     # 1. 🚀 第一级：本地 IP2Region 离线库极速检索 (0ms 延时、零外网依赖、无频控)
     local_geo = resolve_ip_geo_local(ip)
     if local_geo and local_geo.get("country") not in ("未知地域", "", None):
-        with _GEO_CACHE_LOCK:
-            _GEO_CACHE[ip] = local_geo
+        _geo_cache_put(ip, local_geo)
         return local_geo
 
     # 2. 🌐 第二级备选源：ipwho.is (原生支持简体中文返回，数据精准)
@@ -551,8 +558,7 @@ def resolve_ip_geo(ip):
                         "city": data.get("city", "").strip(),
                         "isp": data.get("connection", {}).get("isp", "").strip()
                     }
-                    with _GEO_CACHE_LOCK:
-                        _GEO_CACHE[ip] = result
+                    _geo_cache_put(ip, result)
                     return result
     except Exception:
         pass
@@ -572,8 +578,7 @@ def resolve_ip_geo(ip):
                         "city": data2.get("city", "").strip(),
                         "isp": data2.get("isp", "").strip()
                     }
-                    with _GEO_CACHE_LOCK:
-                        _GEO_CACHE[ip] = result
+                    _geo_cache_put(ip, result)
                     return result
     except Exception:
         pass
@@ -592,8 +597,7 @@ def resolve_ip_geo(ip):
                     "city": data3.get("city", "").strip(),
                     "isp": data3.get("isp", data3.get("organization", "")).strip()
                 }
-                with _GEO_CACHE_LOCK:
-                    _GEO_CACHE[ip] = result
+                _geo_cache_put(ip, result)
                 return result
     except Exception:
         pass
