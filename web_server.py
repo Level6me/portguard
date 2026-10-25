@@ -189,9 +189,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return x_real
             xff = self.headers.get("X-Forwarded-For", "").strip()
             if xff:
-                first_ip = xff.split(",")[0].strip()
-                if validate_ip(first_ip):
-                    return first_ip
+                # 取最右侧条目：X-Forwarded-For 最左端的值由客户端任意伪造，
+                # 仅可信反代自身追加的最右条目不可伪造，防止未鉴权请求伪造 XFF 触发任意 IP 封禁 (防自锁)
+                for cand in reversed([x.strip() for x in xff.split(",")]):
+                    if cand and validate_ip(cand):
+                        return cand
         return direct_ip
 
     def send_response(self, code, message=None):

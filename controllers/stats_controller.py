@@ -1,5 +1,6 @@
 import threading
 import time
+import html
 import json
 from urllib.parse import parse_qs
 from sentry_daemon import (
@@ -176,25 +177,25 @@ def handle_report_export(req, parsed):
     c.execute("SELECT COUNT(*) FROM port_access_logs")
     total_access = c.fetchone()[0] or 0
 
-    # 严重级别分布
+    # 严重级别分布 (所有插值字段统一 HTML 转义，杜绝攻击者可控 reason/port_name 注入导出报告)
     c.execute("SELECT level, COUNT(*) as cnt FROM events GROUP BY level ORDER BY cnt DESC")
     level_rows = c.fetchall()
-    level_summary = "".join([f"<li><strong>{r['level'] or '未知'}:</strong> {r['cnt']} 次</li>" for r in level_rows]) or "<li>暂无事件</li>"
+    level_summary = "".join([f"<li><strong>{html.escape(str(r['level'] or '未知'))}:</strong> {r['cnt']} 次</li>" for r in level_rows]) or "<li>暂无事件</li>"
 
     # Top 10 攻击源国家/地区
     c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE country != '' GROUP BY country ORDER BY cnt DESC LIMIT 10")
     country_rows = c.fetchall()
-    country_table = "".join([f"<tr><td>{idx+1}</td><td>{r['country']}</td><td>{r['cnt']}</td></tr>" for idx, r in enumerate(country_rows)]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+    country_table = "".join([f"<tr><td>{idx+1}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{r['cnt']}</td></tr>" for idx, r in enumerate(country_rows)]) or "<tr><td colspan='3'>暂无数据</td></tr>"
 
     # Top 10 被攻击端口
     c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events GROUP BY port ORDER BY cnt DESC LIMIT 10")
     port_rows = c.fetchall()
-    port_table = "".join([f"<tr><td>{r['port']}</td><td>{r['port_name']}</td><td>{r['cnt']}</td></tr>" for r in port_rows]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+    port_table = "".join([f"<tr><td>{r['port']}</td><td>{html.escape(str(r['port_name'] or ''))}</td><td>{r['cnt']}</td></tr>" for r in port_rows]) or "<tr><td colspan='3'>暂无数据</td></tr>"
 
     # 最近 20 条阻断记录
     c.execute("SELECT ip, reason, country, level, ban_time FROM blacklist ORDER BY timestamp DESC LIMIT 20")
     ban_rows = c.fetchall()
-    ban_table = "".join([f"<tr><td><code>{r['ip']}</code></td><td>{r['level']}</td><td>{r['country']}</td><td>{r['reason']}</td><td>{r['ban_time']}</td></tr>" for r in ban_rows]) or "<tr><td colspan='5'>暂无封禁</td></tr>"
+    ban_table = "".join([f"<tr><td><code>{html.escape(str(r['ip'] or ''))}</code></td><td>{html.escape(str(r['level'] or ''))}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{html.escape(str(r['reason'] or ''))}</td><td>{html.escape(str(r['ban_time'] or ''))}</td></tr>" for r in ban_rows]) or "<tr><td colspan='5'>暂无封禁</td></tr>"
 
     conn.close()
 
@@ -202,7 +203,7 @@ def handle_report_export(req, parsed):
     if tpl:
         report_html = tpl.format(
             report_date=now_str[:10],
-            node_name=cfg.get('node_name', '本机节点'),
+            node_name=html.escape(str(cfg.get('node_name', '本机节点'))),
             now_str=now_str,
             total_banned=total_banned,
             total_events=total_events,
