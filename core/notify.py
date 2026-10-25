@@ -647,7 +647,7 @@ class FeishuWsManager:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"⚠️ 该 IP ({v_ip}) 位于核心白名单中，受防自锁保护禁止封禁！")
                 return
             try:
-                ban_ip(v_ip, port=0, reason=reason, trigger_type="feishu_manual")
+                ban_ip(v_ip, reason=reason, category="manual", level="极高危")
                 card = build_feishu_card(
                     "🚨 PortGuard 手动拉黑封禁成功",
                     f"**已对目标 IP `{v_ip}` 实施最高级别实时阻断处置**",
@@ -729,7 +729,7 @@ class FeishuWsManager:
                 cfg["whitelist"] = current_wl
                 save_config(cfg)
                 unban_ip_core(v_ip, status_event="WHITELIST")
-                broadcast_cluster_whitelist(v_ip, remark=remark)
+                broadcast_cluster_whitelist("add", v_ip, remark)
                 card = build_feishu_card(
                     "🛡️ PortGuard 添加白名单成功",
                     f"已成功将目标 `{v_ip}` 纳管至系统永久放行白名单！",

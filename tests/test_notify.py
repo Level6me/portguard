@@ -324,7 +324,7 @@ class TestFeishuCommands(unittest.TestCase):
 
         # 1. 正常封禁
         self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/ban 198.51.100.99 恶意爆破")
-        mock_ban.assert_called_with("198.51.100.99", port=0, reason="恶意爆破", trigger_type="feishu_manual")
+        mock_ban.assert_called_with("198.51.100.99", reason="恶意爆破", category="manual", level="极高危")
 
         # 2. 白名单保护
         mock_ban.reset_mock()

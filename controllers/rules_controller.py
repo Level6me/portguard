@@ -514,6 +514,8 @@ def handle_business_ports_import(req, parsed, req_data):
         name = ""
         remark = ""
         cat = "custom"
+        block_scanner = True
+        block_idc = False
         if isinstance(item, int):
             p = item
         elif isinstance(item, str):
