@@ -5,8 +5,11 @@ PortGuard Core Database & Configuration Management Module
 数据库管理、持久化存储与配置核心控制
 """
 import glob
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -80,8 +83,10 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "port": 9098,
         "cluster_secret": "",
-        "cluster_nodes": []
+        "cluster_nodes": [],
+        "allow_private_nodes": False
     },
+    "trusted_proxies": [],
     "feishu_bot": {
         "enabled": False,
         "bot_type": "app",
@@ -92,10 +97,12 @@ DEFAULT_CONFIG = {
         "use_ws": True,
         "webhook_url": "",
         "secret": "",
+        "admin_open_ids": [],
+        "auto_bind_first_chat": True,
         "notify_new_listen_port": True,
         "notify_ban_ip": False
     },
-    "auto_manage_listen_ports": True,
+    "auto_manage_listen_ports": False,
     "business_ports": [
         {"port": 80, "name": "HTTP 网站服务", "category": "web", "remark": "默认Web服务"},
         {"port": 443, "name": "HTTPS 网站服务", "category": "web", "remark": "默认加密Web服务"}
@@ -195,6 +202,75 @@ PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
 _CONFIG_CACHE = None
 _CONFIG_CACHE_MTIME = 0.0
 _CONFIG_LOCK = threading.Lock()
+
+
+def _secure_file_permissions(path, mode=0o600):
+    """收紧敏感配置文件权限，防止低权限本地用户读取明文凭证"""
+    try:
+        if path and os.path.exists(path):
+            os.chmod(path, mode)
+    except Exception:
+        pass
+
+
+def _secure_dir_permissions(path, mode=0o700):
+    """收紧敏感配置快照目录权限"""
+    try:
+        if path and os.path.isdir(path):
+            os.chmod(path, mode)
+    except Exception:
+        pass
+
+
+def hash_admin_password(password):
+    """使用随机盐与 PBKDF2-HMAC-SHA256 哈希管理员密码"""
+    pwd_str = str(password or "")
+    if not pwd_str:
+        return ""
+    if pwd_str.startswith("pbkdf2_sha256$"):
+        return pwd_str
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pwd_str.encode("utf-8"), salt.encode("utf-8"), 100000)
+    return f"pbkdf2_sha256$100000${salt}${dk.hex()}"
+
+
+def verify_admin_password(password, stored):
+    """常数时间校验管理员密码（支持 PBKDF2 哈希与历史明文平滑兼容）"""
+    pwd_str = str(password or "")
+    stored_str = str(stored or "").strip()
+    if not pwd_str or not stored_str:
+        return False
+    if stored_str.startswith("pbkdf2_sha256$"):
+        parts = stored_str.split("$")
+        if len(parts) != 4:
+            return False
+        try:
+            iters = int(parts[1])
+            salt = parts[2]
+            expected_hex = parts[3]
+            dk = hashlib.pbkdf2_hmac("sha256", pwd_str.encode("utf-8"), salt.encode("utf-8"), iters)
+            return hmac.compare_digest(dk.hex(), expected_hex)
+        except Exception:
+            return False
+    return hmac.compare_digest(pwd_str.encode("utf-8"), stored_str.encode("utf-8"))
+
+
+def sanitize_config_for_export(cfg):
+    """对导出的配置字典中的敏感密钥进行脱敏处理"""
+    if not isinstance(cfg, dict):
+        return {}
+    safe_cfg = json.loads(json.dumps(cfg))
+    if safe_cfg.get("admin_password"):
+        safe_cfg["admin_password"] = "***REDACTED***"
+    cs = safe_cfg.get("cluster_sync")
+    if isinstance(cs, dict) and cs.get("cluster_secret"):
+        cs["cluster_secret"] = "***REDACTED***"
+    fb = safe_cfg.get("feishu_bot")
+    if isinstance(fb, dict):
+        for k in ("app_secret", "secret", "webhook_url"):
+            if fb.get(k):
+                fb[k] = "***REDACTED***"
+    return safe_cfg
 
 def get_db():
     """获取 SQLite 数据库连接并开启超时等待与 NORMAL 同步"""
@@ -469,13 +545,13 @@ def load_config():
         if not os.path.exists(CONFIG_PATH):
             initial_cfg = dict(DEFAULT_CONFIG)
             try:
-                import secrets
-                initial_cfg["admin_password"] = secrets.token_urlsafe(12)
+                initial_cfg["admin_password"] = hash_admin_password(secrets.token_urlsafe(12))
             except Exception:
                 import uuid
-                initial_cfg["admin_password"] = uuid.uuid4().hex[:12]
+                initial_cfg["admin_password"] = hash_admin_password(uuid.uuid4().hex[:12])
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(initial_cfg, f, indent=2, ensure_ascii=False)
+            _secure_file_permissions(CONFIG_PATH, 0o600)
             with _CONFIG_LOCK:
                 _CONFIG_CACHE = dict(initial_cfg)
                 _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
@@ -509,10 +585,12 @@ def save_config(cfg):
         if os.path.exists(CONFIG_PATH):
             try:
                 if not os.path.exists(CONFIG_SNAPSHOTS_DIR):
-                    os.makedirs(CONFIG_SNAPSHOTS_DIR, exist_ok=True)
+                    os.makedirs(CONFIG_SNAPSHOTS_DIR, mode=0o700, exist_ok=True)
+                _secure_dir_permissions(CONFIG_SNAPSHOTS_DIR, 0o700)
                 snap_time = time.strftime("%Y%m%d_%H%M%S")
                 snap_path = os.path.join(CONFIG_SNAPSHOTS_DIR, f"config_{snap_time}.json")
                 shutil.copy2(CONFIG_PATH, snap_path)
+                _secure_file_permissions(snap_path, 0o600)
                 
                 snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime)
                 if len(snaps) > 15:
@@ -526,6 +604,7 @@ def save_config(cfg):
 
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
+        _secure_file_permissions(CONFIG_PATH, 0o600)
         try:
             mtime = os.path.getmtime(CONFIG_PATH)
             with _CONFIG_LOCK:
@@ -565,6 +644,7 @@ def rollback_config_snapshot(filename):
             snap_cfg = json.load(f)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(snap_cfg, f, indent=2, ensure_ascii=False)
+        _secure_file_permissions(CONFIG_PATH, 0o600)
         return True, "配置已成功从快照回滚还原！"
     except Exception as e:
         return False, f"回滚失败: {e}"

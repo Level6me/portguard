@@ -343,6 +343,7 @@ class IsTrapPortTest(unittest.TestCase):
         
         # 1. 开启 trap_all_unopened_ports 时，探测未开放端口立即触发 ban_ip 诱捕
         with mock.patch("sentry_daemon.load_config") as mock_cfg, \
+             mock.patch("sentry_daemon.get_active_system_ports", return_value={}), \
              mock.patch("sentry_daemon.ban_ip") as mock_ban:
             mock_cfg.return_value = {
                 "whitelist": [],
@@ -359,6 +360,7 @@ class IsTrapPortTest(unittest.TestCase):
 
         # 2. 关闭 trap_all_unopened_ports 时，探测未开放端口仅记录日志，不调用 ban_ip
         with mock.patch("sentry_daemon.load_config") as mock_cfg2, \
+             mock.patch("sentry_daemon.get_active_system_ports", return_value={}), \
              mock.patch("sentry_daemon.ban_ip") as mock_ban2:
             mock_cfg2.return_value = {
                 "whitelist": [],
@@ -1068,6 +1070,36 @@ class OptimizationAndHardeningTest(unittest.TestCase):
             row = c2.fetchone()
             conn2.close()
             self.assertIsNone(row)
+
+    def test_site_log_collector_ignores_spoofed_xff_from_direct_ip(self):
+        import tempfile
+        from sentry_daemon import SiteLogCollector
+        with tempfile.NamedTemporaryFile("w+", delete=False) as tf:
+            tf.write('198.51.100.55 - - [18/Nov/2026:09:30:00 +0800] "GET /.env HTTP/1.1" 404 123 "-" "curl/8.0" "8.8.4.4"\n')
+            log_path = tf.name
+        try:
+            collector = SiteLogCollector()
+            with mock.patch.object(collector, "_discover_log_files", return_value=[(log_path, "example.com")]), \
+                 mock.patch("sentry_daemon.check_http_request_traps") as mock_trap, \
+                 mock.patch("sentry_daemon.get_db") as mock_db:
+                mock_conn = mock.MagicMock()
+                mock_db.return_value = mock_conn
+                # 触发单轮解析逻辑：模拟 running 在一次循环后变为 False
+                collector.running = True
+                def stop_after_one(*args, **kwargs):
+                    collector.running = False
+                    return False
+                mock_trap.side_effect = stop_after_one
+                with mock.patch("time.sleep", side_effect=lambda *_: setattr(collector, "running", False)):
+                    collector._collector_loop()
+                mock_trap.assert_called_once()
+                # 直连源 IP 198.51.100.55 非可信代理，必须忽略伪造 XFF (8.8.4.4)，仍归因到 198.51.100.55
+                self.assertEqual(mock_trap.call_args[0][0], "198.51.100.55")
+        finally:
+            try:
+                os.remove(log_path)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

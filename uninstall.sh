@@ -69,16 +69,27 @@ pkill -9 -f "/opt/portguard/web_server.py" 2>/dev/null || true
 pkill -9 -f "/opt/portguard/sentry_daemon.py" 2>/dev/null || true
 pkill -9 -f "/opt/portsentry-ui/web_server.py" 2>/dev/null || true
 pkill -9 -f "/opt/portsentry-ui/sentry_daemon.py" 2>/dev/null || true
-pkill -9 -f "portguard" 2>/dev/null || true
-pkill -9 -f "portsentry-ui" 2>/dev/null || true
 
-# 清理可能残留的 iptables 与 ipset 规则
+# 清理可能残留的 iptables / ip6tables、ipset 与黑洞路由规则
 if command -v iptables >/dev/null 2>&1; then
-    iptables -D INPUT -m set --match-set portguard_blacklist_v4 src -j DROP 2>/dev/null || true
+    for set_n in portguard_whitelist_v4 portguard_blacklist_v4; do
+        while iptables -D INPUT -m set --match-set "$set_n" src -j ACCEPT 2>/dev/null || iptables -D INPUT -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
+    done
     iptables -D FORWARD -m set --match-set portguard_blacklist_v4 src -j DROP 2>/dev/null || true
 fi
+if command -v ip6tables >/dev/null 2>&1; then
+    for set_n in portguard_whitelist_v6 portguard_blacklist_v6; do
+        while ip6tables -D INPUT -m set --match-set "$set_n" src -j ACCEPT 2>/dev/null || ip6tables -D INPUT -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
+    done
+fi
 if command -v ipset >/dev/null 2>&1; then
-    ipset destroy portguard_blacklist_v4 2>/dev/null || true
+    for set_n in portguard_blacklist_v4 portguard_blacklist_v6 portguard_whitelist_v4 portguard_whitelist_v6; do
+        ipset destroy "$set_n" 2>/dev/null || true
+    done
+fi
+if command -v ip >/dev/null 2>&1; then
+    ip route show | awk '/^blackhole /{print $2}' | xargs -r -n1 ip route del blackhole 2>/dev/null || true
+    ip -6 route show | awk '/^blackhole /{print $2}' | xargs -r -n1 ip -6 route del blackhole 2>/dev/null || true
 fi
 
 # 清理 UFW / firewalld 开放端口规则

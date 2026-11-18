@@ -26,6 +26,16 @@ _RAW_HTML_CACHE = None
 _GZIP_HTML_CACHE = None
 _AUTH_SESSIONS = {}  # token -> expire_ts
 _AUTH_LOCK = threading.Lock()
+MAX_AUTH_SESSIONS = 1024
+
+_CLUSTER_PEER_GET_ENDPOINTS = {"/api/cluster/ping"}
+_CLUSTER_PEER_POST_ENDPOINTS = {
+    "/api/cluster/ping",
+    "/api/cluster/sync_ban",
+    "/api/cluster/sync_unban",
+    "/api/cluster/sync_whitelist",
+    "/api/cluster/sync_state_exchange",
+}
 
 from controllers import dispatch_get, dispatch_post, dispatch_delete
 from sentry_daemon import (
@@ -165,6 +175,19 @@ def invalidate_blacklist_cache():
 
 MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB 请求体上限，防大包内存 DoS 攻击
 
+def _extract_host_only(host_hdr):
+    """从 Host 请求头安全提取纯主机名（兼容 IPv4、域名与带括号 [IPv6]:port）"""
+    h = (host_hdr or "").strip()
+    if not h:
+        return ""
+    if h.startswith("["):
+        if "]:" in h:
+            return h[1:].split("]:", 1)[0].lower()
+        return h.strip("[]").lower()
+    if h.count(":") == 1:
+        return h.split(":", 1)[0].lower()
+    return h.lower()
+
 class RequestHandler(BaseHTTPRequestHandler):
     def _get_real_client_ip(self):
         """安全提取客户端真实 IP：仅当直连来源是本机回环或受信任的 RFC1918 私网反代时，才提取反代头 (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)"""
@@ -215,12 +238,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             host = self.headers.get('Host', '')
             if origin:
                 parsed_origin = urlparse(origin)
-                origin_host = parsed_origin.netloc.split(':')[0]
-                req_host = host.split(':')[0] if host else ''
-                if origin_host in (req_host, 'localhost', '127.0.0.1', '::1') or not req_host:
+                origin_host = (parsed_origin.hostname or '').strip('[]').lower()
+                req_host = _extract_host_only(host)
+                if req_host and origin_host and origin_host == req_host:
                     self.send_header('Access-Control-Allow-Origin', origin)
                     self.send_header('Access-Control-Allow-Credentials', 'true')
-                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
                     self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, X-Cluster-Token')
                     self.send_header('Access-Control-Expose-Headers', 'X-Cluster-Response-Token')
             self.send_header('X-Content-Type-Options', 'nosniff')
@@ -291,8 +314,30 @@ class RequestHandler(BaseHTTPRequestHandler):
             expired = [t for t, exp in _AUTH_SESSIONS.items() if exp < now]
             for t in expired:
                 _AUTH_SESSIONS.pop(t, None)
+            if len(_AUTH_SESSIONS) >= MAX_AUTH_SESSIONS:
+                oldest = sorted(_AUTH_SESSIONS.items(), key=lambda x: x[1])[:len(_AUTH_SESSIONS) - MAX_AUTH_SESSIONS + 1]
+                for t, _ in oldest:
+                    _AUTH_SESSIONS.pop(t, None)
             _AUTH_SESSIONS[token] = now + 7 * 86400
         return token
+
+    def _verify_same_origin(self):
+        """CSRF 防护：校验浏览器携带的 Origin / Referer 是否与当前 Host 同源"""
+        origin = (self.headers.get("Origin") or "").strip()
+        host = (self.headers.get("Host") or "").strip()
+        if not host:
+            return True
+        req_host = _extract_host_only(host)
+        if origin:
+            if origin.lower() == "null":
+                return False
+            origin_host = (urlparse(origin).hostname or "").strip("[]").lower()
+            return bool(origin_host and origin_host == req_host)
+        referer = (self.headers.get("Referer") or "").strip()
+        if referer:
+            ref_host = (urlparse(referer).hostname or "").strip("[]").lower()
+            return bool(ref_host and ref_host == req_host)
+        return True
 
     def _destroy_auth_session(self):
         token = self._get_session_token()
@@ -423,7 +468,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_html(HTML_TEMPLATE)
                 return
 
-            if path == "/api/auth/status" or path.startswith("/api/cluster/"):
+            if path == "/api/auth/status" or path in _CLUSTER_PEER_GET_ENDPOINTS:
                 pass
             elif path.startswith("/api/"):
                 if not self._is_request_authenticated():
@@ -464,11 +509,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 req_data = {}
 
-            if path in ("/api/auth/login", "/api/auth/logout") or path.startswith("/api/cluster/"):
+            if path in ("/api/auth/login", "/api/auth/logout") or path in _CLUSTER_PEER_POST_ENDPOINTS:
                 pass
             elif path.startswith("/api/"):
                 if not self._is_request_authenticated():
                     self._send_json({"error": "Unauthorized", "auth_required": True, "msg": "控制台安全登录已启用，请先登录"}, status=401)
+                    return
+                if not self._verify_same_origin():
+                    self._send_json({"error": "Forbidden", "msg": "CSRF 安全拦截：跨站请求来源不一致"}, status=403)
                     return
 
             if dispatch_post(self, parsed, req_data):
@@ -505,11 +553,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 req_data = {}
 
             path = parsed.path
-            if path.startswith("/api/cluster/"):
-                pass
-            elif path.startswith("/api/"):
+            if path.startswith("/api/"):
                 if not self._is_request_authenticated():
                     self._send_json({"error": "Unauthorized", "auth_required": True, "msg": "控制台安全登录已启用，请先登录"}, status=401)
+                    return
+                if not self._verify_same_origin():
+                    self._send_json({"error": "Forbidden", "msg": "CSRF 安全拦截：跨站请求来源不一致"}, status=403)
                     return
 
             if dispatch_delete(self, parsed, req_data):

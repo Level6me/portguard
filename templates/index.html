@@ -2489,7 +2489,14 @@
         return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
     function jsEscape(s) {
-        return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return String(s == null ? '' : s)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '\\x3c')
+            .replace(/>/g, '\\x3e')
+            .replace(/\r/g, '\\r')
+            .replace(/\n/g, '\\n');
     }
     function csvEscape(s) {
         return String(s == null ? '' : s).replace(/"/g, '""');
@@ -2705,7 +2712,7 @@
         const container = document.getElementById('toast-container');
         const toast = document.createElement('div');
         toast.className = 'toast';
-        toast.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+        toast.innerHTML = `<span>${escapeHtml(icon)}</span><span>${escapeHtml(msg)}</span>`;
         container.appendChild(toast);
         setTimeout(() => {
             toast.style.opacity = '0';
@@ -4011,7 +4018,7 @@
         else if (level === '高危') tagClass = 'warning';
         else if (level === '信任' || level === '正常' || level === '低危') tagClass = 'success';
         
-        document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${tagClass}">${level}</span>`;
+        document.getElementById('ip-detail-level').innerHTML = `<span class="tag ${tagClass}">${escapeHtml(level)}</span>`;
         
         const reasonEl = document.getElementById('ip-detail-reason');
         if (reasonEl) {
@@ -4333,11 +4340,11 @@
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(e.ip)}')" title="点击查看 IP 详情">${escapeHtml(e.ip)}</span>
                         ${threatTagsBadge}
                     </div>
-                    <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
+                    <div class="geo-subline" title="${escapeHtml(geoText)}">${escapeHtml(geoText)}</div>
                 </td>
                 <td>${portBadge}</td>
-                <td><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; max-width:180px;" title="${escapeHtml(e.port_name || '自定义诱饵')}">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${catName}</span>${uaBadge}</td>
-                <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${e.level || '高危'}</span></td>
+                <td><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; max-width:180px;" title="${escapeHtml(e.port_name || '自定义诱饵')}">${escapeHtml(e.port_name || '自定义诱饵')}</span> <span class="tag accent" style="margin-left:4px; font-size:10px; padding:2px 6px;">${escapeHtml(catName)}</span>${uaBadge}</td>
+                <td><span class="tag ${tagClass}" style="font-size:11px; font-weight:700;">${escapeHtml(e.level || '高危')}</span></td>
                 <td>${statusBadge}</td>
                 <td>
                     <div style="display: flex; gap: 4px; align-items: center;">
@@ -4445,7 +4452,7 @@
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(b.ip)}')" title="点击查看 IP 详情">${escapeHtml(b.ip)}</span>
                         ${threatTagsBadge}
                     </div>
-                    <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
+                    <div class="geo-subline" title="${escapeHtml(geoText)}">${escapeHtml(geoText)}</div>
                 </td>
                 <td>${nodeBadge}</td>
                 <td title="${escapeHtml(b.reason || '自动诱捕阻断')}"><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4;">${escapeHtml(formatReasonDisplay(b.reason || '自动诱捕阻断', 28))}</span></td>
@@ -5435,9 +5442,9 @@
                     <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
-                        <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
+                        <div class="geo-subline" title="${escapeHtml(geoText)}">${escapeHtml(geoText)}</div>
                     </td>
-                    <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${l.proto || 'TCP'} / ${l.port}</span></td>
+                    <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${escapeHtml(l.proto || 'TCP')} / ${escapeHtml(l.port)}</span></td>
                     <td><span class="reason-cell" style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; max-width:180px;" title="${escapeHtml(l.port_name || '网络连接')}">${escapeHtml(l.port_name || '网络连接')}</span></td>
                     <td>${actionTag}</td>
                 </tr>
@@ -5468,7 +5475,7 @@
                     <td>${formatTwoLineTime(l.access_time)}</td>
                     <td>
                         <span class="ip-text" onclick="showIPDetail('${jsEscape(l.ip)}')" title="点击查看 IP 详情">${escapeHtml(l.ip)}</span>
-                        <div class="geo-subline" title="${escapeHtml(geoText)}">${geoText}</div>
+                        <div class="geo-subline" title="${escapeHtml(geoText)}">${escapeHtml(geoText)}</div>
                     </td>
                     <td><span class="tag neutral" style="font-size:12px; font-weight:700; font-family:inherit; color:var(--accent); max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:inline-block; vertical-align:middle;" title="${escapeHtml(domain)}">🌐 ${escapeHtml(domain)}</span></td>
                     <td>

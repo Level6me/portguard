@@ -10,6 +10,22 @@ from sentry_daemon import (
 )
 from controllers.base import parse_loose_json_or_lines
 
+
+def _validate_http_trap_pattern(mtype, pattern):
+    """校验 HTTP 特征规则正则合法性与复杂度，防范 ReDoS 灾难性回溯"""
+    pat = str(pattern or "").strip()
+    if len(pat) > 512:
+        return False, "特征规则表达式过长（上限 512 字符）"
+    if mtype in ("path_keyword", "ua_keyword", "survey_engine") and pat:
+        # 拒绝明显的嵌套量词模式如 (.+)+, (.*)*, (\w+)+
+        if re.search(r"\([^)]*[+*][^)]*\)[+*{]", pat):
+            return False, "正则表达式存在嵌套量词 ReDoS 风险，请简化表达式"
+        try:
+            re.compile(pat, re.IGNORECASE)
+        except re.error as ex:
+            return False, f"无效的正则表达式: {ex}"
+    return True, ""
+
 def handle_traps(req, parsed):
     cfg = load_config()
     raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
@@ -215,6 +231,10 @@ def handle_http_traps_add(req, parsed, req_data):
     if not name:
         req._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
         return
+    ok_pat, err_pat = _validate_http_trap_pattern(mtype, pattern)
+    if not ok_pat:
+        req._send_json({"success": False, "msg": err_pat}, status=400)
+        return
     conn = get_db()
     c = conn.cursor()
     c.execute("""
@@ -239,6 +259,10 @@ def handle_http_traps_edit(req, parsed, req_data):
     desc = str(req_data.get("description", "")).strip()
     if not name:
         req._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
+        return
+    ok_pat, err_pat = _validate_http_trap_pattern(mtype, pattern)
+    if not ok_pat:
+        req._send_json({"success": False, "msg": err_pat}, status=400)
         return
     conn = get_db()
     c = conn.cursor()
@@ -294,6 +318,9 @@ def handle_http_traps_import(req, parsed, req_data):
         name = str(item.get("name", f"导入策略-{idx+1}")).strip()
         mtype = str(item.get("match_type", "path_keyword")).strip()
         pattern = str(item.get("pattern", "")).strip()
+        ok_pat, _ = _validate_http_trap_pattern(mtype, pattern)
+        if not ok_pat:
+            continue
         threshold = int(item.get("threshold") or 6)
         window = int(item.get("window") or 30)
         level = str(item.get("level", "极高危")).strip()

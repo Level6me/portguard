@@ -353,24 +353,30 @@ def init_firewall_ipset():
         return False
 
 def flush_firewall_blocks():
-    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并毫秒级批量移除内核黑洞路由"""
+    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并无 shell 注入风险地批量移除内核黑洞路由"""
     try:
         if is_ipset_available():
             subprocess.run(["ipset", "flush", "portguard_blacklist_v4"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["ipset", "flush", "portguard_blacklist_v6"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 毫秒级批量清理当前内核实际存在的黑洞路由（彻底杜绝逐条遍历数据库导致的子进程风暴与卡顿）
-        for cmd in [
-            "ip route show | grep blackhole | awk '{print $2}' | while read ip; do ip route del blackhole \"$ip\" 2>/dev/null || true; done",
-            "ip -6 route show | grep blackhole | awk '{print $2}' | while read ip; do ip -6 route del blackhole \"$ip\" 2>/dev/null || true; done"
-        ]:
-            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for route_cmd, del_prefix in (
+            (["ip", "route", "show"], ["ip", "route", "del", "blackhole"]),
+            (["ip", "-6", "route", "show"], ["ip", "-6", "route", "del", "blackhole"]),
+        ):
+            try:
+                res = subprocess.run(route_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=5)
+                for line in (res.stdout or "").splitlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 2 and parts[0] == "blackhole":
+                        valid_target = validate_ip(parts[1])
+                        if valid_target:
+                            subprocess.run(del_prefix + [valid_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
         return True
     except Exception as e:
         print(f"[Firewall] 清理阻断异常: {e}")
         return False
-    except Exception:
-        pass
 
 _BLACKLIST_IPS_CACHE = set()
 _BLACKLIST_IPS_CACHE_TIME = 0.0
@@ -754,7 +760,7 @@ def batch_ban_ip_firewall(ips, expire_seconds=None):
 
     for raw_ip in ips:
         val_ip = validate_ip(raw_ip)
-        if not val_ip or val_ip in infra_set or val_ip == gw or val_ip in ssh_ips or val_ip in c_ips or val_ip in exact_w:
+        if not val_ip or val_ip in infra_set or val_ip == gw or val_ip in ssh_ips or val_ip in c_ips or val_ip in exact_w or is_infrastructure_or_cdn_ip(val_ip) or ip_in_whitelist(val_ip):
             continue
         try:
             addr = ipaddress.ip_address(val_ip)

@@ -93,11 +93,12 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
     local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
     conn.close()
 
-    # 1. 优先对齐远端发来的解封墓碑
+    # 1. 优先对齐远端发来的解封墓碑（拒绝伪造未来时间戳）
+    now_guard_ts = int(time.time())
     for ru in remote_unbanned:
         ru_ip = validate_ip(ru.get("ip", ""))
         ru_ts = int(ru.get("timestamp", 0) or 0)
-        if ru_ip:
+        if ru_ip and ru_ts <= now_guard_ts + 120:
             if ru_ip in local_bans_map:
                 local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
                 if ru_ts >= local_ban_ts:
@@ -291,6 +292,10 @@ def handle_cluster_sync_whitelist(req, parsed, req_data):
 
     elif action == "delete":
         ip = str(data or "").strip()
+        from core.firewall import is_infrastructure_or_cdn_ip, get_default_gateway, get_active_ssh_client_ips
+        if is_infrastructure_or_cdn_ip(ip) or ip == get_default_gateway() or ip in get_active_ssh_client_ips():
+            req._send_json({"success": False, "msg": f"拒绝同步删除本地关键防自锁白名单: {ip}"}, status=403)
+            return
         whitelist = [w for w in whitelist if (w.get("ip") if isinstance(w, dict) else w) != ip]
         cfg["whitelist"] = whitelist
         save_config(cfg)

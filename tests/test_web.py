@@ -154,5 +154,56 @@ class WebRoutesTest(unittest.TestCase):
         self.assertTrue(matched_out)
         self.assertEqual(req_out.sent_status, 200)
 
+    def test_cluster_management_requires_auth_and_backup_redacted(self):
+        import io
+        import web_server
+        from core.db import hash_admin_password, verify_admin_password, sanitize_config_for_export
+
+        # 1. 验证密码哈希与常数时间校验
+        hashed = hash_admin_password("MyStr0ngP@ss!")
+        self.assertTrue(hashed.startswith("pbkdf2_sha256$"))
+        self.assertTrue(verify_admin_password("MyStr0ngP@ss!", hashed))
+        self.assertFalse(verify_admin_password("wrong", hashed))
+
+        # 2. 验证配置备份导出必须脱敏密钥
+        redacted = sanitize_config_for_export({
+            "admin_password": hashed,
+            "cluster_sync": {"cluster_secret": "raw_cluster_sec"},
+            "feishu_bot": {"app_secret": "raw_fb_sec", "webhook_url": "https://hook.example/x"}
+        })
+        self.assertEqual(redacted["admin_password"], "***REDACTED***")
+        self.assertEqual(redacted["cluster_sync"]["cluster_secret"], "***REDACTED***")
+        self.assertEqual(redacted["feishu_bot"]["app_secret"], "***REDACTED***")
+        self.assertEqual(redacted["feishu_bot"]["webhook_url"], "***REDACTED***")
+
+        # 3. 验证开启认证时 /api/cluster/nodes 与 /api/cluster/nodes/add 均不可绕过鉴权
+        fake_cfg = {
+            "auth_enabled": True,
+            "admin_password": hashed,
+            "cluster_sync": {"cluster_secret": "sec123"}
+        }
+        handler = web_server.RequestHandler.__new__(web_server.RequestHandler)
+        handler.client_address = ("203.0.113.10", 12345)
+        handler.headers = {"Host": "example.com:9099"}
+        sent_responses = []
+        handler._send_json = lambda data, status=200: sent_responses.append((status, data))
+
+        with mock.patch("web_server.load_config", return_value=fake_cfg):
+            handler.path = "/api/cluster/nodes"
+            handler.do_GET()
+            self.assertEqual(sent_responses[-1][0], 401)
+
+            handler.path = "/api/cluster/nodes/add"
+            handler.headers = {"Host": "example.com:9099", "Content-Length": "2"}
+            handler.rfile = io.BytesIO(b"{}")
+            handler.do_POST()
+            self.assertEqual(sent_responses[-1][0], 401)
+
+            # 同源校验：跨站 Origin 应被拦截
+            handler.headers = {"Host": "example.com:9099", "Origin": "https://evil.attacker"}
+            self.assertFalse(handler._verify_same_origin())
+            handler.headers = {"Host": "example.com:9099", "Origin": "https://example.com:9099"}
+            self.assertTrue(handler._verify_same_origin())
+
 if __name__ == "__main__":
     unittest.main()

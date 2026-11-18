@@ -410,6 +410,8 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
         return False
 
     now = time.time()
+    safe_path = str(path or "")[:1024]
+    safe_ua = str(ua or "")[:512]
     for rule in rules:
         if not rule.get("enabled"):
             continue
@@ -420,18 +422,24 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
         # 1. 路径敏感特征匹配
         if mtype == "path_keyword":
             pat = rule.get("pattern", "")
-            if pat and re.search(pat, path, re.IGNORECASE):
-                reason = f"Web诱捕: 探测高危路径 {path[:36]}"
-                ban_ip(ip, reason=reason, category="web", level=rlevel)
-                return True
+            try:
+                if pat and re.search(pat, safe_path, re.IGNORECASE):
+                    reason = f"Web诱捕: 探测高危路径 {safe_path[:36]}"
+                    ban_ip(ip, reason=reason, category="web", level=rlevel)
+                    return True
+            except re.error:
+                continue
 
         # 2. UA 扫描器工具指纹匹配
         elif mtype == "ua_keyword":
             pat = rule.get("pattern", "")
-            if pat and ua and re.search(pat, ua, re.IGNORECASE):
-                reason = f"Web防护: 扫描工具特征 {ua[:28]}"
-                ban_ip(ip, reason=reason, category="web", level=rlevel)
-                return True
+            try:
+                if pat and safe_ua and re.search(pat, safe_ua, re.IGNORECASE):
+                    reason = f"Web防护: 扫描工具特征 {safe_ua[:28]}"
+                    ban_ip(ip, reason=reason, category="web", level=rlevel)
+                    return True
+            except re.error:
+                continue
 
         # 3. HTTP 响应状态码 / 频次限制 (支持任意状态码如 302, 500, 404, 400-499, 500-599 等)
         elif mtype in ("status_rate", "status_code"):
@@ -463,8 +471,14 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
         # 4. 全网测绘引擎检测 (Censys, Shodan, Onyphe 等)
         elif mtype == "survey_engine":
             pat = rule.get("pattern", "")
-            if is_survey_scanner_ip(ip) or (pat and ua and re.search(pat, ua, re.IGNORECASE)):
-                reason = f"测绘拦截: 网络空间测绘引擎探测 ({ua[:20] if ua else 'Censys/Onyphe/Shodan'})"
+            matched_pat = False
+            if pat and safe_ua:
+                try:
+                    matched_pat = bool(re.search(pat, safe_ua, re.IGNORECASE))
+                except re.error:
+                    matched_pat = False
+            if is_survey_scanner_ip(ip) or matched_pat:
+                reason = f"测绘拦截: 网络空间测绘引擎探测 ({safe_ua[:20] if safe_ua else 'Censys/Onyphe/Shodan'})"
                 ban_ip(ip, reason=reason, category="survey", level=rlevel)
                 return True
 
@@ -2200,11 +2214,29 @@ class SiteLogCollector:
                                 continue
                             raw_ip = m.group("ip")
                             xff = (m.group("xff") or "").strip()
-                            
-                            # 智能识别 CDN 与真实客户端 IP (从最右侧条目反向取值：XFF 最左端可被客户端任意伪造，
-                            # 防止伪造 X-Forwarded-For 借状态码/路径规则触发对任意 IP 的误封；CDN 边缘节点会被过滤跳过)
+
+                            # 仅当直连来源 raw_ip 是回环/私网反代、已知 CDN 节点或显式配置的可信代理时，才解析 XFF
+                            # 彻底杜绝直连公网场景下攻击者伪造 X-Forwarded-For 触发任意第三方 IP 封禁
                             client_ip = raw_ip
-                            if xff and xff not in ("-", "null", "None"):
+                            is_trusted_source = False
+                            if raw_ip and is_infrastructure_or_cdn_ip(raw_ip):
+                                is_trusted_source = True
+                            elif raw_ip:
+                                try:
+                                    raw_obj = ipaddress.ip_address(raw_ip)
+                                    if raw_obj.is_loopback or raw_obj.is_private:
+                                        is_trusted_source = True
+                                except Exception:
+                                    pass
+                            if not is_trusted_source and raw_ip:
+                                try:
+                                    trusted_proxies = load_config().get("trusted_proxies", []) or []
+                                    if raw_ip in trusted_proxies:
+                                        is_trusted_source = True
+                                except Exception:
+                                    pass
+
+                            if is_trusted_source and xff and xff not in ("-", "null", "None"):
                                 candidate_ips = [x.strip() for x in xff.split(",") if x.strip()]
                                 for cand in reversed(candidate_ips):
                                     v_cand = validate_ip(cand)

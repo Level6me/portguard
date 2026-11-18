@@ -443,6 +443,7 @@ cfg = {
   'trap_all_unopened_ports': False,
   'trap_business_ports': False,
   'defense_paused': False,
+  'auto_manage_listen_ports': False,
   'auto_clean_days': 30
 }
 
@@ -476,6 +477,7 @@ cfg['trap_ports'] = [t for t in cfg['trap_ports'] if int(t.get('port', 0)) not i
 
 with open('${INSTALL_DIR}/config.json', 'w', encoding='utf-8') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
+os.chmod('${INSTALL_DIR}/config.json', 0o600)
 "
     echo -e "${GREEN}[✓] 智能防误封白名单与业务端口已初始化完毕！${NC}"
 else
@@ -496,6 +498,7 @@ try:
     if mod:
         with open(cfg_p, 'w', encoding='utf-8') as f:
             json.dump(curr, f, indent=2, ensure_ascii=False)
+        os.chmod(cfg_p, 0o600)
 except Exception:
     pass
 " 2>/dev/null || true

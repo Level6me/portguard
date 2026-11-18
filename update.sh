@@ -150,7 +150,10 @@ ARCHIVE_OK=false
 
 if curl -fsSL --connect-timeout 8 --retry 2 "$ARCHIVE_URL" -o "$ARCHIVE_FILE" 2>/dev/null; then
     if [ -f "$ARCHIVE_FILE" ] && [ "$(get_file_size "$ARCHIVE_FILE")" -ge 10000 ]; then
-        if tar -tzf "$ARCHIVE_FILE" >/dev/null 2>&1; then
+        if tar -tzf "$ARCHIVE_FILE" 2>/dev/null | grep -qE '(^/|/\.\./|^\.\./)'; then
+            echo -e "${RED}[!] 归档包包含非法路径穿越条目，已拒绝解包${NC}"
+            rm -f "$ARCHIVE_FILE"
+        elif tar -tzf "$ARCHIVE_FILE" >/dev/null 2>&1; then
             tar -xzf "$ARCHIVE_FILE" --strip-components=1 2>/dev/null && ARCHIVE_OK=true
             echo -e "${GREEN}[✓] 完整架构组件包获取并通过归档完整性校验${NC}"
         fi
@@ -184,7 +187,7 @@ fi
 
 # 预编译语法完整性验证
 if command -v python3 >/dev/null 2>&1; then
-    if ! python3 -m py_compile web_server.py sentry_daemon.py 2>/dev/null; then
+    if ! python3 -m py_compile web_server.py sentry_daemon.py core/*.py controllers/*.py geo/*.py collectors/*.py 2>/dev/null; then
         echo -e "${RED}[ERROR] 下载的核心代码文件存在语法损坏，终止覆盖更新！${NC}"
         rm -rf "$TMP_UPDATE_DIR"
         exit 1
@@ -247,14 +250,15 @@ if [ -s uninstall.sh ]; then
 fi
 
 # 核心配置平滑增量合并 (保留用户自定义规则的前提下注入新版默认特性字段)
-python3 -c "
+PG_INSTALL_DIR="${INSTALL_DIR}" python3 -c "
 import json, os, sys
-cfg_path = '${INSTALL_DIR}/config.json'
+install_dir = os.environ['PG_INSTALL_DIR']
+cfg_path = os.path.join(install_dir, 'config.json')
 try:
     if os.path.exists(cfg_path):
         with open(cfg_path, 'r', encoding='utf-8') as f:
             curr = json.load(f)
-        sys.path.insert(0, '${INSTALL_DIR}')
+        sys.path.insert(0, install_dir)
         from sentry_daemon import DEFAULT_CONFIG
         modified = False
         for k, v in DEFAULT_CONFIG.items():
@@ -264,6 +268,7 @@ try:
         if modified:
             with open(cfg_path, 'w', encoding='utf-8') as f:
                 json.dump(curr, f, indent=2, ensure_ascii=False)
+            os.chmod(cfg_path, 0o600)
 except Exception:
     pass
 " 2>/dev/null || true

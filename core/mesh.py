@@ -201,8 +201,8 @@ def parse_cluster_host_port(target_str, default_port=9098):
 
     return s, default_port
 
-def format_http_target_url(target_ip, port, endpoint=""):
-    """格式化集群 HTTP 请求目标 URL，严格遵循 RFC 2732 / 3986 标准"""
+def format_http_target_url(target_ip, port, endpoint="", scheme="http"):
+    """格式化集群 HTTP/HTTPS 请求目标 URL，严格遵循 RFC 2732 / 3986 标准"""
     clean_ip = str(target_ip).strip()
     if clean_ip.startswith("[") and clean_ip.endswith("]"):
         clean_ip = clean_ip[1:-1].strip()
@@ -210,7 +210,8 @@ def format_http_target_url(target_ip, port, endpoint=""):
         host_repr = f"[{clean_ip}]"
     else:
         host_repr = clean_ip
-    return f"http://{host_repr}:{port}{endpoint}"
+    proto = "https" if str(scheme).lower() == "https" else "http"
+    return f"{proto}://{host_repr}:{port}{endpoint}"
 
 def format_host_header(host, port):
     """格式化 HTTP Host 请求头，针对 IPv6 地址自动规范化为 [IPv6]:port"""
@@ -243,6 +244,11 @@ def validate_cluster_target(ip_or_host):
         return False, "", "节点目标地址格式无效"
 
     try:
+        allow_private = bool(load_config().get("cluster_sync", {}).get("allow_private_nodes", False))
+    except Exception:
+        allow_private = False
+
+    try:
         ip_obj = ipaddress.ip_address(host)
         if ip_obj.is_loopback:
             return False, "", f"SSRF安全拦截：禁止添加本地回环地址 ({host}) 作为集群节点"
@@ -256,6 +262,8 @@ def validate_cluster_target(ip_or_host):
             return False, "", "SSRF安全拦截：禁止添加保留地址段作为集群节点"
         if str(ip_obj) == "169.254.169.254":
             return False, "", "SSRF安全拦截：禁止访问云服务器元数据服务 (Metadata Service)"
+        if ip_obj.is_private and not allow_private:
+            return False, "", f"SSRF安全拦截：禁止添加私网保留地址 ({host})（如需内网组网请开启 allow_private_nodes）"
         return True, str(ip_obj), ""
     except ValueError:
         pass
@@ -282,6 +290,8 @@ def validate_cluster_target(ip_or_host):
                 return False, "", f"SSRF安全拦截：域名解析到组播或保留地址 ({resolved_ip})"
             if str(ip_obj) == "169.254.169.254":
                 return False, "", f"SSRF安全拦截：域名解析到云元数据服务 ({resolved_ip})"
+            if ip_obj.is_private and not allow_private:
+                return False, "", f"SSRF安全拦截：域名解析到私网保留地址 ({resolved_ip})"
     except Exception:
         pass
 
@@ -301,6 +311,11 @@ def resolve_and_validate_target(host, port=None):
         pass
 
     try:
+        allow_private = bool(load_config().get("cluster_sync", {}).get("allow_private_nodes", False))
+    except Exception:
+        allow_private = False
+
+    try:
         addrs = socket.getaddrinfo(clean_host, port or 80, socket.AF_UNSPEC, socket.SOCK_STREAM)
         if not addrs:
             return False, "", "无法解析对端主机名"
@@ -308,7 +323,7 @@ def resolve_and_validate_target(host, port=None):
         for item in addrs:
             ip_str = item[4][0]
             ip_obj = ipaddress.ip_address(ip_str)
-            if ip_obj.is_loopback or ip_obj.is_unspecified or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved or str(ip_obj) == "169.254.169.254":
+            if ip_obj.is_loopback or ip_obj.is_unspecified or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved or str(ip_obj) == "169.254.169.254" or (ip_obj.is_private and not allow_private):
                 return False, "", f"SSRF/DNS Rebinding 安全拦截：域名解析到内部敏感地址 ({ip_str})"
             if chosen_ip is None:
                 chosen_ip = ip_str
@@ -317,9 +332,13 @@ def resolve_and_validate_target(host, port=None):
         return False, "", f"域名解析失败: {ex}"
 
 def normalize_cluster_node(node):
-    """规范化协同节点数据结构，确保字段完整并兼容 IPv4、IPv6 与域名格式"""
+    """规范化协同节点数据结构，确保字段完整并兼容 IPv4、IPv6 与域名及 HTTPS 协议格式"""
     if isinstance(node, dict):
         raw_ip = str(node.get("ip", "")).strip()
+        raw_scheme = str(node.get("scheme", "")).strip().lower()
+        if not raw_scheme:
+            raw_scheme = "https" if raw_ip.lower().startswith("https://") else "http"
+        scheme = "https" if raw_scheme == "https" else "http"
         host, default_port = parse_cluster_host_port(raw_ip, default_port=int(node.get("port", 9098) or 9098))
         port = int(node.get("port", default_port) or default_port)
         remark = str(node.get("remark", "")).strip() or f"协同节点 ({host})"
@@ -330,6 +349,7 @@ def normalize_cluster_node(node):
         return {
             "ip": host,
             "port": port,
+            "scheme": scheme,
             "remark": remark,
             "created_at": created_at,
             "status": status,
@@ -340,12 +360,14 @@ def normalize_cluster_node(node):
         s = node.strip()
         if not s:
             return None
+        scheme = "https" if s.lower().startswith("https://") else "http"
         host, port = parse_cluster_host_port(s, default_port=9098)
         if not host:
             return None
         return {
             "ip": host,
             "port": port,
+            "scheme": scheme,
             "remark": f"协同节点 ({host})",
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "status": "unknown",
@@ -389,7 +411,7 @@ def _send_cluster_msg(node, endpoint, payload, token, secret=""):
         }
         for attempt in range(2):
             try:
-                target = format_http_target_url(target_ip, p, endpoint)
+                target = format_http_target_url(target_ip, p, endpoint, scheme=node.get("scheme", "http"))
                 req = urllib.request.Request(target, data=payload, headers=headers)
                 with safe_cluster_urlopen(req, timeout=3.5) as resp:
                     if resp.status in (200, 201):
@@ -573,7 +595,7 @@ def sync_cluster_mesh_state(target_node=None):
             success = False
             res = {}
             for p in ports_to_try:
-                target = format_http_target_url(target_ip, p, "/api/cluster/sync_state_exchange")
+                target = format_http_target_url(target_ip, p, "/api/cluster/sync_state_exchange", scheme=node.get("scheme", "http"))
                 try:
                     req = urllib.request.Request(target, data=payload, headers={
                         "Content-Type": "application/json",
@@ -599,10 +621,11 @@ def sync_cluster_mesh_state(target_node=None):
                 remote_unbanned = res.get("remote_unbanned", [])
 
                 if remote_unbanned:
+                    now_guard_ts = int(time.time())
                     for ru in remote_unbanned:
                         ru_ip = validate_ip(ru.get("ip", ""))
                         ru_ts = int(ru.get("timestamp", 0) or 0)
-                        if ru_ip:
+                        if ru_ip and ru_ts <= now_guard_ts + 120:
                             if ru_ip in local_bans_map:
                                 local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
                                 if ru_ts >= local_ban_ts:

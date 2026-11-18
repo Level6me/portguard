@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import hmac
 import json
+import threading
 import time
+from core.db import hash_admin_password, verify_admin_password, sanitize_config_for_export
 from sentry_daemon import (
     load_config, save_config, get_config_snapshots, rollback_config_snapshot,
     check_c2_compromise_connections, trap_instance, sniffer_instance,
@@ -9,6 +11,10 @@ from sentry_daemon import (
     validate_cluster_target, normalize_cluster_node
 )
 from core.notify import send_test_feishu_message, is_feishu_ws_connected, reload_feishu_ws
+
+_LOGIN_FAIL_LOCK = threading.Lock()
+_LOGIN_FAIL_TRACKER = {}  # ip -> {"fails": int, "first_ts": float, "lock_until": float}
+_MAX_LOGIN_TRACK_IPS = 4096
 
 def handle_settings_get(req, parsed):
     cfg = load_config()
@@ -45,6 +51,8 @@ def handle_settings_get(req, parsed):
         feishu_bot["app_secret_configured"] = bool(raw_app_secret)
         feishu_bot["secret_configured"] = bool(raw_secret)
         feishu_bot["ws_connected"] = is_feishu_ws_connected()
+        if "admin_open_ids" not in feishu_bot or not isinstance(feishu_bot["admin_open_ids"], list):
+            feishu_bot["admin_open_ids"] = []
 
     req._send_json({
         "trap_threshold": int(cfg.get("trap_threshold", 2) or 2),
@@ -80,8 +88,9 @@ def handle_config_snapshots(req, parsed):
 
 
 def handle_config_backup(req, parsed):
-    # 导出完整配置文件备份
-    cfg_str = json.dumps(load_config(), indent=2, ensure_ascii=False).encode('utf-8')
+    # 导出配置文件备份（默认脱敏所有明文密码、集群密钥与机器人 Secret，防凭证泄露）
+    safe_cfg = sanitize_config_for_export(load_config())
+    cfg_str = json.dumps(safe_cfg, indent=2, ensure_ascii=False).encode('utf-8')
     req.send_response(200)
     req.send_header('Content-Type', 'application/json; charset=utf-8')
     req.send_header('Content-Length', str(len(cfg_str)))
@@ -164,7 +173,7 @@ def handle_settings_post(req, parsed, req_data):
     if "admin_password" in req_data:
         new_pwd = str(req_data["admin_password"]).strip()
         if new_pwd and not all(ch == '*' for ch in new_pwd):
-            cfg["admin_password"] = new_pwd
+            cfg["admin_password"] = hash_admin_password(new_pwd)
     if "cluster_sync" in req_data and isinstance(req_data["cluster_sync"], dict):
         cs = req_data["cluster_sync"]
         old_cs = cfg.get("cluster_sync", {})
@@ -200,6 +209,14 @@ def handle_settings_post(req, parsed, req_data):
         old_secret = old_fb.get("secret", "").strip()
         incoming_secret = str(incoming_fb.get("secret", "")).strip()
 
+        admin_open_ids = incoming_fb.get("admin_open_ids", old_fb.get("admin_open_ids", []))
+        if isinstance(admin_open_ids, str):
+            admin_open_ids = [x.strip() for x in admin_open_ids.split(",") if x.strip()]
+        elif not isinstance(admin_open_ids, list):
+            admin_open_ids = []
+        else:
+            admin_open_ids = [str(x).strip() for x in admin_open_ids if str(x).strip()]
+
         fb_dict = {
             "enabled": bool(incoming_fb.get("enabled", False)),
             "bot_type": str(incoming_fb.get("bot_type", "app")).strip(),
@@ -208,6 +225,8 @@ def handle_settings_post(req, parsed, req_data):
             "receive_id_type": str(incoming_fb.get("receive_id_type", "chat_id")).strip(),
             "use_ws": bool(incoming_fb.get("use_ws", True)),
             "webhook_url": str(incoming_fb.get("webhook_url", "")).strip(),
+            "admin_open_ids": admin_open_ids,
+            "auto_bind_first_chat": bool(incoming_fb.get("auto_bind_first_chat", old_fb.get("auto_bind_first_chat", True))),
             "notify_new_listen_port": bool(incoming_fb.get("notify_new_listen_port", True)),
             "notify_ban_ip": bool(incoming_fb.get("notify_ban_ip", False))
         }
@@ -299,26 +318,57 @@ def handle_auth_login(req, parsed, req_data):
         req._send_json({"success": True, "auth_enabled": False, "msg": "系统当前未开启密码认证，已自动放行"})
         return
 
+    client_ip = req._get_real_client_ip() if hasattr(req, "_get_real_client_ip") else getattr(req, "client_address", ("127.0.0.1", 0))[0]
+    now = time.time()
+    with _LOGIN_FAIL_LOCK:
+        if len(_LOGIN_FAIL_TRACKER) >= _MAX_LOGIN_TRACK_IPS:
+            stale = [k for k, v in _LOGIN_FAIL_TRACKER.items() if now - v.get("first_ts", 0) > 600 and v.get("lock_until", 0) < now]
+            for k in stale:
+                _LOGIN_FAIL_TRACKER.pop(k, None)
+        entry = _LOGIN_FAIL_TRACKER.get(client_ip)
+        if entry and entry.get("lock_until", 0) > now:
+            remain = int(entry["lock_until"] - now)
+            req._send_json({"success": False, "msg": f"登录失败次数过多，请在 {remain} 秒后重试"}, status=429)
+            return
+
     password = str(req_data.get("password", "")).strip()
-    # 常数时间比较，避免逐字节计时侧信道泄露管理密码
-    if hmac.compare_digest(password.encode("utf-8"), admin_pwd.encode("utf-8")):
+    if verify_admin_password(password, admin_pwd):
+        with _LOGIN_FAIL_LOCK:
+            _LOGIN_FAIL_TRACKER.pop(client_ip, None)
+        # 若仍为历史明文密码，登录成功后自动平滑升级为 PBKDF2 加盐哈希
+        if not admin_pwd.startswith("pbkdf2_sha256$"):
+            cfg["admin_password"] = hash_admin_password(password)
+            save_config(cfg)
         token = ""
         if hasattr(req, "_create_auth_session"):
             token = req._create_auth_session()
-        cookie_header = f"portguard_session={token}; Path=/; Max-Age=604800; SameSite=Lax"
+        is_https = str(req.headers.get("X-Forwarded-Proto", "")).lower() == "https"
+        secure_attr = "; Secure" if is_https else ""
+        cookie_header = f"portguard_session={token}; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax{secure_attr}"
         req.send_response(200)
         req.send_header('Content-Type', 'application/json; charset=utf-8')
         req.send_header('Set-Cookie', cookie_header)
         req.end_headers()
         req.wfile.write(json.dumps({"success": True, "token": token, "msg": "认证成功，正在进入控制台..."}).encode('utf-8'))
     else:
+        with _LOGIN_FAIL_LOCK:
+            entry = _LOGIN_FAIL_TRACKER.get(client_ip)
+            if not entry or (now - entry.get("first_ts", 0) > 300):
+                entry = {"fails": 1, "first_ts": now, "lock_until": 0.0}
+            else:
+                entry["fails"] = entry.get("fails", 0) + 1
+            if entry["fails"] >= 5:
+                entry["lock_until"] = now + 300
+            _LOGIN_FAIL_TRACKER[client_ip] = entry
         req._send_json({"success": False, "msg": "认证失败：管理密码错误"}, status=403)
 
 
 def handle_auth_logout(req, parsed, req_data):
     if hasattr(req, "_destroy_auth_session"):
         req._destroy_auth_session()
-    cookie_header = "portguard_session=; Path=/; Max-Age=0; SameSite=Lax"
+    is_https = str(req.headers.get("X-Forwarded-Proto", "")).lower() == "https"
+    secure_attr = "; Secure" if is_https else ""
+    cookie_header = f"portguard_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure_attr}"
     req.send_response(200)
     req.send_header('Content-Type', 'application/json; charset=utf-8')
     req.send_header('Set-Cookie', cookie_header)

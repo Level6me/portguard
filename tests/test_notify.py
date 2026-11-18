@@ -274,7 +274,8 @@ class TestFeishuCommands(unittest.TestCase):
                 "app_id": "cli_test",
                 "app_secret": "sec_test",
                 "receive_id": "oc_test_chat_id",
-                "receive_id_type": "chat_id"
+                "receive_id_type": "chat_id",
+                "admin_open_ids": ["ou_sender"]
             },
             "defense_paused": False,
             "whitelist": [{"ip": "10.0.0.1", "remark": "受信任运维机"}],
@@ -404,6 +405,21 @@ class TestFeishuCommands(unittest.TestCase):
         self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_sender", "/help")
         card2 = mock_send_app.call_args[1].get("card_dict")
         self.assertIn("快捷控制指令手册", card2["header"]["title"]["content"])
+
+    @patch("core.notify.send_feishu_app_message")
+    @patch("sentry_daemon.flush_firewall_blocks")
+    @patch("core.db.save_config")
+    @patch("core.db.load_config")
+    def test_feishu_cmd_unauthorized_sender_rejected(self, mock_load, mock_save, mock_flush, mock_send_app):
+        """测试未授权发送者执行 /pause 指令必须被拒绝"""
+        cfg_copy = dict(self.cfg)
+        mock_load.return_value = cfg_copy
+
+        self.mgr._handle_auto_bind_and_command("oc_test_chat_id", "ou_attacker", "/pause")
+        mock_flush.assert_not_called()
+        mock_save.assert_not_called()
+        self.assertTrue(mock_send_app.called)
+        self.assertIn("权限不足", mock_send_app.call_args[1].get("text_content", ""))
 
 
 if __name__ == "__main__":

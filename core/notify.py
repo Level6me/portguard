@@ -566,13 +566,20 @@ class FeishuWsManager:
         current_rcv = fb.get("receive_id", "").strip()
         node_name = cfg.get("node_name", "本机节点") or "本机节点"
 
-        # 1. 自动绑定：若当前未配置 receive_id，自动将当前对话群绑定为告警推送目标
+        # 1. 自动绑定：若当前未配置 receive_id 且允许首次自动绑定，则绑定当前对话群并登记首个管理员 open_id
         if not current_rcv and chat_id:
+            if not fb.get("auto_bind_first_chat", True):
+                return
             fb["receive_id"] = chat_id
             fb["receive_id_type"] = "chat_id"
+            fb["auto_bind_first_chat"] = False
+            admin_ids = [str(x).strip() for x in (fb.get("admin_open_ids") or []) if str(x).strip()]
+            if open_id and open_id not in admin_ids:
+                admin_ids.append(open_id)
+            fb["admin_open_ids"] = admin_ids
             cfg["feishu_bot"] = fb
             save_config(cfg)
-            print(f"[Feishu WS] 🎯 自动绑定飞书告警推送群: {chat_id}")
+            print(f"[Feishu WS] 🎯 自动绑定飞书告警推送群: {chat_id} (管理员: {open_id or '未提供'})")
             bind_card = build_feishu_card(
                 "🎉 PortGuard 飞书告警自动绑定成功",
                 f"**已自动将当前会话绑定为 PortGuard 安全告警推送通道！**\n\n"
@@ -580,6 +587,7 @@ class FeishuWsManager:
                 fields=[
                     ("🖥️ 监控节点", node_name),
                     ("💬 绑定会话 ID", chat_id),
+                    ("👤 授权管理员", open_id or "请在控制台配置 admin_open_ids"),
                     ("⚡ 通信链路", "WebSocket 双向持久长连接"),
                     ("⏰ 绑定时间", time.strftime("%Y-%m-%d %H:%M:%S"))
                 ],
@@ -590,6 +598,11 @@ class FeishuWsManager:
 
         target_id = chat_id or open_id
         if not target_id:
+            return
+
+        admin_open_ids = [str(x).strip() for x in (fb.get("admin_open_ids") or []) if str(x).strip()]
+        # 校验消息来源会话与发送者权限，防止未授权群聊或群内普通成员执行控制命令
+        if current_rcv and chat_id != current_rcv and (not open_id or open_id not in admin_open_ids):
             return
 
         cmd = text.strip()
@@ -604,6 +617,15 @@ class FeishuWsManager:
         parts = cmd.split()
         op = parts[0].lower()
         args = parts[1:]
+
+        if not admin_open_ids or not open_id or open_id not in admin_open_ids:
+            send_feishu_app_message(
+                self.app_id,
+                self.app_secret,
+                target_id,
+                text_content=f"⛔ 权限不足：仅授权管理员可执行 PortGuard 控制指令（请将您的 OpenID `{open_id or '未知'}` 配置至 feishu_bot.admin_open_ids）。"
+            )
+            return
 
         # 1. 状态查看: /status, 状态, /s
         if op in ("/status", "状态", "status", "/s"):
