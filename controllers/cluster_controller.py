@@ -16,6 +16,7 @@ from sentry_daemon import (
     safe_cluster_urlopen, generate_cluster_response_token, verify_cluster_response_token,
     parse_cluster_host_port, format_http_target_url, format_host_header, verify_cluster_response_strictly
 )
+from core.db import normalize_whitelist_item, resolve_synced_whitelist_source_node
 import re
 
 
@@ -144,8 +145,13 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
     conn.close()
 
     # 3. 合并白名单
+    local_node = cfg.get("node_name", "本机") or "本机"
     whitelist = cfg.get("whitelist", [])
-    w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
+    w_map = {}
+    for w in whitelist:
+        nw = normalize_whitelist_item(w, default_node=local_node)
+        if nw.get("ip"):
+            w_map[nw["ip"]] = nw
     added_whites = 0
     for rw in remote_whites:
         rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
@@ -153,8 +159,9 @@ def handle_cluster_sync_state_exchange(req, parsed, req_data):
             continue
         unban_ip_core(rw_ip, status_event="WHITELIST")
         rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
+        rw_src = resolve_synced_whitelist_source_node(rw, source_node)
         if rw_ip not in w_map:
-            w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
+            w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem, "source_node": rw_src}
             added_whites += 1
     cfg["whitelist"] = list(w_map.values())
     save_config(cfg)
@@ -284,7 +291,7 @@ def handle_cluster_sync_whitelist(req, parsed, req_data):
         unban_ip_core(ip, status_event="WHITELIST")
         if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
             node_remark = f"[{source_node}联防] {remark}" if not str(remark).startswith(f"[{source_node}") else remark
-            whitelist.append({"ip": ip, "remark": node_remark})
+            whitelist.append({"ip": ip, "remark": node_remark, "source_node": f"集群 ({source_node})"})
             cfg["whitelist"] = whitelist
             save_config(cfg)
         req._send_json({"success": True, "msg": f"已成功同步添加白名单: {ip}"})
@@ -305,11 +312,12 @@ def handle_cluster_sync_whitelist(req, parsed, req_data):
     elif action in ("batch_add", "sync_all"):
         items = data if isinstance(data, list) else []
         updated_cnt = 0
+        local_node = cfg.get("node_name", "本机") or "本机"
         current_map = {}
         for w in whitelist:
-            w_ip = w.get("ip") if isinstance(w, dict) else w
-            if w_ip:
-                current_map[w_ip] = w if isinstance(w, dict) else {"ip": w_ip, "remark": "信任IP"}
+            nw = normalize_whitelist_item(w, default_node=local_node)
+            if nw.get("ip"):
+                current_map[nw["ip"]] = nw
 
         for it in items:
             if isinstance(it, dict):
@@ -324,7 +332,8 @@ def handle_cluster_sync_whitelist(req, parsed, req_data):
             unban_ip_core(v_ip, status_event="WHITELIST")
             node_rem = f"[{source_node}联防] {it_rem}" if not it_rem.startswith(f"[{source_node}") else it_rem
             if v_ip not in current_map:
-                current_map[v_ip] = {"ip": v_ip, "remark": node_rem}
+                it_src = resolve_synced_whitelist_source_node(it, source_node)
+                current_map[v_ip] = {"ip": v_ip, "remark": node_rem, "source_node": it_src}
                 updated_cnt += 1
 
         cfg["whitelist"] = list(current_map.values())

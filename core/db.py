@@ -46,20 +46,20 @@ DEFAULT_CONFIG = {
         {"port": 27017, "name": "MongoDB 端口防护", "category": "db", "enabled": True, "level": "高危"}
     ],
     "whitelist": [
-        {"ip": "127.0.0.1", "remark": "本地回环"},
-        {"ip": "::1", "remark": "IPv6 本地回环"},
-        {"ip": "1.1.1.1", "remark": "Cloudflare DNS (系统基础设施)"},
-        {"ip": "1.0.0.1", "remark": "Cloudflare DNS (系统基础设施)"},
-        {"ip": "8.8.8.8", "remark": "Google DNS (系统基础设施)"},
-        {"ip": "8.8.4.4", "remark": "Google DNS (系统基础设施)"},
-        {"ip": "223.5.5.5", "remark": "Aliyun DNS (系统基础设施)"},
-        {"ip": "223.6.6.6", "remark": "Aliyun DNS (系统基础设施)"},
-        {"ip": "119.29.29.29", "remark": "Tencent DNS (系统基础设施)"},
-        {"ip": "114.114.114.114", "remark": "114 DNS (系统基础设施)"},
-        {"ip": "10.0.0.0/8", "remark": "私网 A 类地址"},
-        {"ip": "172.16.0.0/12", "remark": "私网 B 类地址"},
-        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址"},
-        {"ip": "100.64.0.0/10", "remark": "运营商 CGNAT / 云专网"}
+        {"ip": "127.0.0.1", "remark": "本地回环", "source_node": "系统默认"},
+        {"ip": "::1", "remark": "IPv6 本地回环", "source_node": "系统默认"},
+        {"ip": "1.1.1.1", "remark": "Cloudflare DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "1.0.0.1", "remark": "Cloudflare DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "8.8.8.8", "remark": "Google DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "8.8.4.4", "remark": "Google DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "223.5.5.5", "remark": "Aliyun DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "223.6.6.6", "remark": "Aliyun DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "119.29.29.29", "remark": "Tencent DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "114.114.114.114", "remark": "114 DNS (系统基础设施)", "source_node": "系统默认"},
+        {"ip": "10.0.0.0/8", "remark": "私网 A 类地址", "source_node": "系统默认"},
+        {"ip": "172.16.0.0/12", "remark": "私网 B 类地址", "source_node": "系统默认"},
+        {"ip": "192.168.0.0/16", "remark": "私网 C 类地址", "source_node": "系统默认"},
+        {"ip": "100.64.0.0/10", "remark": "运营商 CGNAT / 云专网", "source_node": "系统默认"}
     ],
     "web_port": 9099,
     "web_bind": "127.0.0.1",
@@ -917,3 +917,64 @@ def rollup_analytics_before_cleanup(conn, cutoff_ts):
             """, dim_rows)
 
     return cutoff_midnight
+
+
+def _strip_cluster_wrapper(name):
+    s = str(name or "").strip()
+    while s.startswith("集群 (") and s.endswith(")"):
+        s = s[4:-1].strip()
+    return s
+
+
+def infer_whitelist_source_node(item, default_node="本机"):
+    """推断或补全白名单条目的来源节点标签，兼容历史无 source_node 字段记录"""
+    if isinstance(item, dict):
+        explicit = str(item.get("source_node") or "").strip()
+        if explicit:
+            return explicit
+        remark = str(item.get("remark") or "").strip()
+    else:
+        remark = ""
+
+    if remark.startswith("["):
+        for suffix in ("联防]", "对齐]"):
+            idx = remark.find(suffix)
+            if idx > 1:
+                cluster_src = _strip_cluster_wrapper(remark[1:idx])
+                if cluster_src:
+                    return f"集群 ({cluster_src})"
+
+    if any(k in remark for k in ("本地回环", "系统基础设施", "私网", "CGNAT", "默认", "网关")):
+        return "系统默认"
+    if "飞书" in remark:
+        return f"飞书指令 ({default_node})" if default_node and default_node != "本机" else "飞书指令"
+    if "导入" in remark:
+        return f"批量导入 ({default_node})" if default_node and default_node != "本机" else "批量导入"
+    if "当前运维" in remark or "控制台" in remark:
+        return f"本机 ({default_node})" if default_node and default_node != "本机" else "本机"
+    return default_node or "本机"
+
+
+def normalize_whitelist_item(item, default_node="本机"):
+    """返回标准化的白名单字典副本（含 ip, remark, source_node）"""
+    if isinstance(item, dict):
+        out = dict(item)
+        out.setdefault("remark", "信任IP")
+        out["source_node"] = infer_whitelist_source_node(out, default_node=default_node)
+        return out
+    ip_str = str(item or "").strip()
+    return {"ip": ip_str, "remark": "信任IP", "source_node": default_node or "本机"}
+
+
+def resolve_synced_whitelist_source_node(remote_item, peer_node_name="协同节点"):
+    """解析远端同步白名单条目在本地落地时的来源节点标签"""
+    peer = _strip_cluster_wrapper(peer_node_name) or "协同节点"
+    if isinstance(remote_item, dict):
+        raw_src = str(remote_item.get("source_node") or "").strip()
+        if raw_src == "系统默认":
+            return "系统默认"
+        if raw_src and not any(p in raw_src for p in ("本机", "手动", "批量", "飞书", "系统")):
+            cleaned = _strip_cluster_wrapper(raw_src)
+            if cleaned and cleaned not in ("协同节点", "远程节点"):
+                return f"集群 ({cleaned})"
+    return f"集群 ({peer})"

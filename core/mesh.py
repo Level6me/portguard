@@ -17,7 +17,7 @@ import time
 import urllib.request
 import uuid
 
-from core.db import get_db, load_config, save_config
+from core.db import get_db, load_config, save_config, resolve_synced_whitelist_source_node
 from core.firewall import validate_ip, ban_ip_firewall, batch_ban_ip_firewall, unban_ip_core, ip_in_whitelist, get_compiled_whitelist
 from geo import _GEO_CACHE, resolve_ip_geo, resolve_ip_geo_local
 
@@ -680,14 +680,16 @@ def sync_cluster_mesh_state(target_node=None):
                     cur_cfg = load_config()
                     w_list = cur_cfg.get("whitelist", [])
                     w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in w_list }
+                    peer_label = node.get("name") or node.get("remark") or node.get("ip")
                     for w in remote_missing_whites:
                         w_ip = validate_ip(w.get("ip") if isinstance(w, dict) else w)
                         if not w_ip:
                             continue
                         unban_ip_core(w_ip, status_event="WHITELIST")
                         w_rem = w.get("remark", "集群对齐白名单") if isinstance(w, dict) else "集群对齐白名单"
+                        w_src = resolve_synced_whitelist_source_node(w, peer_label)
                         if w_ip not in w_map:
-                            w_map[w_ip] = {"ip": w_ip, "remark": w_rem}
+                            w_map[w_ip] = {"ip": w_ip, "remark": w_rem, "source_node": w_src}
                             merged_whites += 1
                     cur_cfg["whitelist"] = list(w_map.values())
                     save_config(cur_cfg)

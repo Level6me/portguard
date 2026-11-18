@@ -21,6 +21,7 @@ from controllers.base import (
     parse_loose_json_or_lines, _BLACKLIST_CACHE_LOCK, _BLACKLIST_CACHE,
     _BLACKLIST_CACHE_TIME
 )
+from core.db import normalize_whitelist_item
 
 def handle_hidden_ips(req, parsed):
     hidden_list = get_hidden_ips()
@@ -284,12 +285,9 @@ def handle_blacklist(req, parsed):
 
 def handle_whitelist(req, parsed):
     cfg = load_config()
+    node_name = cfg.get("node_name", "本机") or "本机"
     raw_white = cfg.get("whitelist", DEFAULT_CONFIG["whitelist"])
-    normalized = []
-    for item in raw_white:
-        if isinstance(item, str):
-            item = {"ip": item, "remark": "信任IP"}
-        normalized.append(item)
+    normalized = [normalize_whitelist_item(item, default_node=node_name) for item in raw_white]
     req._send_json(normalized)
     return
 
@@ -573,9 +571,11 @@ def handle_whitelist_add(req, parsed, req_data):
     unban_ip_core(ip, status_event="WHITELIST")
 
     cfg = load_config()
+    node_name = cfg.get("node_name", "本机") or "本机"
+    src_label = f"手动添加 ({node_name})" if node_name != "本机" else "手动添加"
     whitelist = cfg.get("whitelist", [])
     if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
-        whitelist.append({"ip": ip, "remark": remark})
+        whitelist.append({"ip": ip, "remark": remark, "source_node": src_label})
         cfg["whitelist"] = whitelist
         save_config(cfg)
         # 广播至集群协同节点
@@ -619,14 +619,15 @@ def handle_whitelist_import(req, parsed, req_data):
         return
 
     cfg = load_config()
+    node_name = cfg.get("node_name", "本机") or "本机"
+    src_label = f"批量导入 ({node_name})" if node_name != "本机" else "批量导入"
     existing_list = cfg.get("whitelist", DEFAULT_CONFIG["whitelist"])
     current_map = {}
     if mode == "append":
         for item in existing_list:
-            if isinstance(item, str):
-                current_map[item] = {"ip": item, "remark": "信任IP"}
-            elif isinstance(item, dict) and item.get("ip"):
-                current_map[item["ip"]] = item
+            norm = normalize_whitelist_item(item, default_node=node_name)
+            if norm.get("ip"):
+                current_map[norm["ip"]] = norm
 
     success_count = 0
     unbanned_count = 0
@@ -634,10 +635,12 @@ def handle_whitelist_import(req, parsed, req_data):
         if isinstance(item, dict):
             ip = str(item.get("ip", "")).strip()
             remark = str(item.get("remark", "导入信任IP")).strip()
+            item_src = str(item.get("source_node") or "").strip() or src_label
         elif isinstance(item, str):
             parts = item.strip().split(maxsplit=1)
             ip = parts[0].strip() if parts else ""
             remark = parts[1].strip() if len(parts) > 1 else "导入信任IP"
+            item_src = src_label
         else:
             continue
 
@@ -649,7 +652,7 @@ def handle_whitelist_import(req, parsed, req_data):
             continue
         ip = v_ip
 
-        current_map[ip] = {"ip": ip, "remark": remark}
+        current_map[ip] = {"ip": ip, "remark": remark, "source_node": item_src}
         success_count += 1
 
         # 批量自动联动解封已有黑名单

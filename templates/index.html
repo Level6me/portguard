@@ -1272,7 +1272,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); flex-wrap: wrap; gap: 10px;">
                     <div class="search-box" style="flex: 1; max-width: 420px;">
                         <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                        <input type="text" id="whitelist-search-input" placeholder="搜索白名单 IP / CIDR 网段 / 备注说明..." oninput="onWhitelistSearch()">
+                        <input type="text" id="whitelist-search-input" placeholder="搜索白名单 IP / CIDR 网段 / 来源节点 / 备注说明..." oninput="onWhitelistSearch()">
                     </div>
                     <div id="whitelist-search-summary" style="font-size: 11px; color: var(--text-sec); font-weight: 600;"></div>
                 </div>
@@ -1281,13 +1281,14 @@
                     <table>
                         <thead>
                             <tr>
-                                <th style="width: 45%;">白名单 IP / 网段</th>
-                                <th style="width: 40%;">备注说明</th>
-                                <th style="width: 15%; text-align: right;">操作</th>
+                                <th style="width: 30%;">白名单 IP / 网段</th>
+                                <th style="width: 22%;">来源节点</th>
+                                <th style="width: 34%;">备注说明</th>
+                                <th style="width: 14%; text-align: right;">操作</th>
                             </tr>
                         </thead>
                         <tbody id="whitelist-tbody">
-                            <tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入白名单...</td></tr>
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 30px;">正在载入白名单...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -4486,27 +4487,7 @@
         let html = '';
         pageList.forEach(b => {
             const geoText = formatGeoCN(b);
-            const rawNode = (b.source_node || '本机').trim();
-            let cleanNode = rawNode;
-            while (cleanNode.startsWith('集群 (') && cleanNode.endsWith(')')) {
-                cleanNode = cleanNode.slice(4, -1).trim();
-            }
-            cleanNode = cleanNode.replace(/集群\s*\(\s*/g, '').replace(/\)+$/g, '').trim() || rawNode;
-
-            let nodeBadge = '';
-            if (rawNode.includes('腾讯云') || cleanNode.includes('腾讯云')) {
-                nodeBadge = `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(cleanNode)}</span>`;
-            } else if (rawNode.includes('阿里云') || cleanNode.includes('Ali') || cleanNode.includes('阿里')) {
-                nodeBadge = `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">⚡ ${escapeHtml(cleanNode)}</span>`;
-            } else if (rawNode.includes('搬瓦工') || cleanNode.includes('BWH') || cleanNode.includes('搬瓦工')) {
-                nodeBadge = `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(cleanNode)}</span>`;
-            } else if (rawNode.includes('手动')) {
-                nodeBadge = `<span class="tag" style="background: rgba(255, 149, 0, 0.12); color: #ff9500; border: 1px solid rgba(255, 149, 0, 0.3); font-weight: 700; white-space: nowrap;">👤 手动添加</span>`;
-            } else if (rawNode.includes('联防') || rawNode.includes('集群')) {
-                nodeBadge = `<span class="tag" style="background: rgba(88, 86, 214, 0.12); color: #5856d6; border: 1px solid rgba(88, 86, 214, 0.3); font-weight: 700; white-space: nowrap;">🌐 ${escapeHtml(cleanNode)}</span>`;
-            } else {
-                nodeBadge = `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(rawNode)}</span>`;
-            }
+            const nodeBadge = renderSourceNodeBadge(b.source_node, '本机');
 
             // 威胁画像标签
             let threatTagsBadge = '';
@@ -5301,6 +5282,32 @@
     }
     function setWhitelistPage(p) { whitelistPage = p; renderWhitelistTable(); }
 
+    function renderSourceNodeBadge(rawSourceNode, fallback = '本机') {
+        const rawNode = String(rawSourceNode || fallback || '本机').trim();
+        let cleanNode = rawNode;
+        while (cleanNode.startsWith('集群 (') && cleanNode.endsWith(')')) {
+            cleanNode = cleanNode.slice(4, -1).trim();
+        }
+        cleanNode = cleanNode.replace(/集群\s*\(\s*/g, '').replace(/\)+$/g, '').trim() || rawNode;
+
+        if (rawNode.includes('腾讯云') || cleanNode.includes('腾讯云')) {
+            return `<span class="tag" style="background: rgba(0, 164, 255, 0.12); color: #0088ff; border: 1px solid rgba(0, 164, 255, 0.3); font-weight: 700; white-space: nowrap;">☁️ ${escapeHtml(cleanNode)}</span>`;
+        } else if (rawNode.includes('阿里云') || cleanNode.includes('Ali') || cleanNode.includes('阿里')) {
+            return `<span class="tag" style="background: rgba(255, 106, 0, 0.12); color: #ff6a00; border: 1px solid rgba(255, 106, 0, 0.3); font-weight: 700; white-space: nowrap;">⚡ ${escapeHtml(cleanNode)}</span>`;
+        } else if (rawNode.includes('搬瓦工') || cleanNode.includes('BWH') || cleanNode.includes('搬瓦工')) {
+            return `<span class="tag" style="background: rgba(175, 82, 222, 0.12); color: #af52de; border: 1px solid rgba(175, 82, 222, 0.3); font-weight: 700; white-space: nowrap;">🚀 ${escapeHtml(cleanNode)}</span>`;
+        } else if (rawNode.includes('飞书')) {
+            return `<span class="tag" style="background: rgba(0, 168, 150, 0.12); color: #009985; border: 1px solid rgba(0, 168, 150, 0.3); font-weight: 700; white-space: nowrap;">🤖 ${escapeHtml(cleanNode)}</span>`;
+        } else if (rawNode.includes('手动') || rawNode.includes('批量导入')) {
+            const label = rawNode.includes('批量导入') ? cleanNode : '手动添加';
+            return `<span class="tag" style="background: rgba(255, 149, 0, 0.12); color: #ff9500; border: 1px solid rgba(255, 149, 0, 0.3); font-weight: 700; white-space: nowrap;">👤 ${escapeHtml(label)}</span>`;
+        } else if (rawNode.includes('联防') || rawNode.includes('集群')) {
+            return `<span class="tag" style="background: rgba(88, 86, 214, 0.12); color: #5856d6; border: 1px solid rgba(88, 86, 214, 0.3); font-weight: 700; white-space: nowrap;">🌐 ${escapeHtml(cleanNode)}</span>`;
+        } else {
+            return `<span class="tag" style="background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.3); font-weight: 700; white-space: nowrap;">📍 ${escapeHtml(rawNode)}</span>`;
+        }
+    }
+
     function renderWhitelistTable() {
         const tbody = document.getElementById('whitelist-tbody');
         const rawList = allWhitelist || [];
@@ -5310,8 +5317,10 @@
             list = rawList.filter(w => {
                 const ipStr = (typeof w === 'object' && w !== null) ? (w.ip || '') : String(w);
                 const remark = (typeof w === 'object' && w !== null) ? (w.remark || '') : '';
+                const sourceNode = (typeof w === 'object' && w !== null) ? (w.source_node || '') : '';
                 return ipStr.toLowerCase().includes(whitelistSearchKeyword) ||
-                       remark.toLowerCase().includes(whitelistSearchKeyword);
+                       remark.toLowerCase().includes(whitelistSearchKeyword) ||
+                       sourceNode.toLowerCase().includes(whitelistSearchKeyword);
             });
         }
         filteredWhitelist = list;
@@ -5334,9 +5343,9 @@
 
         if (totalCount === 0) {
             if (whitelistSearchKeyword) {
-                tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">未找到匹配 "<b>${escapeHtml(whitelistSearchKeyword)}</b>" 的白名单条目</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 30px;">未找到匹配 "<b>${escapeHtml(whitelistSearchKeyword)}</b>" 的白名单条目</td></tr>`;
             } else {
-                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-sec); padding: 30px;">当前无白名单记录</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-sec); padding: 30px;">当前无白名单记录</td></tr>';
             }
             return;
         }
@@ -5349,10 +5358,13 @@
         pageList.forEach(w => {
             const ipStr = (typeof w === 'object' && w !== null) ? (w.ip || '') : String(w);
             const remark = (typeof w === 'object' && w !== null) ? (w.remark || '信任IP') : '信任IP';
+            const sourceNode = (typeof w === 'object' && w !== null) ? (w.source_node || '本机') : '本机';
+            const nodeBadge = renderSourceNodeBadge(sourceNode, '本机');
             const safeIpParam = ipStr.replace(/'/g, "\\'");
             html += `
             <tr>
                 <td><span class="ip-text" onclick="showIPDetail('${safeIpParam}')" title="点击查看 IP 详情">${escapeHtml(ipStr)}</span></td>
+                <td>${nodeBadge}</td>
                 <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(remark)}</span></td>
                 <td style="text-align: right;">
                     <button class="action-btn danger" onclick="removeWhitelist('${safeIpParam}')">删除</button>

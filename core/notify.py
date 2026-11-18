@@ -737,17 +737,19 @@ class FeishuWsManager:
                 return
             try:
                 current_wl = cfg.get("whitelist", [])
+                src_label = f"飞书指令 ({node_name})" if node_name and node_name != "本机" else "飞书指令"
                 already = False
                 for item in current_wl:
                     if isinstance(item, dict) and item.get("ip") == v_ip:
                         item["remark"] = remark
+                        item.setdefault("source_node", src_label)
                         already = True
                         break
                     elif isinstance(item, str) and item == v_ip:
                         already = True
                         break
                 if not already:
-                    current_wl.append({"ip": v_ip, "remark": remark})
+                    current_wl.append({"ip": v_ip, "remark": remark, "source_node": src_label})
                 cfg["whitelist"] = current_wl
                 save_config(cfg)
                 unban_ip_core(v_ip, status_event="WHITELIST")

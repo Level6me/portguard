@@ -249,5 +249,49 @@ class WebRoutesTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_whitelist_source_node_normalization_and_add(self):
+        from core.db import infer_whitelist_source_node, resolve_synced_whitelist_source_node
+        from controllers import security_controller as sc
+
+        fake_cfg = {
+            "node_name": "腾讯云-GZ",
+            "whitelist": [
+                "192.0.2.10",
+                {"ip": "127.0.0.1", "remark": "本地回环"},
+                {"ip": "198.51.100.5", "remark": "[阿里云-HK联防] 办公出口"},
+                {"ip": "203.0.113.8", "remark": "运维跳板", "source_node": "手动添加 (腾讯云-GZ)"}
+            ]
+        }
+
+        with mock.patch.object(sc, "load_config", return_value=fake_cfg):
+            req = MockRequest()
+            dispatch_get(req, urlparse("/api/whitelist"))
+            items = {it["ip"]: it for it in req.sent_json}
+            self.assertEqual(items["192.0.2.10"]["source_node"], "腾讯云-GZ")
+            self.assertEqual(items["127.0.0.1"]["source_node"], "系统默认")
+            self.assertEqual(items["198.51.100.5"]["source_node"], "集群 (阿里云-HK)")
+            self.assertEqual(items["203.0.113.8"]["source_node"], "手动添加 (腾讯云-GZ)")
+
+        saved_cfgs = []
+        with mock.patch.object(sc, "load_config", return_value={"node_name": "腾讯云-GZ", "whitelist": []}), \
+             mock.patch.object(sc, "save_config", side_effect=lambda c: saved_cfgs.append(json.loads(json.dumps(c)))), \
+             mock.patch.object(sc, "unban_ip_core"), \
+             mock.patch.object(sc, "broadcast_cluster_whitelist"), \
+             mock.patch.object(sc, "auto_heal_whitelist_ips"):
+            req_add = MockRequest()
+            dispatch_post(req_add, urlparse("/api/whitelist/add"), {"ip": "203.0.113.99", "remark": "CI服务器"})
+            self.assertTrue(req_add.sent_json["success"])
+            self.assertEqual(saved_cfgs[-1]["whitelist"][0]["source_node"], "手动添加 (腾讯云-GZ)")
+
+        self.assertEqual(
+            resolve_synced_whitelist_source_node({"ip": "203.0.113.1", "source_node": "手动添加 (阿里云-HK)"}, "阿里云-HK"),
+            "集群 (阿里云-HK)"
+        )
+        self.assertEqual(
+            resolve_synced_whitelist_source_node({"ip": "127.0.0.1", "source_node": "系统默认"}, "阿里云-HK"),
+            "系统默认"
+        )
+        self.assertEqual(infer_whitelist_source_node({"ip": "10.0.0.0/8", "remark": "私网 A 类地址"}, "本机"), "系统默认")
+
 if __name__ == "__main__":
     unittest.main()
