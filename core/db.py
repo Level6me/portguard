@@ -451,6 +451,33 @@ def init_db(auto_heal=True):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp)")
     except Exception:
         pass
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS daily_analytics_summary (
+        stat_date TEXT PRIMARY KEY,
+        day_ts INTEGER NOT NULL,
+        raw_port_probes INTEGER DEFAULT 0,
+        total_intercepted INTEGER DEFAULT 0,
+        non_intercepted_probes INTEGER DEFAULT 0,
+        total_web_requests INTEGER DEFAULT 0,
+        abnormal_web_requests INTEGER DEFAULT 0,
+        unique_attackers INTEGER DEFAULT 0,
+        unique_countries INTEGER DEFAULT 0
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_summary_ts ON daily_analytics_summary(day_ts)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS daily_analytics_dim (
+        stat_date TEXT NOT NULL,
+        dim_type TEXT NOT NULL,
+        dim_key TEXT NOT NULL,
+        dim_extra TEXT DEFAULT '',
+        cnt INTEGER DEFAULT 0,
+        PRIMARY KEY (stat_date, dim_type, dim_key)
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_dim_type ON daily_analytics_dim(dim_type, stat_date)")
         
     conn.commit()
     conn.close()
@@ -731,3 +758,162 @@ def get_http_traps():
         return [dict(r) for r in DEFAULT_HTTP_TRAPS]
     except Exception:
         return [dict(r) for r in DEFAULT_HTTP_TRAPS]
+
+
+def rollup_analytics_before_cleanup(conn, cutoff_ts):
+    """在清理过期明细日志前，按天将多维分析统计汇总归档至轻量级日聚合表，兼顾全量历史统计与极低磁盘占用"""
+    c = conn.cursor()
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS daily_analytics_summary (
+        stat_date TEXT PRIMARY KEY,
+        day_ts INTEGER NOT NULL,
+        raw_port_probes INTEGER DEFAULT 0,
+        total_intercepted INTEGER DEFAULT 0,
+        non_intercepted_probes INTEGER DEFAULT 0,
+        total_web_requests INTEGER DEFAULT 0,
+        abnormal_web_requests INTEGER DEFAULT 0,
+        unique_attackers INTEGER DEFAULT 0,
+        unique_countries INTEGER DEFAULT 0
+    )
+    """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS daily_analytics_dim (
+        stat_date TEXT NOT NULL,
+        dim_type TEXT NOT NULL,
+        dim_key TEXT NOT NULL,
+        dim_extra TEXT DEFAULT '',
+        cnt INTEGER DEFAULT 0,
+        PRIMARY KEY (stat_date, dim_type, dim_key)
+    )
+    """)
+
+    # 对齐到本地当天 00:00:00，确保仅归档完整自然日且与明细表无重叠
+    dt_local = time.localtime(cutoff_ts)
+    cutoff_midnight = int(time.mktime(time.strptime(time.strftime("%Y-%m-%d 00:00:00", dt_local), "%Y-%m-%d %H:%M:%S")))
+
+    c.execute("SELECT stat_date FROM daily_analytics_summary")
+    already_archived = {r[0] for r in c.fetchall() if r[0]}
+
+    candidate_dates = set()
+    for tbl in ("events", "port_access_logs", "access_logs"):
+        try:
+            c.execute(f"""
+                SELECT DISTINCT strftime('%Y-%m-%d', datetime(timestamp, 'unixepoch', 'localtime'))
+                FROM {tbl}
+                WHERE timestamp > 0 AND timestamp < ?
+            """, (cutoff_midnight,))
+            for r in c.fetchall():
+                if r[0] and r[0] not in already_archived:
+                    candidate_dates.add(r[0])
+        except Exception:
+            pass
+
+    for stat_date in sorted(candidate_dates):
+        try:
+            day_start = int(time.mktime(time.strptime(f"{stat_date} 00:00:00", "%Y-%m-%d %H:%M:%S")))
+        except Exception:
+            continue
+        day_end = day_start + 86400
+
+        c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        raw_port_probes = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        total_intercepted = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED', 'WHITELIST') AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        non_intercepted_probes = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        total_web_requests = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        abnormal_web_requests = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        unique_attackers = c.fetchone()[0] or 0
+
+        c.execute("SELECT COUNT(DISTINCT country) FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips)", (day_start, day_end))
+        unique_countries = c.fetchone()[0] or 0
+
+        c.execute("""
+        INSERT OR REPLACE INTO daily_analytics_summary
+        (stat_date, day_ts, raw_port_probes, total_intercepted, non_intercepted_probes, total_web_requests, abnormal_web_requests, unique_attackers, unique_countries)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (stat_date, day_start, raw_port_probes, total_intercepted, non_intercepted_probes, total_web_requests, abnormal_web_requests, unique_attackers, unique_countries))
+
+        dim_rows = []
+        # 小时分布
+        c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr", (day_start, day_end))
+        for hr, cnt in c.fetchall():
+            if hr is not None:
+                dim_rows.append((stat_date, "hour", str(hr), "", cnt))
+
+        # 国家、ISP、分类、等级
+        c.execute("SELECT country, COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY country", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "country", str(k), "", cnt))
+
+        c.execute("SELECT isp, COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY isp", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "isp", str(k), "", cnt))
+
+        c.execute("SELECT COALESCE(category, 'other'), COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY category", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "category", str(k), "", cnt))
+
+        c.execute("SELECT COALESCE(level, '高危'), COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY level", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "level", str(k), "", cnt))
+
+        # 端口分布
+        c.execute("SELECT port, MAX(port_name), COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY port", (day_start, day_end))
+        for p, pname, cnt in c.fetchall():
+            dim_rows.append((stat_date, "port", str(p), str(pname or f"端口 {p}"), cnt))
+
+        # 动作分布
+        c.execute("SELECT COALESCE(action, 'PROBE'), COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY action", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "action", str(k), "", cnt))
+
+        # HTTP 状态码
+        c.execute("SELECT status_code, COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY status_code", (day_start, day_end))
+        for k, cnt in c.fetchall():
+            dim_rows.append((stat_date, "http_status", str(k), "", cnt))
+
+        # Top 30 路径、UA、攻击者
+        c.execute("""
+            SELECT path, MAX(method), COUNT(*) as cnt FROM access_logs
+            WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
+            GROUP BY path ORDER BY cnt DESC LIMIT 30
+        """, (day_start, day_end))
+        for p_val, m_val, cnt in c.fetchall():
+            dim_rows.append((stat_date, "path", str(p_val or "/")[:256], str(m_val or "GET"), cnt))
+
+        c.execute("""
+            SELECT user_agent, COUNT(*) as cnt FROM access_logs
+            WHERE timestamp >= ? AND timestamp < ? AND user_agent IS NOT NULL AND TRIM(user_agent) NOT IN ('', '-', 'null', 'None', 'undefined')
+            GROUP BY user_agent ORDER BY cnt DESC LIMIT 30
+        """, (day_start, day_end))
+        for ua_val, cnt in c.fetchall():
+            dim_rows.append((stat_date, "ua", str(ua_val)[:256], "", cnt))
+
+        c.execute("""
+            SELECT ip, MAX(country), MAX(isp), MAX(level), COUNT(*) as hits, MAX(attack_time), GROUP_CONCAT(DISTINCT port)
+            FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
+            GROUP BY ip ORDER BY hits DESC LIMIT 30
+        """, (day_start, day_end))
+        for ip_v, c_v, i_v, l_v, hits, ls_v, ports_v in c.fetchall():
+            extra = json.dumps({
+                "country": c_v or "公网节点", "isp": i_v or "", "level": l_v or "极高危",
+                "last_seen": ls_v or "--", "ports": ports_v or ""
+            }, ensure_ascii=False)
+            dim_rows.append((stat_date, "attacker", str(ip_v), extra, hits))
+
+        if dim_rows:
+            c.executemany("""
+            INSERT OR REPLACE INTO daily_analytics_dim (stat_date, dim_type, dim_key, dim_extra, cnt)
+            VALUES (?, ?, ?, ?, ?)
+            """, dim_rows)
+
+    return cutoff_midnight

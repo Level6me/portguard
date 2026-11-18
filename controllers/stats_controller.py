@@ -308,26 +308,76 @@ def handle_analytics(req, parsed):
     conn = get_db()
     c = conn.cursor()
 
-    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    raw_port_probes = c.fetchone()[0]
+    # 若为 "all" 模式，融合轻量级历史日聚合归档表 (daily_analytics_summary / daily_analytics_dim) 与当前明细表
+    archived_summary_rows = []
+    archived_dim_rows = []
+    live_cutoff_ts = cutoff_ts
+    display_start_ts = cutoff_ts
+    if range_param == "all":
+        try:
+            c.execute("SELECT stat_date, day_ts, raw_port_probes, total_intercepted, non_intercepted_probes, total_web_requests, abnormal_web_requests, unique_attackers, unique_countries FROM daily_analytics_summary ORDER BY day_ts ASC")
+            archived_summary_rows = c.fetchall()
+        except Exception:
+            archived_summary_rows = []
 
-    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    total_intercepted = c.fetchone()[0]
+        if archived_summary_rows:
+            max_arch_day_ts = max(int(r[1] or 0) for r in archived_summary_rows)
+            live_cutoff_ts = max_arch_day_ts + 86400
+            try:
+                c.execute("SELECT dim_type, dim_key, dim_extra, cnt FROM daily_analytics_dim")
+                archived_dim_rows = c.fetchall()
+            except Exception:
+                archived_dim_rows = []
 
-    c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    unique_attackers = c.fetchone()[0]
+        # 计算全量最早时间戳，动态决定趋势图跨度与步长
+        min_candidates = [int(r[1]) for r in archived_summary_rows if r[1]]
+        for tbl in ("events", "port_access_logs", "access_logs"):
+            try:
+                c.execute(f"SELECT MIN(timestamp) FROM {tbl} WHERE timestamp > 0")
+                m_ts = c.fetchone()[0]
+                if m_ts:
+                    min_candidates.append(int(m_ts))
+            except Exception:
+                pass
+        earliest_ts = min(min_candidates) if min_candidates else (now_ts - 30 * 86400)
+        display_start_ts = earliest_ts
+        span_days = max(1, (end_ts - earliest_ts + 86399) // 86400)
+        if span_days <= 30:
+            step_seconds = 86400
+            num_steps = max(7, span_days)
+        else:
+            days_per_step = max(1, (span_days + 29) // 30)
+            step_seconds = days_per_step * 86400
+            num_steps = max(1, (end_ts - earliest_ts + step_seconds - 1) // step_seconds)
+            if num_steps > 36:
+                num_steps = 36
+        earliest_str = time.strftime("%Y-%m-%d", time.localtime(earliest_ts))
+        date_badge = f"📅 {earliest_str} ~ {today_str} (历史全量)"
+        date_sub = f"统计范围：{earliest_str} ~ {today_str} · 历史全量累计（含归档聚合）"
+        date_display = f"{earliest_str} ~ {today_str}"
 
-    c.execute("SELECT COUNT(DISTINCT country) FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    unique_countries = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    raw_port_probes = (c.fetchone()[0] or 0) + sum(int(r[2] or 0) for r in archived_summary_rows)
 
-    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    total_web_requests = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    total_intercepted = (c.fetchone()[0] or 0) + sum(int(r[3] or 0) for r in archived_summary_rows)
 
-    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    abnormal_web_requests = c.fetchone()[0]
+    c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    unique_attackers = (c.fetchone()[0] or 0) + sum(int(r[7] or 0) for r in archived_summary_rows)
 
-    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED', 'WHITELIST') AND ip NOT IN (SELECT ip FROM hidden_ips)", (cutoff_ts, end_ts))
-    non_intercepted_probes = c.fetchone()[0]
+    c.execute("SELECT DISTINCT country FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    live_country_set = {r[0] for r in c.fetchall() if r[0]}
+    arch_country_set = {str(r[1]) for r in archived_dim_rows if r[0] == "country" and r[1]}
+    unique_countries = len(live_country_set | arch_country_set)
+
+    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    total_web_requests = (c.fetchone()[0] or 0) + sum(int(r[5] or 0) for r in archived_summary_rows)
+
+    c.execute("SELECT COUNT(*) FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND (status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%') AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    abnormal_web_requests = (c.fetchone()[0] or 0) + sum(int(r[6] or 0) for r in archived_summary_rows)
+
+    c.execute("SELECT COUNT(*) FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND action NOT IN ('INTERCEPTED', 'WHITELIST') AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+    non_intercepted_probes = (c.fetchone()[0] or 0) + sum(int(r[4] or 0) for r in archived_summary_rows)
     total_probes = max(raw_port_probes, total_intercepted + non_intercepted_probes, unique_attackers)
 
     if total_probes > 0:
@@ -343,12 +393,13 @@ def handle_analytics(req, parsed):
 
     # 单次聚合查询替代 90 次循环 SQL
     start_steps_ts = end_ts - (num_steps * step_seconds)
+    live_trend_start = max(start_steps_ts, live_cutoff_ts)
     c.execute("""
         SELECT CAST((timestamp - ?) / ? AS INTEGER) as step_idx, COUNT(*) 
         FROM events 
         WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
         GROUP BY step_idx
-    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    """, (start_steps_ts, step_seconds, live_trend_start, end_ts))
     ev_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
 
     c.execute("""
@@ -356,7 +407,7 @@ def handle_analytics(req, parsed):
         FROM port_access_logs 
         WHERE timestamp >= ? AND timestamp < ? AND action != 'WHITELIST' AND ip NOT IN (SELECT ip FROM hidden_ips)
         GROUP BY step_idx
-    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    """, (start_steps_ts, step_seconds, live_trend_start, end_ts))
     pb_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
 
     c.execute("""
@@ -364,8 +415,17 @@ def handle_analytics(req, parsed):
         FROM access_logs 
         WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
         GROUP BY step_idx
-    """, (start_steps_ts, step_seconds, start_steps_ts, end_ts))
+    """, (start_steps_ts, step_seconds, live_trend_start, end_ts))
     web_map = {int(row[0]): row[1] for row in c.fetchall() if row[0] is not None}
+
+    # 将历史归档每日数据映射叠加到对应趋势桶
+    for r in archived_summary_rows:
+        d_ts = int(r[1] or 0)
+        if d_ts >= start_steps_ts and d_ts < end_ts:
+            s_idx = (d_ts - start_steps_ts) // step_seconds
+            ev_map[s_idx] = ev_map.get(s_idx, 0) + int(r[3] or 0)
+            pb_map[s_idx] = pb_map.get(s_idx, 0) + max(int(r[2] or 0), int(r[3] or 0) + int(r[4] or 0))
+            web_map[s_idx] = web_map.get(s_idx, 0) + int(r[5] or 0)
 
     for i in range(num_steps - 1, -1, -1):
         step_idx = num_steps - 1 - i
@@ -380,42 +440,75 @@ def handle_analytics(req, parsed):
         probes_trend.append(max(pb_cnt, ev_cnt))
         web_trend.append(web_map.get(step_idx, 0))
 
-    c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (cutoff_ts, end_ts))
+    c.execute("SELECT strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) AS hr, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY hr ORDER BY hr ASC", (live_cutoff_ts, end_ts))
     hourly_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
+    for d_type, d_key, d_extra, d_cnt in archived_dim_rows:
+        if d_type == "hour":
+            hourly_map[d_key] = hourly_map.get(d_key, 0) + int(d_cnt or 0)
     hourly_dist = [{"hour": f"{h:02d}:00", "count": hourly_map.get(f"{h:02d}", 0)} for h in range(24)]
 
-    c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY country ORDER BY cnt DESC LIMIT 8", (cutoff_ts, end_ts))
-    geo_countries = [{"country": row[0], "count": row[1]} for row in c.fetchall()]
+    def _merge_dim(live_rows, dim_type, limit=None):
+        merged = {str(r[0]): int(r[1] or 0) for r in live_rows if r[0] is not None}
+        for dt, dk, _, dc in archived_dim_rows:
+            if dt == dim_type:
+                merged[dk] = merged.get(dk, 0) + int(dc or 0)
+        sorted_items = sorted(merged.items(), key=lambda x: x[1], reverse=True)
+        return sorted_items[:limit] if limit else sorted_items
 
-    c.execute("SELECT isp, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY isp ORDER BY cnt DESC LIMIT 8", (cutoff_ts, end_ts))
-    geo_isps = [{"isp": row[0], "count": row[1]} for row in c.fetchall()]
+    c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY country ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    geo_countries = [{"country": k, "count": v} for k, v in _merge_dim(c.fetchall(), "country", limit=8)]
 
-    c.execute("SELECT category, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY category ORDER BY cnt DESC", (cutoff_ts, end_ts))
-    category_dist = [{"category": row[0], "count": row[1]} for row in c.fetchall()]
+    c.execute("SELECT isp, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND isp NOT IN ('分析中...', '', 'Private LAN', 'Localhost', '未知') AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY isp ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    geo_isps = [{"isp": k, "count": v} for k, v in _merge_dim(c.fetchall(), "isp", limit=8)]
 
-    c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY port ORDER BY cnt DESC LIMIT 8", (cutoff_ts, end_ts))
-    port_dist = [{"port": row[0], "name": row[1] or f"端口 {row[0]}", "count": row[2]} for row in c.fetchall()]
+    c.execute("SELECT COALESCE(category, 'other'), COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY category ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    category_dist = [{"category": k, "count": v} for k, v in _merge_dim(c.fetchall(), "category")]
 
-    c.execute("SELECT action, COUNT(*) as cnt FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY action ORDER BY cnt DESC", (cutoff_ts, end_ts))
-    action_dist = [{"action": row[0], "count": row[1]} for row in c.fetchall()]
+    c.execute("SELECT port, MAX(port_name), COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY port ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    port_merged = {}
+    for row in c.fetchall():
+        p_k = str(row[0])
+        port_merged[p_k] = {"port": row[0], "name": row[1] or f"端口 {row[0]}", "count": int(row[2] or 0)}
+    for dt, dk, de, dc in archived_dim_rows:
+        if dt == "port":
+            if dk in port_merged:
+                port_merged[dk]["count"] += int(dc or 0)
+            else:
+                try:
+                    p_int = int(dk)
+                except Exception:
+                    p_int = dk
+                port_merged[dk] = {"port": p_int, "name": de or f"端口 {dk}", "count": int(dc or 0)}
+    port_dist = sorted(port_merged.values(), key=lambda x: x["count"], reverse=True)[:8]
 
-    c.execute("SELECT level, COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY level ORDER BY cnt DESC", (cutoff_ts, end_ts))
-    level_dist = [{"level": row[0], "count": row[1]} for row in c.fetchall()]
+    c.execute("SELECT COALESCE(action, 'PROBE'), COUNT(*) as cnt FROM port_access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY action ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    action_dist = [{"action": k, "count": v} for k, v in _merge_dim(c.fetchall(), "action")]
 
-    c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY status_code ORDER BY cnt DESC", (cutoff_ts, end_ts))
-    http_status_dist = [{"code": str(row[0]), "count": row[1]} for row in c.fetchall()]
+    c.execute("SELECT COALESCE(level, '高危'), COUNT(*) as cnt FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY level ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    level_dist = [{"level": k, "count": v} for k, v in _merge_dim(c.fetchall(), "level")]
+
+    c.execute("SELECT status_code, COUNT(*) as cnt FROM access_logs WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips) GROUP BY status_code ORDER BY cnt DESC", (live_cutoff_ts, end_ts))
+    http_status_dist = [{"code": str(k), "count": v} for k, v in _merge_dim(c.fetchall(), "http_status")]
 
     c.execute("""
-        SELECT path, method, COUNT(*) as cnt 
+        SELECT path, MAX(method), COUNT(*) as cnt 
         FROM access_logs 
         WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
         GROUP BY path 
-        ORDER BY 
-            (CASE WHEN status_code >= 400 OR path LIKE '%.env%' OR path LIKE '%.git%' OR path LIKE '%php%' OR path LIKE '%admin%' OR path LIKE '%actuator%' OR path LIKE '%api%' OR path LIKE '%.sql%' OR path LIKE '%swagger%' OR path LIKE '%shell%' THEN 1 ELSE 0 END) DESC,
-            cnt DESC 
-        LIMIT 10
-    """, (cutoff_ts, end_ts))
-    top_paths = [{"path": str(row[0] or "/"), "method": str(row[1] or "GET"), "count": int(row[2] or 0)} for row in c.fetchall()]
+        ORDER BY cnt DESC 
+        LIMIT 50
+    """, (live_cutoff_ts, end_ts))
+    path_merged = {}
+    for row in c.fetchall():
+        p_k = str(row[0] or "/")
+        path_merged[p_k] = {"path": p_k, "method": str(row[1] or "GET"), "count": int(row[2] or 0)}
+    for dt, dk, de, dc in archived_dim_rows:
+        if dt == "path":
+            if dk in path_merged:
+                path_merged[dk]["count"] += int(dc or 0)
+            else:
+                path_merged[dk] = {"path": dk, "method": de or "GET", "count": int(dc or 0)}
+    top_paths = sorted(path_merged.values(), key=lambda x: x["count"], reverse=True)[:10]
 
     # 扫描器与自动化工具指纹定义表：(关键词, 标签, 是否恶意扫描器, 显示名称)
     SCANNER_PATTERNS = [
@@ -475,8 +568,12 @@ def handle_analytics(req, parsed):
         GROUP BY user_agent 
         ORDER BY cnt DESC 
         LIMIT 300
-    """, (cutoff_ts, end_ts))
-    raw_ua_rows = c.fetchall()
+    """, (live_cutoff_ts, end_ts))
+    ua_merged = {str(r[0] or "").strip(): int(r[1] or 0) for r in c.fetchall() if str(r[0] or "").strip()}
+    for dt, dk, _, dc in archived_dim_rows:
+        if dt == "ua" and dk:
+            ua_merged[dk] = ua_merged.get(dk, 0) + int(dc or 0)
+    raw_ua_rows = sorted(ua_merged.items(), key=lambda x: x[1], reverse=True)[:300]
 
     top_uas = []
     for r in raw_ua_rows:
@@ -519,9 +616,22 @@ def handle_analytics(req, parsed):
         WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
         GROUP BY ip 
         ORDER BY hits DESC 
-        LIMIT 10
-    """, (cutoff_ts, end_ts))
-    attacker_rows = c.fetchall()
+        LIMIT 30
+    """, (live_cutoff_ts, end_ts))
+    att_merged = {}
+    for row in c.fetchall():
+        att_merged[row[0]] = [row[0], row[1], row[2], row[3], int(row[4] or 0), row[5] or "--", row[6] or "--"]
+    for dt, dk, de, dc in archived_dim_rows:
+        if dt == "attacker" and dk:
+            try:
+                ex = json.loads(de or "{}")
+            except Exception:
+                ex = {}
+            if dk in att_merged:
+                att_merged[dk][4] += int(dc or 0)
+            else:
+                att_merged[dk] = [dk, ex.get("country", ""), ex.get("isp", ""), ex.get("level", "极高危"), int(dc or 0), ex.get("last_seen", "--"), ex.get("ports", "--")]
+    attacker_rows = sorted(att_merged.values(), key=lambda x: x[4], reverse=True)[:10]
 
     c.execute("SELECT DISTINCT ip FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips)")
     banned_ips_set = set(r[0] for r in c.fetchall())
@@ -552,7 +662,7 @@ def handle_analytics(req, parsed):
     result_data = {
         "range": range_param,
         "date_info": {
-            "start_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(cutoff_ts)),
+            "start_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(display_start_ts)),
             "end_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(end_ts)),
             "date_badge": date_badge,
             "date_sub": date_sub,

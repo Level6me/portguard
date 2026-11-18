@@ -205,5 +205,49 @@ class WebRoutesTest(unittest.TestCase):
             handler.headers = {"Host": "example.com:9099", "Origin": "https://example.com:9099"}
             self.assertTrue(handler._verify_same_origin())
 
+    def test_analytics_all_preserves_archived_history_beyond_30d(self):
+        import time
+        from core.db import get_db, init_db, rollup_analytics_before_cleanup
+        from controllers.stats_controller import _ANALYTICS_CACHE, _ANALYTICS_CACHE_LOCK
+
+        init_db(auto_heal=False)
+        now_ts = int(time.time())
+        old_ts = now_ts - 45 * 86400
+        old_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(old_ts))
+        recent_ts = now_ts - 2 * 86400
+        recent_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(recent_ts))
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM daily_analytics_summary")
+        c.execute("DELETE FROM daily_analytics_dim")
+        c.execute("INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status) VALUES ('198.51.100.201', 22, 'TCP', 'SSH', 'ssh', '高危', '测试古国', '', '', 'TestISP', ?, ?, 'EXPIRED')", (old_dt, old_ts))
+        c.execute("INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status) VALUES ('198.51.100.202', 80, 'TCP', 'HTTP', 'web', '高危', '测试近国', '', '', 'TestISP2', ?, ?, 'BANNED')", (recent_dt, recent_ts))
+        cutoff_mid = rollup_analytics_before_cleanup(conn, now_ts - 30 * 86400)
+        c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (cutoff_mid,))
+        conn.commit()
+        conn.close()
+
+        with _ANALYTICS_CACHE_LOCK:
+            _ANALYTICS_CACHE.clear()
+
+        req_30d = MockRequest()
+        dispatch_get(req_30d, urlparse("/api/analytics?range=30d"))
+        req_all = MockRequest()
+        dispatch_get(req_all, urlparse("/api/analytics?range=all"))
+
+        self.assertGreater(req_all.sent_json["kpis"]["total_intercepted"], req_30d.sent_json["kpis"]["total_intercepted"])
+        self.assertGreater(sum(req_all.sent_json["trend"]["events"]), sum(req_30d.sent_json["trend"]["events"]))
+        self.assertLess(req_all.sent_json["date_info"]["start_time"], req_30d.sent_json["date_info"]["start_time"])
+
+        # 清理测试数据
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM events WHERE ip IN ('198.51.100.201', '198.51.100.202')")
+        c.execute("DELETE FROM daily_analytics_summary")
+        c.execute("DELETE FROM daily_analytics_dim")
+        conn.commit()
+        conn.close()
+
 if __name__ == "__main__":
     unittest.main()

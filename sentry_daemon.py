@@ -34,7 +34,7 @@ from core.db import (
     load_config, save_config, get_config_snapshots, rollback_config_snapshot,
     _CONFIG_CACHE, _CONFIG_CACHE_MTIME, _CONFIG_LOCK,
     get_hidden_ips_set, get_hidden_ips, add_hidden_ip, remove_hidden_ip, clear_hidden_ips,
-    get_http_traps,
+    get_http_traps, rollup_analytics_before_cleanup,
 )
 
 from core.firewall import (
@@ -628,15 +628,20 @@ def cleanup_expired_bans():
             if expired:
                 print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
 
-        # 2. SQLite 历史数据归档与瘦身：清理超过保留天数的历史端口与Web访问日志，防止数据库膨胀
+        # 2. SQLite 历史数据归档与瘦身：先将超期明细按天聚合归档至多维分析汇总表，再清理明细日志防止数据库膨胀
         if auto_clean_days > 0:
             expire_cutoff = now_ts - (auto_clean_days * 86400)
-            c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (expire_cutoff,))
+            try:
+                cutoff_midnight = rollup_analytics_before_cleanup(conn, expire_cutoff)
+            except Exception as re_err:
+                print(f"[CLEANUP] 多维分析历史归档异常: {re_err}")
+                cutoff_midnight = expire_cutoff
+            c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (cutoff_midnight,))
             del_access = c.rowcount
-            c.execute("DELETE FROM access_logs WHERE timestamp < ?", (expire_cutoff,))
+            c.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff_midnight,))
             del_web = c.rowcount
             # 保留已被拉黑的核心安全事件，仅删除过期的常规探测/非封禁日志
-            c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (expire_cutoff,))
+            c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (cutoff_midnight,))
             del_events = c.rowcount
 
             # 容量天花板保护：若单表超过 100,000 条记录，强制清理最旧的数据保持系统轻快
