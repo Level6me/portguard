@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN" data-theme="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, shrink-to-fit=no, viewport-fit=cover">
@@ -27,6 +27,7 @@
             --purple-bg: rgba(175, 82, 222, 0.16);
             --dock: rgba(28, 28, 30, 0.88);
             --border: rgba(255, 255, 255, 0.12);
+            --border-hover: rgba(255, 255, 255, 0.22);
             --border-subtle: rgba(255, 255, 255, 0.06);
             --modal-bg: rgba(28, 28, 30, 0.96);
             --table-stripe: rgba(255, 255, 255, 0.02);
@@ -46,6 +47,7 @@
             --accent-bg: rgba(0, 122, 255, 0.1);
             --dock: rgba(255, 255, 255, 0.85);
             --border: rgba(120, 120, 128, 0.15);
+            --border-hover: rgba(120, 120, 128, 0.28);
             --border-subtle: rgba(120, 120, 128, 0.08);
             --modal-bg: rgba(255, 255, 255, 0.95);
             --table-stripe: rgba(120, 120, 128, 0.03);
@@ -54,15 +56,39 @@
             --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.18);
         }
 
+        @media (prefers-color-scheme: light) {
+            :root[data-theme="auto"] {
+                --bg: #f2f2f7;
+                --card: #ffffff;
+                --card-sec: #f8f8fa;
+                --card-hover: #f5f5f7;
+                --text: #1c1c1e;
+                --text-sec: #8e8e93;
+                --text-ter: #aeaeb2;
+                --accent-bg: rgba(0, 122, 255, 0.1);
+                --dock: rgba(255, 255, 255, 0.85);
+                --border: rgba(120, 120, 128, 0.15);
+                --border-hover: rgba(120, 120, 128, 0.28);
+                --border-subtle: rgba(120, 120, 128, 0.08);
+                --modal-bg: rgba(255, 255, 255, 0.95);
+                --table-stripe: rgba(120, 120, 128, 0.03);
+                --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+                --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.06);
+                --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.18);
+            }
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body {
             overflow-x: hidden;
+            overflow-x: clip;
             width: 100%;
             max-width: 100vw;
             touch-action: manipulation;
             -webkit-text-size-adjust: 100%;
-            overscroll-behavior: none;
-            overscroll-behavior-y: none;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior-x: none;
+            overscroll-behavior-y: auto;
             position: relative;
         }
         body {
@@ -91,9 +117,9 @@
             max-width: 90vw;
         }
         .toast {
-            background: var(--card);
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
+            background: var(--dock);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
             border: 1px solid var(--border);
             color: var(--text);
             padding: 9px 16px;
@@ -106,6 +132,20 @@
             gap: 8px;
             animation: toastIn 0.25s cubic-bezier(0.1, 0.9, 0.2, 1);
             pointer-events: auto;
+        }
+        /* Sticky Frosted Glass Toolbar */
+        .sticky-toolbar {
+            position: sticky;
+            top: max(10px, env(safe-area-inset-top, 10px));
+            z-index: 500;
+            background: var(--dock);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 10px 14px;
+            margin-bottom: 14px;
+            box-shadow: var(--shadow-md);
         }
         @keyframes toastIn {
             from { opacity: 0; transform: translateY(-12px) scale(0.95); }
@@ -232,7 +272,7 @@
             transition: all 0.2s cubic-bezier(0.1, 0.8, 0.25, 1);
             white-space: nowrap;
         }
-        .pill-btn:hover { background: var(--card-hover); border-color: rgba(255,255,255,0.22); }
+        .pill-btn:hover { background: var(--card-hover); border-color: var(--border-hover); }
         .pill-btn:active { transform: scale(0.95); }
         .pill-btn.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
         .pill-btn.danger { background: var(--danger-bg); color: var(--danger); border-color: rgba(255, 59, 48, 0.3); }
@@ -294,7 +334,7 @@
         .card.interactive:hover {
             transform: translateY(-2px);
             box-shadow: var(--shadow-md);
-            border-color: rgba(255,255,255,0.22);
+            border-color: var(--border-hover);
         }
         .card-header {
             display: flex;
@@ -384,9 +424,10 @@
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: all 0.15s cubic-bezier(0.1, 0.8, 0.25, 1);
             white-space: nowrap;
         }
+        .segment-btn:active { transform: scale(0.96); }
         .segment-btn.active {
             background: var(--card);
             color: var(--text);
@@ -507,10 +548,11 @@
             font-size: 12px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.15s ease;
+            transition: all 0.15s cubic-bezier(0.1, 0.8, 0.25, 1);
             white-space: nowrap;
         }
-        .action-btn:hover { background: var(--card-hover); border-color: rgba(255,255,255,0.25); }
+        .action-btn:hover { background: var(--card-hover); border-color: var(--border-hover); }
+        .action-btn:active { transform: scale(0.96); }
         .action-btn.danger:hover { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
         .action-btn.success:hover { background: var(--success-bg); color: var(--success); border-color: var(--success); }
 
@@ -604,7 +646,7 @@
             background: var(--dock);
             backdrop-filter: blur(28px) saturate(190%);
             -webkit-backdrop-filter: blur(28px) saturate(190%);
-            border: 0.5px solid rgba(255, 255, 255, 0.22);
+            border: 1px solid var(--border);
             border-radius: 31px;
             display: flex;
             justify-content: space-evenly;
@@ -780,8 +822,8 @@
 
     <!-- Page 1: 态势分析 (Overview & Multi-dimensional Deep Analytics) -->
     <div id="tab-overview">
-        <!-- 顶部子页切换分段控件与多维分析时间范围工具栏 -->
-        <div class="analytics-subtab-bar">
+        <!-- 顶部子页切换分段控件与多维分析时间范围吸顶工具栏 -->
+        <div class="analytics-subtab-bar sticky-toolbar">
             <!-- 模式切换分段按钮 (采用与访问日志一致的胶囊拟态设计) -->
             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
@@ -824,22 +866,18 @@
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看所有拦截记录">
                     <div class="val-sub" style="color:var(--danger);">🚫 累计拦截 IP</div>
                     <div class="val-big" id="stat-total" style="color: var(--danger);">--</div>
-                    <div class="val-sub">iptables / IPSet 内核阻断</div>
                 </div>
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看今日拦截记录">
                     <div class="val-sub" style="color:var(--warning);">⚡ 今日拦截探测</div>
                     <div class="val-big" id="stat-today" style="color: var(--warning);">--</div>
-                    <div class="val-sub">今日拦截恶意连接</div>
                 </div>
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看持续活跃威胁源">
-                    <div class="val-sub" style="color:var(--primary);">🎯 威胁来源 IP</div>
-                    <div class="val-big" id="stat-unique-ips" style="color: var(--primary);">--</div>
-                    <div class="val-sub">已定位独立攻击实体</div>
+                    <div class="val-sub" style="color:var(--accent);">🎯 威胁来源 IP</div>
+                    <div class="val-big" id="stat-unique-ips" style="color: var(--accent);">--</div>
                 </div>
                 <div class="card interactive" onclick="jumpToLogsFilter('all')" title="点击查看防御集群联防规模">
                     <div class="val-sub" style="color:var(--success);">🌐 集群联防节点</div>
                     <div class="val-big" id="stat-cluster-nodes" style="color: var(--success);">1</div>
-                    <div class="val-sub">多机全网威胁情报同步</div>
                 </div>
             </div>
 
@@ -847,44 +885,30 @@
             <div class="grid-2">
                 <div class="card">
                     <div class="card-header">
-                        <div>
-                            <div class="card-title">📈 24 小时安全拦截趋势</div>
-                            <div class="val-sub">拦截频次时序分布 (按小时)</div>
-                        </div>
+                        <div class="card-title">📈 24 小时安全拦截趋势</div>
                     </div>
                     <div style="height: 200px;"><canvas id="trendChart"></canvas></div>
                 </div>
                 <div class="card">
                     <div class="card-header">
-                        <div>
-                            <div class="card-title">🎯 目标端口拦截排行 Top 5</div>
-                            <div class="val-sub">受探测服务类型分布</div>
-                        </div>
+                        <div class="card-title">🎯 目标端口拦截排行 Top 5</div>
                     </div>
                     <div style="height: 200px;"><canvas id="portChart"></canvas></div>
                 </div>
             </div>
 
-
-
             <!-- 地域排行与近期威胁列表 -->
             <div class="grid-2">
                 <div class="card">
                     <div class="card-header">
-                        <div>
-                            <div class="card-title">🌍 威胁来源地域排行 Top 10</div>
-                            <div class="val-sub">按拦截威胁源归属地分布</div>
-                        </div>
+                        <div class="card-title">🌍 威胁来源地域排行 Top 10</div>
                         <button class="action-btn" onclick="switchOverviewSubTab('analysis')" title="查看多维空间分布图谱">多维分析</button>
                     </div>
                     <div id="geo-rank-box">正在统计地域流量...</div>
                 </div>
                 <div class="card">
                     <div class="card-header">
-                        <div>
-                            <div class="card-title">⚡ 实时拦截事件</div>
-                            <div class="val-sub">最新捕获的端口与探针威胁</div>
-                        </div>
+                        <div class="card-title">⚡ 实时拦截事件</div>
                         <button class="action-btn" onclick="switchTab('logs')">查看全部日志</button>
                     </div>
                     <div id="recent-threats-box">正在加载最新事件...</div>
@@ -899,32 +923,26 @@
                 <div class="card">
                     <div class="val-sub" style="color: var(--accent);">🛡️ 探测捕获总量</div>
                     <div class="val-big" id="akpi-probes" style="color: var(--accent); font-size: 24px;">--</div>
-                    <div class="val-sub">网络连接与扫描探测统计</div>
                 </div>
                 <div class="card">
                     <div class="val-sub" style="color: var(--danger);">🚫 安全拦截总量</div>
                     <div class="val-big" id="akpi-intercepted" style="color: var(--danger); font-size: 24px;">--</div>
-                    <div class="val-sub">防火墙与路由策略阻断</div>
                 </div>
                 <div class="card">
                     <div class="val-sub" style="color: var(--warning);">🌐 独立威胁源 IP</div>
                     <div class="val-big" id="akpi-attackers" style="color: var(--warning); font-size: 24px;">--</div>
-                    <div class="val-sub">去重威胁来源总数</div>
                 </div>
                 <div class="card">
                     <div class="val-sub" style="color: var(--success);">🎯 威胁拦截比率</div>
                     <div class="val-big" id="akpi-banrate" style="color: var(--success); font-size: 24px;">--</div>
-                    <div class="val-sub">拦截处置量 / 探测感知总量</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: #af52de;">🌍 来源国家/地区</div>
-                    <div class="val-big" id="akpi-countries" style="color: #af52de; font-size: 24px;">--</div>
-                    <div class="val-sub">威胁来源地域覆盖范围</div>
+                    <div class="val-sub" style="color: var(--purple);">🌍 来源国家/地区</div>
+                    <div class="val-big" id="akpi-countries" style="color: var(--purple); font-size: 24px;">--</div>
                 </div>
                 <div class="card">
-                    <div class="val-sub" style="color: #ff9500;">🚦 Web 异常请求</div>
-                    <div class="val-big" id="akpi-webprobes" style="color: #ff9500; font-size: 24px;">--</div>
-                    <div class="val-sub">异常状态码与特征探针</div>
+                    <div class="val-sub" style="color: var(--warning);">🚦 Web 异常请求</div>
+                    <div class="val-big" id="akpi-webprobes" style="color: var(--warning); font-size: 24px;">--</div>
                 </div>
             </div>
 
@@ -1072,31 +1090,27 @@
 
     <!-- Page 2: 拦截审计日志 (Logs) -->
     <div id="tab-logs" style="display: none;">
+        <div class="filter-row sticky-toolbar">
+            <div class="segmented-control">
+                <button class="segment-btn active" id="seg-all" onclick="filterLogs('all', this)">全部 (<span id="cnt-log-all">0</span>)</button>
+                <button class="segment-btn" id="seg-rdp" onclick="filterLogs('rdp', this)">远程桌面 (3389/5900)</button>
+                <button class="segment-btn" id="seg-db" onclick="filterLogs('db', this)">数据库服务 (1433/6379/27017)</button>
+                <button class="segment-btn" id="seg-smb" onclick="filterLogs('smb', this)">文件共享服务 (445/135/139)</button>
+                <button class="segment-btn" id="seg-web" onclick="filterLogs('web', this)">管理服务 (8888/9200)</button>
+            </div>
+            <div class="search-box">
+                <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                <input type="text" id="search-input" placeholder="过滤 IP / 国家 / 端口..." oninput="renderLogsTable()">
+            </div>
+        </div>
         <div class="card">
             <div class="card-header">
-                <div>
-                    <div class="card-title">📋 安全拦截日志</div>
-                    <div class="val-sub">恶意探测与违规访问阻断记录</div>
-                </div>
+                <div class="card-title">📋 安全拦截日志</div>
                 <div class="header-action-wrap">
                     <button class="pill-btn" onclick="exportLogsCSV()">
                         <span>📥</span>
                         <span>导出 CSV</span>
                     </button>
-                </div>
-            </div>
-
-            <div class="filter-row">
-                <div class="segmented-control">
-                    <button class="segment-btn active" id="seg-all" onclick="filterLogs('all', this)">全部 (<span id="cnt-log-all">0</span>)</button>
-                    <button class="segment-btn" id="seg-rdp" onclick="filterLogs('rdp', this)">远程桌面 (3389/5900)</button>
-                    <button class="segment-btn" id="seg-db" onclick="filterLogs('db', this)">数据库服务 (1433/6379/27017)</button>
-                    <button class="segment-btn" id="seg-smb" onclick="filterLogs('smb', this)">文件共享服务 (445/135/139)</button>
-                    <button class="segment-btn" id="seg-web" onclick="filterLogs('web', this)">管理服务 (8888/9200)</button>
-                </div>
-                <div class="search-box">
-                    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                    <input type="text" id="search-input" placeholder="过滤 IP / 国家 / 端口..." oninput="renderLogsTable()">
                 </div>
             </div>
 
@@ -1136,8 +1150,8 @@
 
     <!-- Page 3: 黑白名单管理 (IP Lists: Blacklist & Whitelist) -->
     <div id="tab-iplists" style="display: none;">
-        <!-- 顶部子页切换分段控件 (黑名单 / 白名单) -->
-        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <!-- 顶部子页切换吸顶工具栏 (黑名单 / 白名单) -->
+        <div class="sticky-toolbar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="subtab-btn-blacklist" onclick="switchIpListSubTab('blacklist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🚫 内核黑名单</button>
                 <button class="pill-btn" id="subtab-btn-whitelist" onclick="switchIpListSubTab('whitelist', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🛡️ 安全白名单</button>
@@ -1299,8 +1313,8 @@
 
     <!-- Page 4: 蜜罐诱饵策略 (Traps) -->
     <div id="tab-traps" style="display: none;">
-        <!-- 顶部子页切换分段控件 (端口策略 / 业务端口 / 行为特征) -->
-        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <!-- 顶部子页切换吸顶工具栏 (端口策略 / 业务端口 / 行为特征) -->
+        <div class="sticky-toolbar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-trap-tab-port" onclick="switchTrapTab('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🔌 端口策略</button>
                 <button class="pill-btn" id="btn-trap-tab-biz" onclick="switchTrapTab('biz')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🏢 业务端口</button>
@@ -1378,8 +1392,8 @@
 
     <!-- Page 5: 系统设置 (Settings: 响应参数与审计隐藏) -->
     <div id="tab-settings" style="display: none;">
-        <!-- 顶部子页切换分段控件 (防御响应 / IP过滤 / 配置备份) -->
-        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <!-- 顶部子页切换吸顶工具栏 (防御响应 / IP过滤 / 配置备份) -->
+        <div class="sticky-toolbar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-settings-tab-response" onclick="switchSettingsSubTab('response', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">⚙️ 防御与响应参数</button>
                 <button class="pill-btn" id="btn-settings-tab-hidden" onclick="switchSettingsSubTab('hidden', this)" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🚫 IP 过滤与隐藏</button>
@@ -1818,8 +1832,8 @@
 
     <!-- Page 6: 访问日志 (Access Logs) -->
     <div id="tab-access-logs" style="display: none;">
-        <!-- 顶部子页切换分段控件 (端口访问 / Web 访问) -->
-        <div style="margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+        <!-- 顶部子页切换吸顶工具栏 (端口访问 / Web 访问) -->
+        <div class="sticky-toolbar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
             <div style="background: var(--card-sec); border: 1px solid var(--border); border-radius: 99px; padding: 2px; display: inline-flex; gap: 2px; width: fit-content; flex-shrink: 0;">
                 <button class="pill-btn accent" id="btn-access-mode-port" onclick="switchAccessLogMode('port')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700;">🍯 端口访问审计</button>
                 <button class="pill-btn" id="btn-access-mode-web" onclick="switchAccessLogMode('web')" style="padding: 4px 14px; font-size: 11px; border-radius: 99px; font-weight: 700; background: transparent;">🌍 Web 访问日志</button>
@@ -2477,6 +2491,21 @@
     </div>
 </div>
 
+<!-- Modal: AUI 毛玻璃确认对话框 (替代原生 confirm) -->
+<div class="modal-overlay" id="modal-aui-confirm" style="z-index: 2500 !important;">
+    <div class="modal-sheet" style="max-width: 400px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h3 id="aui-confirm-title" style="font-size: 15px; font-weight: 700;">⚠️ 操作确认</h3>
+            <button onclick="resolveAuiConfirm(false)" style="background:none; border:none; color:var(--text-sec); font-size:18px; cursor:pointer; padding: 4px 8px;">✕</button>
+        </div>
+        <div id="aui-confirm-msg" style="font-size: 13px; color: var(--text-sec); line-height: 1.55; white-space: pre-line; margin-bottom: 18px;"></div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button class="pill-btn" onclick="resolveAuiConfirm(false)">取消</button>
+            <button class="pill-btn danger" id="aui-confirm-ok-btn" onclick="resolveAuiConfirm(true)">确认</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const PAGE_SIZE = 50;
     let logsPage = 1;
@@ -2498,6 +2527,48 @@
             .replace(/\r/g, '\\r')
             .replace(/\n/g, '\\n');
     }
+
+    let _auiConfirmResolver = null;
+    function resolveAuiConfirm(accepted) {
+        const modal = document.getElementById('modal-aui-confirm');
+        if (modal) modal.classList.remove('active');
+        if (_auiConfirmResolver) {
+            const fn = _auiConfirmResolver;
+            _auiConfirmResolver = null;
+            fn(!!accepted);
+        }
+    }
+    function auiConfirm(message, title = '⚠️ 操作确认', okClass = 'danger', okText = '确认') {
+        const modal = document.getElementById('modal-aui-confirm');
+        if (!modal) return Promise.resolve(false);
+        document.getElementById('aui-confirm-title').innerText = title;
+        document.getElementById('aui-confirm-msg').innerText = String(message || '');
+        const okBtn = document.getElementById('aui-confirm-ok-btn');
+        okBtn.className = `pill-btn ${okClass}`;
+        okBtn.innerText = okText;
+        modal.classList.add('active');
+        return new Promise(resolve => {
+            _auiConfirmResolver = resolve;
+        });
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (_auiConfirmResolver) {
+                resolveAuiConfirm(false);
+            } else if (typeof closeModals === 'function') {
+                closeModals();
+            }
+        }
+    });
+    document.addEventListener('click', (e) => {
+        if (e.target && e.target.classList && e.target.classList.contains('modal-overlay')) {
+            if (e.target.id === 'modal-aui-confirm') {
+                resolveAuiConfirm(false);
+            } else if (e.target.id !== 'auth-modal' && typeof closeModals === 'function') {
+                closeModals();
+            }
+        }
+    });
     function csvEscape(s) {
         return String(s == null ? '' : s).replace(/"/g, '""');
     }
@@ -3009,9 +3080,10 @@
                         borderColor: '#007aff',
                         backgroundColor: 'rgba(0, 122, 255, 0.12)',
                         fill: true,
-                        tension: 0.35,
+                        tension: 0.4,
                         borderWidth: 2.5,
-                        pointRadius: 2.5,
+                        pointRadius: 0,
+                        pointHoverRadius: 4,
                         pointBackgroundColor: '#007aff'
                     }]
                 },
@@ -3032,7 +3104,7 @@
                         }
                     },
                     scales: {
-                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
                         y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } }
                     }
                 }
@@ -3072,18 +3144,18 @@
         const ctxTrend = document.getElementById('analyticsTrendChart')?.getContext('2d');
         if (ctxTrend) {
             const trendConfigs = [
-                { borderColor: '#007aff', backgroundColor: 'rgba(0, 122, 255, 0.12)', borderWidth: 2.2, pointRadius: 2 },
-                { borderColor: '#af52de', backgroundColor: 'rgba(175, 82, 222, 0.08)', borderWidth: 2.2, pointRadius: 2 },
-                { borderColor: '#ff9500', backgroundColor: 'rgba(255, 149, 0, 0.06)', borderWidth: 2.2, pointRadius: 2 }
+                { borderColor: '#007aff', backgroundColor: 'rgba(0, 122, 255, 0.12)', borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4 },
+                { borderColor: '#af52de', backgroundColor: 'rgba(175, 82, 222, 0.08)', borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4 },
+                { borderColor: '#ff9500', backgroundColor: 'rgba(255, 149, 0, 0.06)', borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4 }
             ];
             analyticsTrendChartInstance = new Chart(ctxTrend, {
                 type: 'line',
                 data: {
                     labels: [],
                     datasets: [
-                        { label: '蜜罐拦截', data: [], ...trendConfigs[0], fill: true, tension: 0.35 },
-                        { label: '端口嗅探', data: [], ...trendConfigs[1], fill: true, tension: 0.35 },
-                        { label: 'Web访问', data: [], ...trendConfigs[2], fill: true, tension: 0.35 }
+                        { label: '蜜罐拦截', data: [], ...trendConfigs[0], fill: true, tension: 0.4 },
+                        { label: '端口嗅探', data: [], ...trendConfigs[1], fill: true, tension: 0.4 },
+                        { label: 'Web访问', data: [], ...trendConfigs[2], fill: true, tension: 0.4 }
                     ]
                 },
                 options: {
@@ -4095,7 +4167,7 @@
             closeModals();
         } else {
             if (isPotentialSelfLockoutIP(currentDetailIP)) {
-                alert(`⚠️ 防自锁保护拦截：IP [${currentDetailIP}] 属于本地回环、控制台访问地址或信任白名单，严禁封禁！`);
+                showToast(`⚠️ 防自锁保护拦截：IP [${currentDetailIP}] 属于本地回环、控制台访问地址或信任白名单，严禁封禁！`, '⚠️');
                 return;
             }
             if (banBtn) { banBtn.disabled = true; banBtn.innerText = '正在封禁...'; }
@@ -4693,8 +4765,8 @@
         });
     }
 
-    function deleteBizPort(port) {
-        if (!confirm(`确定要从业务列表中移除端口 ${port} 吗？`)) return;
+    async function deleteBizPort(port) {
+        if (!(await auiConfirm(`确定要从业务列表中移除端口 ${port} 吗？`))) return;
         fetch('/api/business_ports/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5195,8 +5267,8 @@
         });
     }
 
-    function deleteHttpTrap(ruleId) {
-        if (!confirm('确定要删除此请求特征与防扫描策略吗？')) return;
+    async function deleteHttpTrap(ruleId) {
+        if (!(await auiConfirm('确定要删除此请求特征与防扫描策略吗？'))) return;
         fetch('/api/http_traps/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5516,9 +5588,9 @@
         showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}审计报表 CSV`, '📥');
     }
 
-    function clearAccessLogs() {
+    async function clearAccessLogs() {
         const modeText = (currentAccessLogMode === 'port') ? '端口访问日志' : '443访问日志';
-        if (!confirm(`确定要清空全部历史【${modeText}】吗？此操作不可恢复。`)) return;
+        if (!(await auiConfirm(`确定要清空全部历史【${modeText}】吗？此操作不可恢复。`))) return;
         fetch('/api/access_logs/clear', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5536,8 +5608,8 @@
         renderLogsTable();
     }
 
-    function unbanIP(ip) {
-        if (!confirm(`确定要从内核黑名单中解除对 ${ip} 的封禁吗？\n（将自动联动所有协同节点同步解除封禁）`)) return;
+    async function unbanIP(ip) {
+        if (!(await auiConfirm(`确定要从内核黑名单中解除对 ${ip} 的封禁吗？\n（将自动联动所有协同节点同步解除封禁）`))) return;
         fetch('/api/unban', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5560,12 +5632,12 @@
         return false;
     }
 
-    function quickBanIP(ip, reason) {
+    async function quickBanIP(ip, reason) {
         if (isPotentialSelfLockoutIP(ip)) {
-            alert(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台主机或安全信任白名单，严禁封禁！`);
+            showToast(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台主机或安全信任白名单，严禁封禁！`, '⚠️');
             return;
         }
-        if (!confirm(`确定要立即将 ${ip} 下发至内核黑名单并永久全网封禁吗？`)) return;
+        if (!(await auiConfirm(`确定要立即将 ${ip} 下发至内核黑名单并永久全网封禁吗？`))) return;
         fetch('/api/ban', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5598,7 +5670,7 @@
         const reason = document.getElementById('ban-reason-val').value.trim();
         if (!ip) return showToast('请输入目标 IP', '⚠️');
         if (isPotentialSelfLockoutIP(ip)) {
-            return alert(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台访问地址或信任白名单，严禁添加至黑名单！`);
+            { showToast(`⚠️ 防自锁保护拦截：IP [${ip}] 属于本地回环、控制台访问地址或信任白名单，严禁添加至黑名单！`, '⚠️'); return; }
         }
         fetch('/api/ban', {
             method: 'POST',
@@ -5636,8 +5708,8 @@
         });
     }
 
-    function removeWhitelist(ip) {
-        if (!confirm(`确定要移除白名单 ${ip} 吗？`)) return;
+    async function removeWhitelist(ip) {
+        if (!(await auiConfirm(`确定要移除白名单 ${ip} 吗？`))) return;
         fetch('/api/whitelist/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5725,8 +5797,8 @@
         });
     }
 
-    function deleteTrap(port) {
-        if (!confirm(`确定要彻底删除诱饵策略 [${port}] 吗？`)) return;
+    async function deleteTrap(port) {
+        if (!(await auiConfirm(`确定要彻底删除诱饵策略 [${port}] 吗？`))) return;
         fetch('/api/traps/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5985,7 +6057,7 @@
     }
 
     async function syncAllWhitelistToCluster() {
-        if (!confirm('确定要将本机的全部信任白名单立即广播同步至所有集群协同节点吗？')) return;
+        if (!(await auiConfirm('确定要将本机的全部信任白名单立即广播同步至所有集群协同节点吗？'))) return;
         showToast('正在向全网协同节点广播同步白名单...', '⏳');
         try {
             const res = await fetch('/api/cluster/sync_all_whitelist', {
@@ -6006,7 +6078,7 @@
     }
 
     async function syncAllMeshState() {
-        if (!confirm('确定要与全网所有协同节点进行黑名单与白名单的【双向全量对齐】吗？\n（双方将自动交换并吸纳补齐彼此缺失的全部拦截目标与信任规则）')) return;
+        if (!(await auiConfirm('确定要与全网所有协同节点进行黑名单与白名单的【双向全量对齐】吗？\n（双方将自动交换并吸纳补齐彼此缺失的全部拦截目标与信任规则）'))) return;
         showToast('正在与全网协同节点进行双向全量对齐...', '⏳');
         try {
             const res = await fetch('/api/cluster/sync_all_mesh', {
@@ -6062,7 +6134,7 @@
         const confirmMsg = isDefensePaused 
             ? '确定要恢复威胁防御拦截服务吗？\n系统将重新启用内核防火墙与蜜罐实时阻断。' 
             : '确定要暂停所有防御拦截服务吗？\n暂停期间系统将不再执行任何 IP 封禁与黑洞阻断，并会临时释放当前所有内核拦截规则，便于运维排查。';
-        if (!confirm(confirmMsg)) return;
+        if (!(await auiConfirm(confirmMsg))) return;
 
         try {
             showToast('正在切换防御服务状态...', '⏳');
@@ -6681,7 +6753,7 @@
     }
 
     async function deleteClusterNode(ip, port) {
-        if (!confirm(`确定要移除协同服务器节点 ${ip}:${port} 吗？`)) return;
+        if (!(await auiConfirm(`确定要移除协同服务器节点 ${ip}:${port} 吗？`))) return;
         try {
             showToast('正在移除节点...', '⏳');
             const res = await fetch('/api/cluster/nodes/delete', {
@@ -6897,7 +6969,7 @@
     }
 
     async function removeCustomHiddenIP(ip) {
-        if (!confirm(`确定要取消对 IP ${ip} 的审计隐藏吗？取消后该 IP 的访问日志将恢复显示。`)) return;
+        if (!(await auiConfirm(`确定要取消对 IP ${ip} 的审计隐藏吗？取消后该 IP 的访问日志将恢复显示。`))) return;
         try {
             const res = await fetch('/api/hidden-ips/remove', {
                 method: 'POST',
@@ -7162,7 +7234,7 @@
     }
 
     async function clearAllHiddenIPs() {
-        if (!confirm('确定要清空全部隐藏 IP 规则吗？清空后所有被隐藏 IP 的日志和统计将全部恢复显示。')) {
+        if (!(await auiConfirm('确定要清空全部隐藏 IP 规则吗？清空后所有被隐藏 IP 的日志和统计将全部恢复显示。'))) {
             return;
         }
         try {
@@ -7221,7 +7293,7 @@
     }
 
     async function rollbackConfigSnapshot(filename) {
-        if (!confirm(`⚠️ 警告：确定要将系统配置回滚至快照 [${filename}] 吗？\n回滚后将立即恢复该快照时期的所有防御参数与策略！`)) {
+        if (!(await auiConfirm(`⚠️ 警告：确定要将系统配置回滚至快照 [${filename}] 吗？\n回滚后将立即恢复该快照时期的所有防御参数与策略！`))) {
             return;
         }
         try {
@@ -7359,7 +7431,7 @@
             return;
         }
         const subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-        if (!confirm(`⚠️ 严正确认：是否立即对 ${currentTimelineAttackerIP} 所在的整个 /24 C 段网段 [${subnet}] 执行全段封禁？\n（将把整个 256 个 IP 写入内核黑名单防火墙，彻底阻断该网段的一切连接）`)) {
+        if (!(await auiConfirm(`⚠️ 严正确认：是否立即对 ${currentTimelineAttackerIP} 所在的整个 /24 C 段网段 [${subnet}] 执行全段封禁？\n（将把整个 256 个 IP 写入内核黑名单防火墙，彻底阻断该网段的一切连接）`))) {
             return;
         }
         try {
@@ -7502,7 +7574,7 @@
     }
 
     async function quickAddWhiteFromC2(ip) {
-        if (!confirm(`确定将 IP [${ip}] 移出黑名单并添加到信任白名单中吗？\n添加后该 IP 的所有出入站连接将不再告警且直接放行。`)) {
+        if (!(await auiConfirm(`确定将 IP [${ip}] 移出黑名单并添加到信任白名单中吗？\n添加后该 IP 的所有出入站连接将不再告警且直接放行。`))) {
             return;
         }
         try {
@@ -7527,7 +7599,7 @@
 
 
     async function batchBanAllProbes() {
-        if (!confirm('确定要分析访问日志，将所有非白名单的异常探测 IP 批量加入黑名单并下发防火墙阻断吗？')) {
+        if (!(await auiConfirm('确定要分析访问日志，将所有非白名单的异常探测 IP 批量加入黑名单并下发防火墙阻断吗？'))) {
             return;
         }
         try {
@@ -7656,7 +7728,7 @@
     }
 
     async function doLogout() {
-        if (!confirm('确定退出当前管理登录状态？')) return;
+        if (!(await auiConfirm('确定退出当前管理登录状态？'))) return;
         try {
             await fetch('/api/auth/logout', { method: 'POST' });
         } catch (e) {}
