@@ -22,7 +22,8 @@ import queue
 import hmac
 import shutil
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from contextlib import closing
 
 # ==============================================================================
 # 核心架构解耦导入与向前兼容再导出 (Core Modular Architecture Re-exports)
@@ -78,10 +79,15 @@ from core.notify import (
     send_test_feishu_message
 )
 
-# 核心防御高优先级线程池 (限制并发，避免扫描风暴下线程爆炸)
+# 核心防御高优先级线程池 (专供实时阻断与高速事件处理，绝不被慢速网络或蜜罐粘滞阻塞)
 _EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="SentryWorker")
+# 交互式蜜罐客户端与 Tarpit 专用隔离线程池 (与核心防御彻底物理隔离，防扫描连接池饥饿)
+_TRAP_CLIENT_EXECUTOR = ThreadPoolExecutor(max_workers=24, thread_name_prefix="TrapClient")
+_TRAP_ACTIVE_SEM = threading.BoundedSemaphore(24)
 # 外部网络 I/O 隔离线程池 (GeoIP 溯源查询、慢速外网请求，与核心防御彻底隔离)
 _GEO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="GeoWorker")
+# 爬虫 PTR/DNS 校验超时隔离线程池
+_DNS_VERIFY_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="CrawlerDNS")
 
 from collectors.packet import ParsedPacket, parse_packet, parse_port_range
 
@@ -209,9 +215,19 @@ _IP_404_LOCK = threading.Lock()
 _CRAWLER_VERIFY_CACHE = {}
 _CRAWLER_CACHE_LOCK = threading.Lock()
 
+def _is_private_or_internal_ip(ip_str):
+    """基于 RFC 标准精确判定回环、私网 (10/8, 172.16/12, 192.168/16, fc00::/7)、链路本地及组播地址"""
+    if not ip_str:
+        return True
+    try:
+        obj = ipaddress.ip_address(str(ip_str).strip())
+        return bool(obj.is_loopback or obj.is_private or obj.is_link_local or obj.is_unspecified or obj.is_multicast)
+    except Exception:
+        return False
+
 def verify_search_engine_crawler(ip, user_agent):
     """
-    RFC 标准搜索引擎爬虫反向 DNS (PTR) 双向校验：
+    RFC 标准搜索引擎爬虫反向 DNS (PTR) 双向校验（兼容 IPv4/IPv6 并带 2.5s 超时保护）：
     防止黑客伪造 Googlebot / Baiduspider / Bingbot 等 UA 逃逸诱捕。
     """
     ua = (user_agent or "").lower()
@@ -241,22 +257,37 @@ def verify_search_engine_crawler(ip, user_agent):
             if time.time() - cached_time < 3600:
                 return is_valid, msg
 
-    try:
+    def _do_dns_verify():
         host, _, _ = socket.gethostbyaddr(ip)
-        host = host.lower()
+        host = host.lower().rstrip(".")
         if not any(host.endswith(sfx) for sfx in expected_suffixes):
-            res = (False, f"冒充 {crawler_name} 搜索引擎爬虫 (PTR: {host})")
-        else:
-            resolved_ips = socket.gethostbyname_ex(host)[2]
-            if ip not in resolved_ips:
-                res = (False, f"冒充 {crawler_name} 爬虫 (PTR解析IP不一致: {host})")
-            else:
-                res = (True, crawler_name)
+            return (False, f"冒充 {crawler_name} 搜索引擎爬虫 (PTR: {host})")
+        resolved_ips = set()
+        if ":" not in str(ip):
+            try:
+                resolved_ips.update(socket.gethostbyname_ex(host)[2])
+            except Exception:
+                pass
+        if not resolved_ips:
+            try:
+                for item in socket.getaddrinfo(host, None):
+                    if item and len(item) >= 5 and item[4]:
+                        resolved_ips.add(item[4][0])
+            except Exception:
+                pass
+        if ip not in resolved_ips:
+            return (False, f"冒充 {crawler_name} 爬虫 (PTR解析IP不一致: {host})")
+        return (True, crawler_name)
+
+    try:
+        fut = _DNS_VERIFY_EXECUTOR.submit(_do_dns_verify)
+        res = fut.result(timeout=2.5)
+    except FuturesTimeoutError:
+        res = (False, f"伪造 {crawler_name} 爬虫 (PTR反向解析超时)")
     except Exception:
         res = (False, f"伪造 {crawler_name} 爬虫 (无权威PTR反向记录)")
 
     with _CRAWLER_CACHE_LOCK:
-        # 容量保护：缓存只做加速用途，超限直接清空防止长期运行内存无界增长
         if len(_CRAWLER_VERIFY_CACHE) > 10000:
             _CRAWLER_VERIFY_CACHE.clear()
         _CRAWLER_VERIFY_CACHE[cache_key] = (time.time(), res[0], res[1])
@@ -272,7 +303,7 @@ def match_status_code(status_code, pattern):
     2. 单状态码：如 '302', '500', '404'
     3. 多状态码列表（逗号/空格/分号/竖线分隔）：如 '400,403,404', '301|302', '500 502 503 504'
     4. 状态码范围：如 '400-499', '500-599', '300-399'
-    5. 正则表达式：如 '^30[1-8]$', '4\\d\\d'
+    5. 正则表达式：如 '^30[1-8]$', '^(401|403)$', '4\\d\\d'
     6. 特殊关键字：'all_4xx'/'4xx', 'all_5xx'/'5xx', 'all_3xx'/'3xx', 'all_2xx'/'2xx', 'any_error' (4xx+5xx)
     """
     try:
@@ -281,7 +312,6 @@ def match_status_code(status_code, pattern):
         return False
 
     if not pattern or not str(pattern).strip():
-        # 默认匹配 404/403/400 探测错误码
         return sc in (404, 403, 400)
 
     pat_str = str(pattern).strip().lower()
@@ -298,8 +328,15 @@ def match_status_code(status_code, pattern):
     if pat_str in ("any_error", "error", "errors"):
         return 400 <= sc <= 599
 
+    # 若包含显式正则语法特征，优先按完整正则表达式匹配，防止被 | 或空格错误拆分
+    if any(ch in pat_str for ch in ("^", "$", "\\", "[", "]", "(", ")", "+", "*", "?", "{")):
+        try:
+            return bool(re.search(pat_str, str(sc)))
+        except Exception:
+            return False
+
     # 范围匹配 400-499
-    if "-" in pat_str and not pat_str.startswith("-"):
+    if "-" in pat_str and not pat_str.startswith("-") and all(x not in pat_str for x in (",", "|", ";", " ")):
         parts = pat_str.split("-", 1)
         try:
             low, high = int(parts[0].strip()), int(parts[1].strip())
@@ -343,55 +380,61 @@ def match_status_code(status_code, pattern):
 
 
 _CACHED_SERVER_PUBLIC_IP = None
+_PUBLIC_IP_LOCK = threading.Lock()
 
 def get_local_public_ip():
     global _CACHED_SERVER_PUBLIC_IP
     if _CACHED_SERVER_PUBLIC_IP:
         return _CACHED_SERVER_PUBLIC_IP
-    try:
-        cfg = load_config()
-        if cfg.get("server_ip") and validate_ip(cfg.get("server_ip")):
-            _CACHED_SERVER_PUBLIC_IP = str(cfg["server_ip"]).strip()
+    with _PUBLIC_IP_LOCK:
+        if _CACHED_SERVER_PUBLIC_IP:
             return _CACHED_SERVER_PUBLIC_IP
-        if cfg.get("public_ip") and validate_ip(cfg.get("public_ip")):
-            _CACHED_SERVER_PUBLIC_IP = str(cfg["public_ip"]).strip()
-            return _CACHED_SERVER_PUBLIC_IP
-    except Exception:
-        pass
-
-    # 尝试从公网快速解析接口获取真实公网弹性 IP（避开云厂商内网私有 VPC 172.16/10/192.168 地址）
-    urls = [
-        "https://icanhazip.com",
-        "https://ifconfig.me/ip",
-        "https://api.ipify.org",
-        "http://checkip.amazonaws.com"
-    ]
-    import urllib.request
-    for u in urls:
         try:
-            req = urllib.request.Request(u, headers={"User-Agent": "curl/7.88.1"})
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                cand = resp.read().decode("utf-8", errors="ignore").strip()
-                if validate_ip(cand) and not cand.startswith("127.") and not cand.startswith("172.") and not cand.startswith("10.") and not cand.startswith("192.168."):
-                    _CACHED_SERVER_PUBLIC_IP = cand
-                    return cand
+            cfg = load_config()
+            if cfg.get("server_ip") and validate_ip(cfg.get("server_ip")):
+                _CACHED_SERVER_PUBLIC_IP = str(cfg["server_ip"]).strip()
+                return _CACHED_SERVER_PUBLIC_IP
+            if cfg.get("public_ip") and validate_ip(cfg.get("public_ip")):
+                _CACHED_SERVER_PUBLIC_IP = str(cfg["public_ip"]).strip()
+                return _CACHED_SERVER_PUBLIC_IP
         except Exception:
             pass
 
-    # 备用：从本地网络套接字获取
-    for test_target in [("8.8.8.8", 80), ("1.1.1.1", 80)]:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(1.0)
-            s.connect(test_target)
-            ip = s.getsockname()[0]
-            s.close()
-            if ip and not ip.startswith("127."):
-                _CACHED_SERVER_PUBLIC_IP = ip
-                return ip
-        except Exception:
-            pass
-    return ""
+        # 尝试从公网快速解析接口获取真实公网弹性 IP（严格按 RFC 私网范围过滤，不误伤 172.64+ 公网云主机）
+        urls = [
+            "https://icanhazip.com",
+            "https://ifconfig.me/ip",
+            "https://api.ipify.org",
+            "http://checkip.amazonaws.com"
+        ]
+        for u in urls:
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "curl/7.88.1"})
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    cand = resp.read().decode("utf-8", errors="ignore").strip()
+                    v_cand = validate_ip(cand)
+                    if v_cand and "/" not in v_cand and not _is_private_or_internal_ip(v_cand):
+                        _CACHED_SERVER_PUBLIC_IP = v_cand
+                        return v_cand
+            except Exception:
+                pass
+
+        # 备用：从本地网络套接字获取
+        for test_target in [("8.8.8.8", 80), ("1.1.1.1", 80)]:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    s.settimeout(1.0)
+                    s.connect(test_target)
+                    ip = s.getsockname()[0]
+                finally:
+                    s.close()
+                if ip and not ip.startswith("127."):
+                    _CACHED_SERVER_PUBLIC_IP = ip
+                    return ip
+            except Exception:
+                pass
+        return ""
 
 
 def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
@@ -500,6 +543,7 @@ def check_http_request_traps(ip, req_domain, method, path, status_code, ua):
     return False
 
 _WEB_PORT_LOG_CACHE = {}
+_WEB_PORT_LOG_LOCK = threading.Lock()
 
 def log_access_entry(ip, method, path, status_code=200, user_agent=""):
     try:
@@ -516,42 +560,57 @@ def log_access_entry(ip, method, path, status_code=200, user_agent=""):
         city = geo.get("city", "")
         isp = geo.get("isp", "")
 
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT INTO access_logs (ip, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ip, method, path, status_code, (user_agent or "")[:200], country, region, city, isp, now_str, now_ts))
-        
-        # 同时以 5 秒防抖在 port_access_logs 中记录 Web 控制台业务连接
-        global _WEB_PORT_LOG_CACHE
-        if len(_WEB_PORT_LOG_CACHE) > 50000:
-            _WEB_PORT_LOG_CACHE.clear()
-        last_t = _WEB_PORT_LOG_CACHE.get(ip, 0)
-        if (now_ts - last_t) >= 5:
-            _WEB_PORT_LOG_CACHE[ip] = now_ts
-            cfg = load_config()
-            web_port = int(cfg.get("web_port", 9099))
-            is_white = ip_in_whitelist(ip, cfg.get("whitelist", []))
-            act = "WHITELIST" if is_white else "BUSINESS"
-            desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: PortGuard Web控制台 (端口 {web_port})"
+        should_log_port = False
+        with _WEB_PORT_LOG_LOCK:
+            if len(_WEB_PORT_LOG_CACHE) > 50000:
+                _WEB_PORT_LOG_CACHE.clear()
+            last_t = _WEB_PORT_LOG_CACHE.get(ip, 0)
+            if (now_ts - last_t) >= 5:
+                _WEB_PORT_LOG_CACHE[ip] = now_ts
+                should_log_port = True
+
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
             cursor.execute("""
-            INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-            VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (ip, web_port, desc, country, region, city, isp, act, now_str, now_ts))
-            
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
+            INSERT INTO access_logs (ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
+            VALUES (?, 'Web控制台', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ip, method, path, status_code, (user_agent or "")[:200], country, region, city, isp, now_str, now_ts))
+
+            if should_log_port:
+                cfg = load_config()
+                web_port = int(cfg.get("web_port", 9099))
+                is_white = ip_in_whitelist(ip, cfg.get("whitelist", []))
+                act = "WHITELIST" if is_white else "BUSINESS"
+                desc = f"安全白名单访问: Web控制台 (端口 {web_port})" if is_white else f"正常业务连接: PortGuard Web控制台 (端口 {web_port})"
+                cursor.execute("""
+                INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+                VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ip, web_port, desc, country, region, city, isp, act, now_str, now_ts))
+
+            conn.commit()
     except Exception:
         pass
 
 _PORT_LOG_QUEUE = queue.Queue(maxsize=10000)
+_BATCH_WORKER_STARTED = False
+_BATCH_WORKER_LOCK = threading.Lock()
+
+def _ensure_batch_log_worker():
+    """按需懒启动批量日志落盘工作线程，消除模块导入时的副作用并确保任意入口可靠落盘"""
+    global _BATCH_WORKER_STARTED
+    if _BATCH_WORKER_STARTED:
+        return
+    with _BATCH_WORKER_LOCK:
+        if _BATCH_WORKER_STARTED:
+            return
+        _BATCH_WORKER_STARTED = True
+        t = threading.Thread(target=_batch_log_worker, daemon=True, name="BatchLogWorker")
+        t.start()
 
 def log_port_access_entry(ip, port, port_name="诱捕探针", action="INTERCEPTED", geo=None):
     """将访问日志压入内存队列，由后台 Worker 异步批量事务落盘，彻底解决高并发 SQLite 锁库"""
     try:
+        _ensure_batch_log_worker()
         now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
         geo = geo or {}
@@ -590,20 +649,19 @@ def _batch_log_worker():
                 pass
             
             if items:
-                conn = get_db()
-                cur = conn.cursor()
-                rows = [
-                    (it["ip"], it["port"], it["proto"], it["port_name"],
-                     it["country"], it["region"], it["city"], it["isp"],
-                     it["action"], it["access_time"], it["timestamp"])
-                    for it in items
-                ]
-                cur.executemany("""
-                INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, rows)
-                conn.commit()
-                conn.close()
+                with closing(get_db()) as conn:
+                    cur = conn.cursor()
+                    rows = [
+                        (it["ip"], it["port"], it["proto"], it["port_name"],
+                         it["country"], it["region"], it["city"], it["isp"],
+                         it["action"], it["access_time"], it["timestamp"])
+                        for it in items
+                    ]
+                    cur.executemany("""
+                    INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, rows)
+                    conn.commit()
         except Exception:
             time.sleep(0.5)
 
@@ -616,53 +674,59 @@ def cleanup_expired_bans():
         cfg = load_config()
         auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
         now_ts = int(time.time())
-        conn = get_db()
-        c = conn.cursor()
+        with closing(get_db()) as conn:
+            c = conn.cursor()
 
-        # 1. 清理过期黑名单
-        if auto_clean_days > 0:
-            c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
-            expired = [r["ip"] for r in c.fetchall()]
-            for ip in expired:
-                unban_ip_core(ip, status_event="EXPIRED")
-            if expired:
-                print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
+            # 1. 清理过期黑名单
+            if auto_clean_days > 0:
+                c.execute("SELECT ip FROM blacklist WHERE ban_expire IS NOT NULL AND ban_expire < ?", (now_ts,))
+                expired = [r["ip"] for r in c.fetchall()]
+                for ip in expired:
+                    unban_ip_core(ip, status_event="EXPIRED")
+                if expired:
+                    print(f"[CLEANUP] 已清理 {len(expired)} 条过期封禁")
 
-        # 2. SQLite 历史数据归档与瘦身：先将超期明细按天聚合归档至多维分析汇总表，再清理明细日志防止数据库膨胀
-        if auto_clean_days > 0:
-            expire_cutoff = now_ts - (auto_clean_days * 86400)
-            try:
-                cutoff_midnight = rollup_analytics_before_cleanup(conn, expire_cutoff)
-            except Exception as re_err:
-                print(f"[CLEANUP] 多维分析历史归档异常: {re_err}")
-                cutoff_midnight = expire_cutoff
-            c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (cutoff_midnight,))
-            del_access = c.rowcount
-            c.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff_midnight,))
-            del_web = c.rowcount
-            # 保留已被拉黑的核心安全事件，仅删除过期的常规探测/非封禁日志
-            c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (cutoff_midnight,))
-            del_events = c.rowcount
-
-            # 容量天花板保护：若单表超过 100,000 条记录，强制清理最旧的数据保持系统轻快
-            for table_name in ("port_access_logs", "access_logs", "events"):
+            # 2. SQLite 历史数据归档与瘦身：先将超期明细按天聚合归档至多维分析汇总表，再清理明细日志防止数据库膨胀
+            if auto_clean_days > 0:
+                expire_cutoff = now_ts - (auto_clean_days * 86400)
                 try:
-                    c.execute(f"SELECT COUNT(*) FROM {table_name}")
-                    t_cnt = c.fetchone()[0]
-                    if t_cnt > 100000:
-                        overflow = t_cnt - 80000
-                        c.execute(f"DELETE FROM {table_name} WHERE id IN (SELECT id FROM {table_name} ORDER BY id ASC LIMIT ?)", (overflow,))
-                except Exception:
-                    pass
+                    cutoff_midnight = rollup_analytics_before_cleanup(conn, expire_cutoff)
+                except Exception as re_err:
+                    print(f"[CLEANUP] 多维分析历史归档异常: {re_err}")
+                    cutoff_midnight = expire_cutoff
+                c.execute("DELETE FROM port_access_logs WHERE timestamp < ?", (cutoff_midnight,))
+                del_access = c.rowcount
+                c.execute("DELETE FROM access_logs WHERE timestamp < ?", (cutoff_midnight,))
+                del_web = c.rowcount
+                # 保留已被拉黑的核心安全事件，仅删除过期的常规探测/非封禁日志
+                c.execute("DELETE FROM events WHERE timestamp < ? AND status NOT IN ('BANNED')", (cutoff_midnight,))
+                del_events = c.rowcount
 
-            conn.commit()
-            if (del_access + del_web + del_events) > 0:
-                print(f"[CLEANUP] 历史日志自动归档完成：已清理 {del_access} 条端口日志、{del_web} 条Web日志、{del_events} 条常规事件")
+                # 容量天花板保护：若单表超过 100,000 条记录，先归档对应完整自然日再清理最旧的数据
+                for table_name in ("port_access_logs", "access_logs", "events"):
+                    try:
+                        c.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        t_cnt = c.fetchone()[0]
+                        if t_cnt > 100000:
+                            overflow = t_cnt - 80000
+                            c.execute(f"SELECT MAX(timestamp) FROM (SELECT timestamp FROM {table_name} ORDER BY id ASC LIMIT ?)", (overflow,))
+                            max_del_ts_row = c.fetchone()
+                            if max_del_ts_row and max_del_ts_row[0]:
+                                try:
+                                    rollup_analytics_before_cleanup(conn, int(max_del_ts_row[0]) + 86400)
+                                except Exception:
+                                    pass
+                            c.execute(f"DELETE FROM {table_name} WHERE id IN (SELECT id FROM {table_name} ORDER BY id ASC LIMIT ?)", (overflow,))
+                    except Exception:
+                        pass
 
-        conn.close()
+                conn.commit()
+                if (del_access + del_web + del_events) > 0:
+                    print(f"[CLEANUP] 历史日志自动归档完成：已清理 {del_access} 条端口日志、{del_web} 条Web日志、{del_events} 条常规事件")
 
-        # 3. 每天一次低负载时段自动执行 VACUUM 回收磁盘物理碎片 (SQLite WAL 空间收缩)
-        last_vacuum_file = "/tmp/.portguard_last_vacuum"
+        # 3. 每天一次低负载时段自动执行 VACUUM 回收磁盘物理碎片 (存放在受控数据目录，避免 /tmp 符号链接竞态)
+        vacuum_dir = os.path.dirname(os.path.abspath(DB_PATH)) or BASE_DIR
+        last_vacuum_file = os.path.join(vacuum_dir, ".portguard_last_vacuum")
         need_vacuum = True
         try:
             if os.path.exists(last_vacuum_file):
@@ -673,9 +737,8 @@ def cleanup_expired_bans():
 
         if need_vacuum:
             try:
-                v_conn = get_db()
-                v_conn.execute("VACUUM")
-                v_conn.close()
+                with closing(get_db()) as v_conn:
+                    v_conn.execute("VACUUM")
                 with open(last_vacuum_file, "w") as f:
                     f.write(str(now_ts))
                 print("[CLEANUP] 成功执行 SQLite 磁盘空间碎片整理 (VACUUM)")
@@ -725,8 +788,29 @@ def _find_process_by_socket_inode(target_inode):
         pass
     return {"pid": "--", "process": "未知进程"}
 
+def _parse_proc_tcp_endpoint(endpoint_str, is_v6=False):
+    """解析 /proc/net/tcp 与 /proc/net/tcp6 的十六进制地址端口对，自动还原 ::ffff: 双栈映射 IPv4"""
+    ip_hex, port_hex = endpoint_str.split(":")
+    port_num = int(port_hex, 16)
+    if not is_v6:
+        ip_str = socket.inet_ntoa(struct.pack("<L", int(ip_hex, 16)))
+        return ip_str, port_num
+    if len(ip_hex) == 32:
+        raw16 = struct.pack(
+            "<IIII",
+            int(ip_hex[0:8], 16),
+            int(ip_hex[8:16], 16),
+            int(ip_hex[16:24], 16),
+            int(ip_hex[24:32], 16),
+        )
+        v6_obj = ipaddress.IPv6Address(raw16)
+        if v6_obj.ipv4_mapped:
+            return str(v6_obj.ipv4_mapped), port_num
+        return str(v6_obj), port_num
+    return "", port_num
+
 def check_c2_compromise_connections(force=False):
-    """反向连线检测 (Compromise Assessment)：轻量级审计本机活跃 TCP 连接，检测是否存在内网主机失陷、恶意反弹 C2 或黑名单异常连线"""
+    """反向连线检测 (Compromise Assessment)：审计本机活跃 IPv4/IPv6/双栈 TCP 连接，检测是否存在主机失陷、反弹 C2 或黑名单异常连线"""
     global _C2_CACHE, _C2_CACHE_TIME
     now_mono = time.monotonic()
     if not force:
@@ -736,11 +820,10 @@ def check_c2_compromise_connections(force=False):
 
     alerts = []
     try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT ip, reason FROM blacklist")
-        black_dict = {row["ip"]: row["reason"] for row in c.fetchall()}
-        conn.close()
+        with closing(get_db()) as conn:
+            c = conn.cursor()
+            c.execute("SELECT ip, reason FROM blacklist")
+            black_dict = {row["ip"]: row["reason"] for row in c.fetchall() if row["ip"]}
 
         if not black_dict:
             with _C2_CACHE_LOCK:
@@ -748,9 +831,17 @@ def check_c2_compromise_connections(force=False):
                 _C2_CACHE_TIME = now_mono
             return alerts
 
+        black_nets = []
+        for b_key, b_reason in black_dict.items():
+            if "/" in b_key:
+                try:
+                    black_nets.append((ipaddress.ip_network(b_key, strict=False), b_reason))
+                except Exception:
+                    pass
+
         active_system_ports = None
 
-        # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的 ESTABLISHED 连接 (状态 01)
+        # 扫描 /proc/net/tcp 与 /proc/net/tcp6 中的 ESTABLISHED 连接 (状态 01，完整覆盖双栈映射 IPv4 与原生 IPv6)
         for proc_file, is_v6 in [("/proc/net/tcp", False), ("/proc/net/tcp6", True)]:
             if not os.path.exists(proc_file):
                 continue
@@ -762,27 +853,29 @@ def check_c2_compromise_connections(force=False):
 
             for line in lines:
                 parts = line.strip().split()
-                if len(parts) < 10:
-                    continue
-                state = parts[3]
-                if state != "01": # 仅检查处于已建立连线状态的 TCP 活跃连接
+                if len(parts) < 10 or parts[3] != "01":
                     continue
                 loc_address = parts[1]
                 rem_address = parts[2]
                 inode = parts[9]
                 try:
-                    if not is_v6:
-                        loc_hex, loc_port_hex = loc_address.split(":")
-                        local_ip = socket.inet_ntoa(struct.pack("<L", int(loc_hex, 16)))
-                        local_port = int(loc_port_hex, 16)
+                    local_ip, local_port = _parse_proc_tcp_endpoint(loc_address, is_v6=is_v6)
+                    remote_ip, remote_port = _parse_proc_tcp_endpoint(rem_address, is_v6=is_v6)
+                    if not remote_ip:
+                        continue
 
-                        ip_hex, port_hex = rem_address.split(":")
-                        remote_ip = socket.inet_ntoa(struct.pack("<L", int(ip_hex, 16)))
-                        remote_port = int(port_hex, 16)
-                    else:
-                        continue # 重点监控 IPv4 外连
-                    
-                    if remote_ip in black_dict:
+                    matched_reason = black_dict.get(remote_ip)
+                    if matched_reason is None and black_nets:
+                        try:
+                            rem_obj = ipaddress.ip_address(remote_ip)
+                            for b_net, b_rsn in black_nets:
+                                if rem_obj.version == b_net.version and rem_obj in b_net:
+                                    matched_reason = b_rsn
+                                    break
+                        except Exception:
+                            pass
+
+                    if matched_reason is not None:
                         if active_system_ports is None:
                             active_system_ports = get_active_system_ports()
                         proc_info = _find_process_by_socket_inode(inode)
@@ -805,7 +898,7 @@ def check_c2_compromise_connections(force=False):
                             "direction_desc": direction_desc,
                             "pid": proc_info.get("pid", "--"),
                             "process": proc_info.get("process", "未知进程"),
-                            "reason": black_dict[remote_ip],
+                            "reason": matched_reason,
                             "country": country,
                             "city": city,
                             "isp": isp,
@@ -830,12 +923,17 @@ from geo import (
     XdbSearcher, MMDBReader, resolve_ip_geo, resolve_ip_geo_local,
     _GEO_CACHE
 )
+
+_BAN_IP_STRIPED_LOCKS = [threading.Lock() for _ in range(64)]
+_RECENT_BAN_DEDUP = {}
+_RECENT_BAN_DEDUP_LOCK = threading.Lock()
+
 def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None):
     cfg = load_config()
     now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     now_ts = int(time.time())
 
-    # 严格校验 IP：非法输入只记录日志，绝不拼入任何命令
+    # 严格校验 IP/CIDR：非法输入只记录日志，绝不拼入任何命令
     valid_ip = validate_ip(ip)
     if not valid_ip:
         print(f"[SKIP] 非法 IP 输入被拒绝: {ip!r}")
@@ -869,132 +967,142 @@ def ban_ip(ip, port=None, port_info=None, reason=None, category=None, level=None
     event_level = level or port_info.get("level", "高危")
     ban_reason = reason or f"探测蜜罐端口 {port_val} ({port_name})"
 
-    # 2. 蜜罐阈值判定（若非直接指定原因或业务诱捕，按阈值防抖）
-    defense_mode = str(cfg.get("defense_mode", "standard")).strip().lower()
-    is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_name))
+    # 按目标 IP 分段互斥锁串行化阈值检查与封禁落库，根治并发 TOCTOU 漏计与重复封禁告警风暴
+    stripe_lock = _BAN_IP_STRIPED_LOCKS[hash(ip) & 63]
+    with stripe_lock:
+        now_mono = time.monotonic()
+        if category != "manual":
+            with _RECENT_BAN_DEDUP_LOCK:
+                last_b_mono = _RECENT_BAN_DEDUP.get(ip, 0.0)
+                if (now_mono - last_b_mono) < 3.0 and ip in get_blacklisted_ips_set():
+                    return
 
-    if reason or defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz or event_category in ("scan", "business") or cfg.get("trap_all_ports", False) or cfg.get("trap_all_unopened_ports", False):
-        threshold = 1
-    else:
-        threshold = int(cfg.get("trap_threshold", 3) or 3)
+        # 2. 蜜罐阈值判定（若非直接指定原因或业务诱捕，按阈值防抖）
+        defense_mode = str(cfg.get("defense_mode", "standard")).strip().lower()
+        is_biz = bool(port_info.get("is_business", False) or "业务诱捕" in str(port_name))
 
-    window = int(cfg.get("trap_window_seconds", 30) or 30)
-    try:
-        conn_tmp = get_db()
-        cur_tmp = conn_tmp.cursor()
-        cur_tmp.execute(
-            "SELECT COUNT(*) AS cnt FROM events WHERE ip=? AND timestamp >= ? AND status != 'WHITELIST'",
-            (ip, now_ts - window)
-        )
-        hit_count = int(cur_tmp.fetchone()["cnt"] or 0) + 1
-        conn_tmp.close()
-    except Exception:
-        hit_count = threshold
+        if reason or defense_mode in ("strict", "aggressive", "秒级响应", "严苛") or is_biz or event_category in ("scan", "business") or cfg.get("trap_all_ports", False) or cfg.get("trap_all_unopened_ports", False):
+            threshold = 1
+        else:
+            threshold = int(cfg.get("trap_threshold", 3) or 3)
 
-    if hit_count < threshold:
-        print(f"[WATCH] IP {ip} 窗口内第 {hit_count} 次探测 (阈值 {threshold})，暂不封禁")
+        window = int(cfg.get("trap_window_seconds", 30) or 30)
         try:
-            conn_w = get_db()
-            cw = conn_w.cursor()
-            cw.execute(
-                "INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status, hit_count) "
-                "VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'WATCH', ?)",
-                (ip, port_val, port_name, event_category, event_level, now_str, now_ts, hit_count)
-            )
-            w_event_id = cw.lastrowid
-            cw.execute(
-                "INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) "
-                "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
-                (ip, port_val, port_name, now_str, now_ts)
-            )
-            w_port_id = cw.lastrowid
-            conn_w.commit()
-            conn_w.close()
-
-            def _async_geo_watch(e_id, p_id, target_ip):
-                try:
-                    geo = resolve_ip_geo(target_ip)
-                    c_geo = get_db()
-                    cur = c_geo.cursor()
-                    if e_id:
-                        cur.execute("UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?",
-                                    (geo["country"], geo["region"], geo["city"], geo["isp"], e_id))
-                    if p_id:
-                        cur.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
-                                    (geo["country"], geo["region"], geo["city"], geo["isp"], p_id))
-                    c_geo.commit()
-                    c_geo.close()
-                except Exception:
-                    pass
-
-            _GEO_EXECUTOR.submit(_async_geo_watch, w_event_id, w_port_id, ip)
+            with closing(get_db()) as conn_tmp:
+                cur_tmp = conn_tmp.cursor()
+                cur_tmp.execute(
+                    "SELECT COUNT(*) AS cnt FROM events WHERE ip=? AND timestamp >= ? AND status != 'WHITELIST'",
+                    (ip, now_ts - window)
+                )
+                hit_count = int(cur_tmp.fetchone()["cnt"] or 0) + 1
         except Exception:
-            pass
-        return
+            hit_count = threshold
+
+        if hit_count < threshold:
+            print(f"[WATCH] IP {ip} 窗口内第 {hit_count} 次探测 (阈值 {threshold})，暂不封禁")
+            try:
+                with closing(get_db()) as conn_w:
+                    cw = conn_w.cursor()
+                    cw.execute(
+                        "INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status, hit_count) "
+                        "VALUES (?, ?, 'TCP', ?, ?, ?, '分析中...', '', '', '', ?, ?, 'WATCH', ?)",
+                        (ip, port_val, port_name, event_category, event_level, now_str, now_ts, hit_count)
+                    )
+                    w_event_id = cw.lastrowid
+                    cw.execute(
+                        "INSERT INTO port_access_logs (ip, port, proto, port_name, country, region, city, isp, action, access_time, timestamp) "
+                        "VALUES (?, ?, 'TCP', ?, '分析中...', '', '', '', 'WATCH', ?, ?)",
+                        (ip, port_val, port_name, now_str, now_ts)
+                    )
+                    w_port_id = cw.lastrowid
+                    conn_w.commit()
+
+                def _async_geo_watch(e_id, p_id, target_ip):
+                    try:
+                        geo = resolve_ip_geo(target_ip)
+                        with closing(get_db()) as c_geo:
+                            cur = c_geo.cursor()
+                            if e_id:
+                                cur.execute("UPDATE events SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                            (geo["country"], geo["region"], geo["city"], geo["isp"], e_id))
+                            if p_id:
+                                cur.execute("UPDATE port_access_logs SET country=?, region=?, city=?, isp=? WHERE id=?",
+                                            (geo["country"], geo["region"], geo["city"], geo["isp"], p_id))
+                            c_geo.commit()
+                    except Exception:
+                        pass
+
+                _GEO_EXECUTOR.submit(_async_geo_watch, w_event_id, w_port_id, ip)
+            except Exception:
+                pass
+            return
+            
+        auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
         
-    auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
-    
-    # 阶梯惩罚模型：查询历史违规频次，阶梯设定解封时间 (避免一次误碰导致永久误封)
+        # 阶梯惩罚模型：查询历史违规频次，阶梯设定解封时间
+        try:
+            with closing(get_db()) as conn_h:
+                ch = conn_h.cursor()
+                ch.execute("SELECT COUNT(*) AS cnt FROM events WHERE ip = ?", (ip,))
+                hist_count = int(ch.fetchone()["cnt"] or 0)
+        except Exception:
+            hist_count = 0
+
+        if event_category == "survey" or "测绘" in str(port_name):
+            expire_secs = 1800
+        elif hist_count <= 1 and event_level not in ("极高危", "critical"):
+            expire_secs = 900
+        elif hist_count <= 2 and event_level not in ("极高危", "critical"):
+            expire_secs = 3600
+        elif hist_count <= 5 and auto_clean_days > 0:
+            expire_secs = 86400
+        else:
+            expire_secs = auto_clean_days * 86400 if auto_clean_days > 0 else 2147483
+
+        ban_expire = now_ts + expire_secs
+
+        # 3. 达到阈值：使用 ipset (动态 timeout) 与黑洞路由毫秒级下发内核阻断
+        if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
+            ban_ip_firewall(ip, expire_seconds=expire_secs, cfg=cfg)
+
+        geo = (_GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}) if "/" not in ip else {}
+        geo_country = geo.get("country") or ("网段封禁" if "/" in ip else "公网节点")
+        geo_region = geo.get("region", "")
+        geo_city = geo.get("city", "")
+        geo_isp = geo.get("isp", "")
+
+        # 4. 写入事件与黑名单库与端口访问日志
+        with closing(get_db()) as conn:
+            c = conn.cursor()
+            c.execute("""
+            INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
+            VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
+            """, (ip, port_val, port_name, event_category, event_level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
+            
+            log_port_access_entry(ip, port_val, port_name, action="INTERCEPTED", geo=geo)
+
+            node_name = cfg.get("node_name", "本机") or "本机"
+            c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (ip,))
+            c.execute("""
+            INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ip, ban_reason, geo_country, event_level, now_str, now_ts, ban_expire, node_name))
+            conn.commit()
+
+        import core.firewall as _fw_mod
+        with _fw_mod._BLACKLIST_IPS_LOCK:
+            _fw_mod._BLACKLIST_IPS_CACHE = _fw_mod._BLACKLIST_IPS_CACHE | {ip}
+
+        with _RECENT_BAN_DEDUP_LOCK:
+            if len(_RECENT_BAN_DEDUP) > 10000:
+                _RECENT_BAN_DEDUP.clear()
+            _RECENT_BAN_DEDUP[ip] = now_mono
+
     try:
-        conn_h = get_db()
-        ch = conn_h.cursor()
-        ch.execute("SELECT COUNT(*) AS cnt FROM events WHERE ip = ?", (ip,))
-        hist_count = int(ch.fetchone()["cnt"] or 0)
-        conn_h.close()
+        from controllers.base import invalidate_blacklist_cache
+        invalidate_blacklist_cache()
     except Exception:
-        hist_count = 0
-
-    # 阶梯惩罚梯度：
-    # 1) 首次轻微触碰或公开测绘爬虫：封禁 15 分钟 (900秒)
-    # 2) 历史违规 <= 2 次且非极高危：封禁 1 小时 (3600秒)
-    # 3) 历史违规 <= 5 次：封禁 24 小时 (86400秒)
-    # 4) 反复恶意攻击者：按配置保留天数长期封禁 (auto_clean_days)
-    if event_category == "survey" or "测绘" in str(port_name):
-        expire_secs = 1800  # 公开测绘默认仅临时压制 30 分钟
-    elif hist_count <= 1 and event_level not in ("极高危", "critical"):
-        expire_secs = 900   # 首次探测轻微触碰：临时阻断 15 分钟缓冲
-    elif hist_count <= 2 and event_level not in ("极高危", "critical"):
-        expire_secs = 3600  # 二次触碰：阻断 1 小时
-    elif hist_count <= 5 and auto_clean_days > 0:
-        expire_secs = 86400 # 5次以内：阻断 24 小时
-    else:
-        expire_secs = auto_clean_days * 86400 if auto_clean_days > 0 else 2147483
-
-    ban_expire = now_ts + expire_secs
-
-    # 3. 达到阈值：使用 ipset (动态 timeout) 与黑洞路由毫秒级下发内核阻断
-    if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
-        ban_ip_firewall(ip, expire_seconds=expire_secs)
-
-    geo = _GEO_CACHE.get(ip) or resolve_ip_geo_local(ip) or {}
-    geo_country = geo.get("country") or "公网节点"
-    geo_region = geo.get("region", "")
-    geo_city = geo.get("city", "")
-    geo_isp = geo.get("isp", "")
-
-    # 4. 写入事件与黑名单库与端口访问日志
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-    INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-    VALUES (?, ?, 'TCP', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
-    """, (ip, port_val, port_name, event_category, event_level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
-    
-    # 将拦截记录写入内存队列批量落盘
-    log_port_access_entry(ip, port_val, port_name, action="INTERCEPTED", geo=geo)
-
-    node_name = cfg.get("node_name", "本机") or "本机"
-    c.execute("DELETE FROM unbanned_ips WHERE ip = ?", (ip,))
-    c.execute("""
-    INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (ip, ban_reason, geo_country, event_level, now_str, now_ts, ban_expire, node_name))
-    conn.commit()
-    conn.close()
-
-    if _BLACKLIST_IPS_CACHE is not None:
-        with _BLACKLIST_IPS_LOCK:
-            _BLACKLIST_IPS_CACHE.add(ip)
+        pass
 
     # 5. 向集群联防节点异步广播黑名单情报
     broadcast_cluster_ban(ip, ban_reason, event_level, port=port_val, proto="TCP", category=event_category)
@@ -1245,9 +1353,10 @@ def check_and_sync_new_listen_ports():
                 _KNOWN_KERNEL_LISTEN_PORTS = set(current_ports)
                 _INITIAL_KERNEL_PORTS_SCANNED = True
 
-                # 若开启了自动纳管，检查当前是否有遗漏的活跃系统端口未在 business_ports 中（如非标 SSH 端口等）
+                # 若开启了自动纳管，检查当前是否有遗漏的活跃系统端口未在 business_ports 中（同时尊重 excluded_business_ports 排除列表）
                 if auto_manage:
                     biz_ports = cfg.get("business_ports", [])
+                    excluded_set = {int(x) for x in cfg.get("excluded_business_ports", []) if str(x).isdigit()}
                     biz_set = set()
                     for b in biz_ports:
                         if isinstance(b, int):
@@ -1260,14 +1369,13 @@ def check_and_sync_new_listen_ports():
 
                     added_any = False
                     for p, det in port_details.items():
-                        if p in biz_set or p in (web_port, cluster_port):
+                        if p in biz_set or p in excluded_set or p in (web_port, cluster_port):
                             continue
                         if is_trap_port(p, cfg):
                             continue
                         if trap_instance and (p in getattr(trap_instance, "trap_map", {}) or p in [s_p for s, s_p in getattr(trap_instance, "sockets", {}).values()]):
                             continue
 
-                        # 自动补全加入业务端口列表
                         svc_name = KNOWN_SYSTEM_SERVICES.get(p, f"系统原生服务 ({p})")
                         proc_name = det.get("process")
                         biz_ports.append({
@@ -1299,6 +1407,7 @@ def check_and_sync_new_listen_ports():
             _KNOWN_KERNEL_LISTEN_PORTS.update(current_ports)
 
             biz_ports = cfg.get("business_ports", [])
+            excluded_set = {int(x) for x in cfg.get("excluded_business_ports", []) if str(x).isdigit()}
             biz_set = set()
             for b in biz_ports:
                 if isinstance(b, int):
@@ -1311,7 +1420,7 @@ def check_and_sync_new_listen_ports():
 
             added_ports = []
             for p in sorted(list(new_ports)):
-                if p in biz_set or p in (web_port, cluster_port):
+                if p in biz_set or p in excluded_set or p in (web_port, cluster_port):
                     continue
                 if is_trap_port(p, cfg):
                     continue
@@ -1414,18 +1523,23 @@ def get_all_business_ports_info():
 
 class TrapServer:
     def __init__(self):
+        self._lock = threading.RLock()
         self.sockets = {}  # fd -> (socket, port)
         self.running = False
         self.trap_map = {} # port -> item
         self.epoll = None
         
     def start(self):
-        self.running = True
-        self.reload()
-        threading.Thread(target=self._loop, daemon=True).start()
+        with self._lock:
+            if self.running:
+                return
+            self.running = True
+            self.reload()
+        threading.Thread(target=self._loop, daemon=True, name="TrapServerLoop").start()
 
     def _bind_socket(self, port, backlog=64):
         """优先尝试 IPv6 双栈绑定（同时监听 IPv4 与 IPv6），失败则降级为 IPv4 单栈"""
+        s = None
         try:
             s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1438,128 +1552,148 @@ class TrapServer:
             s.setblocking(False)
             return s
         except Exception:
-            pass
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        s4 = None
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", port))
-            s.listen(backlog)
-            s.setblocking(False)
-            return s
+            s4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s4.bind(("0.0.0.0", port))
+            s4.listen(backlog)
+            s4.setblocking(False)
+            return s4
         except Exception:
+            if s4 is not None:
+                try:
+                    s4.close()
+                except Exception:
+                    pass
             return None
 
     def reload(self):
-        if self.epoll:
-            try:
-                self.epoll.close()
-            except Exception:
-                pass
+        with self._lock:
+            old_epoll = self.epoll
+            old_sockets = list(self.sockets.values())
             self.epoll = None
+            self.sockets = {}
+            self.trap_map = {}
 
-        for fd, (s, _) in list(self.sockets.items()):
-            try:
-                s.close()
-            except Exception:
-                pass
-        self.sockets = {}
-        self.trap_map = {}
-        
-        try:
-            if hasattr(select, 'epoll'):
-                self.epoll = select.epoll()
-        except Exception:
-            self.epoll = None
-        
-        cfg = load_config()
-        raw_trap_ports = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
-        active_ports_map = get_active_system_ports()
-        active_ports = set(active_ports_map.keys()) | set(KNOWN_SYSTEM_SERVICES.keys())
-        
-        normalized_traps = []
-        for item in raw_trap_ports:
-            norm = normalize_trap_item(item)
-            if norm:
-                normalized_traps.append(norm)
+            if old_epoll:
+                try:
+                    old_epoll.close()
+                except Exception:
+                    pass
+            for s, _ in old_sockets:
+                try:
+                    s.close()
+                except Exception:
+                    pass
             
-        MAX_TOTAL_TRAP_SOCKETS = 256
-        total_bound = 0
-        web_port = 9099
-        try:
-            web_port = int(cfg.get("web_port", 9099))
-        except Exception:
-            pass
-
-        for item in normalized_traps:
-            if not item.get("enabled", True):
-                continue
-            start_p = item.get("port_start", item.get("port"))
-            end_p = item.get("port_end", item.get("port"))
+            new_epoll = None
             try:
-                start_p = int(start_p)
-                end_p = int(end_p)
+                if hasattr(select, 'epoll'):
+                    new_epoll = select.epoll()
             except Exception:
-                continue
-
-            # 对于超大端口范围（如 1-65535），禁止暴力绑定数万套接字，交由底层超轻量抓包感知引擎统一捕获
-            if (end_p - start_p) > 50:
-                print(f"[Trap] 检测到大端口范围 ({start_p}-{end_p})，交由底层网络感知引擎捕获，跳过 socket 占用")
-                continue
-
-            bound_count_for_item = 0
-            cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
-            ssh_ports = get_system_ssh_ports()
-            for port in range(start_p, end_p + 1):
-                if port == web_port or (cluster_port > 0 and port == cluster_port) or port in active_ports or port in self.trap_map or port in ssh_ports:
-                    continue
-                if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
-                    print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
-                    break
-                s = self._bind_socket(port, backlog=64)
-                if s:
-                    fd = s.fileno()
-                    if self.epoll:
-                        self.epoll.register(fd, select.EPOLLIN)
-                    self.sockets[fd] = (s, port)
-                    self.trap_map[port] = item
-                    total_bound += 1
-                    bound_count_for_item += 1
-
-            display_port = item.get("port")
-            if bound_count_for_item > 0:
-                print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
-
-        # 移动目标防御 (MTD) 动态高位蜜罐诱饵：若配置启用，随机在未开放高位端口激活 3 个浮动蜜罐靶点
-        if bool(cfg.get("dynamic_honeypot_ports", True)) and total_bound < MAX_TOTAL_TRAP_SOCKETS:
+                new_epoll = None
+            
+            cfg = load_config()
+            raw_trap_ports = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
+            active_ports_map = get_active_system_ports()
+            active_ports = set(active_ports_map.keys()) | set(KNOWN_SYSTEM_SERVICES.keys())
+            
+            normalized_traps = []
+            for item in raw_trap_ports:
+                norm = normalize_trap_item(item)
+                if norm:
+                    normalized_traps.append(norm)
+                
+            MAX_TOTAL_TRAP_SOCKETS = 256
+            total_bound = 0
+            web_port = 9099
             try:
-                import random
-                seed_ports = [random.randint(20000, 60000) for _ in range(8)]
-                dynamic_count = 0
+                web_port = int(cfg.get("web_port", 9099))
+            except Exception:
+                pass
+
+            new_sockets = {}
+            new_trap_map = {}
+
+            for item in normalized_traps:
+                if not item.get("enabled", True):
+                    continue
+                start_p = item.get("port_start", item.get("port"))
+                end_p = item.get("port_end", item.get("port"))
+                try:
+                    start_p = int(start_p)
+                    end_p = int(end_p)
+                except Exception:
+                    continue
+
+                if (end_p - start_p) > 50:
+                    print(f"[Trap] 检测到大端口范围 ({start_p}-{end_p})，交由底层网络感知引擎捕获，跳过 socket 占用")
+                    continue
+
+                bound_count_for_item = 0
+                cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
                 ssh_ports = get_system_ssh_ports()
-                for dp in seed_ports:
-                    if dp in active_ports or dp in self.trap_map or dp == web_port or dp == cluster_port or dp in ssh_ports:
+                for port in range(start_p, end_p + 1):
+                    if port == web_port or (cluster_port > 0 and port == cluster_port) or port in active_ports or port in new_trap_map or port in ssh_ports:
                         continue
-                    s = self._bind_socket(dp, backlog=32)
+                    if total_bound >= MAX_TOTAL_TRAP_SOCKETS:
+                        print(f"[Trap] 已达系统最大诱捕端口监听上限 ({MAX_TOTAL_TRAP_SOCKETS})")
+                        break
+                    s = self._bind_socket(port, backlog=64)
                     if s:
                         fd = s.fileno()
-                        if self.epoll:
-                            self.epoll.register(fd, select.EPOLLIN)
-                        self.sockets[fd] = (s, dp)
-                        self.trap_map[dp] = {
-                            "port": dp,
-                            "name": f"动态随机诱饵 (MTD-{dp})",
-                            "category": "honeypot",
-                            "level": "极高危",
-                            "enabled": True
-                        }
+                        if new_epoll:
+                            new_epoll.register(fd, select.EPOLLIN)
+                        new_sockets[fd] = (s, port)
+                        new_trap_map[port] = item
                         total_bound += 1
-                        dynamic_count += 1
-                        if dynamic_count >= 3:
-                            break
-                if dynamic_count > 0:
-                    print(f"[Trap] 移动目标防御 MTD 成功随机激活 {dynamic_count} 个动态浮动诱捕靶点")
-            except Exception:
-                pass
+                        bound_count_for_item += 1
+
+                display_port = item.get("port")
+                if bound_count_for_item > 0:
+                    print(f"[Trap] 激活诱捕蜜罐: {display_port} (共 {bound_count_for_item} 个端口) - {item.get('name')}")
+
+            if bool(cfg.get("dynamic_honeypot_ports", True)) and total_bound < MAX_TOTAL_TRAP_SOCKETS:
+                try:
+                    import random
+                    seed_ports = [random.randint(20000, 60000) for _ in range(8)]
+                    dynamic_count = 0
+                    cluster_port = int(cfg.get("cluster_sync", {}).get("port", 0) or 0)
+                    ssh_ports = get_system_ssh_ports()
+                    for dp in seed_ports:
+                        if dp in active_ports or dp in new_trap_map or dp == web_port or dp == cluster_port or dp in ssh_ports:
+                            continue
+                        s = self._bind_socket(dp, backlog=32)
+                        if s:
+                            fd = s.fileno()
+                            if new_epoll:
+                                new_epoll.register(fd, select.EPOLLIN)
+                            new_sockets[fd] = (s, dp)
+                            new_trap_map[dp] = {
+                                "port": dp,
+                                "name": f"动态随机诱饵 (MTD-{dp})",
+                                "category": "honeypot",
+                                "level": "极高危",
+                                "enabled": True
+                            }
+                            total_bound += 1
+                            dynamic_count += 1
+                            if dynamic_count >= 3:
+                                break
+                    if dynamic_count > 0:
+                        print(f"[Trap] 移动目标防御 MTD 成功随机激活 {dynamic_count} 个动态浮动诱捕靶点")
+                except Exception:
+                    pass
+
+            self.epoll = new_epoll
+            self.sockets = new_sockets
+            self.trap_map = new_trap_map
 
     def _handle_trap_client(self, client_sock, client_addr, port, port_info):
         """高保真交互式蜜罐服务仿真：支持多协议交互式欺骗响应并捕获攻击 Payload，提取恶意样本 URL，并在结束时伪装 TCP RST 或实施 Tarpit 粘滞减速"""
@@ -1701,28 +1835,58 @@ class TrapServer:
         _THREAT_ENGINE.add_score(client_ip, 100)
         ban_ip(client_ip, port, port_info, reason=reason_text, level="极高危")
 
+    def _dispatch_accepted_client(self, client_sock, client_addr, port, port_info):
+        """使用独立蜜罐交互线程池与并发信号量调度客户端仿真，满载时直接秒封降级，绝不阻塞核心防御线程池"""
+        if _TRAP_ACTIVE_SEM.acquire(blocking=False):
+            def _wrapped():
+                try:
+                    self._handle_trap_client(client_sock, client_addr, port, port_info)
+                finally:
+                    _TRAP_ACTIVE_SEM.release()
+            _TRAP_CLIENT_EXECUTOR.submit(_wrapped)
+        else:
+            try:
+                client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            except Exception:
+                pass
+            try:
+                client_sock.close()
+            except Exception:
+                pass
+            client_ip = client_addr[0].replace("::ffff:", "")
+            reason_text = f"探测蜜罐端口 {port} ({port_info.get('name')})"
+            _THREAT_ENGINE.add_score(client_ip, 100)
+            _EXECUTOR.submit(ban_ip, client_ip, port, port_info, reason=reason_text, level="极高危")
+
     def _loop(self):
         while self.running:
             try:
-                if not self.sockets:
+                with self._lock:
+                    ep = self.epoll
+                    socks_snap = dict(self.sockets)
+                    trap_snap = dict(self.trap_map)
+
+                if not socks_snap:
                     time.sleep(1)
                     continue
                 
-                if self.epoll:
-                    events = self.epoll.poll(timeout=1.0)
+                if ep is not None:
+                    try:
+                        events = ep.poll(timeout=1.0)
+                    except (OSError, ValueError):
+                        time.sleep(0.05)
+                        continue
                     for fd, event in events:
-                        if (event & select.EPOLLIN) and (fd in self.sockets):
-                            s, port = self.sockets[fd]
+                        if (event & select.EPOLLIN) and (fd in socks_snap):
+                            s, port = socks_snap[fd]
                             try:
                                 client_sock, client_addr = s.accept()
                                 client_ip = client_addr[0].replace("::ffff:", "")
                                 
-                                # 严格忽略本机及本地回环测试流量
                                 if client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("127."):
                                     client_sock.close()
                                     continue
 
-                                # 核心白名单免杀保护：白名单 IP 绝对不进入蜜罐诱捕，不发 RST，平滑关闭套接字
                                 if ip_in_whitelist(client_ip):
                                     try:
                                         client_sock.close()
@@ -1730,16 +1894,15 @@ class TrapServer:
                                         pass
                                     continue
                                 
-                                port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
-                                _EXECUTOR.submit(self._handle_trap_client, client_sock, client_addr, port, port_info)
+                                port_info = trap_snap.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
+                                self._dispatch_accepted_client(client_sock, client_addr, port, port_info)
                             except Exception:
                                 time.sleep(0.01)
                 else:
-                    # 回退到 select (仅在无 epoll 平台)
-                    sock_list = [s for s, _ in list(self.sockets.values())[:1000]]
+                    sock_list = [s for s, _ in list(socks_snap.values())[:1000]]
                     readable, _, _ = select.select(sock_list, [], [], 1.0)
                     for s in readable:
-                        for fd, (sock_obj, port) in list(self.sockets.items()):
+                        for fd, (sock_obj, port) in list(socks_snap.items()):
                             if sock_obj == s:
                                 try:
                                     client_sock, client_addr = s.accept()
@@ -1756,11 +1919,11 @@ class TrapServer:
                                             pass
                                         continue
                                     
-                                    port_info = self.trap_map.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
-                                    _EXECUTOR.submit(self._handle_trap_client, client_sock, client_addr, port, port_info)
+                                    port_info = trap_snap.get(port, {"name": f"TCP/{port}", "category": "custom", "level": "高危"})
+                                    self._dispatch_accepted_client(client_sock, client_addr, port, port_info)
                                 except Exception:
                                     time.sleep(0.01)
-            except Exception as e:
+            except Exception:
                 time.sleep(0.5)
 
 
@@ -1812,8 +1975,16 @@ class GlobalPortSniffer:
         self.raw_sock_udp = None
         self.raw_sock_v6 = None
         self._sniffer_thread = None
-        self.local_ips = set(get_local_ips())
+        self.local_ips = set()
+        self._local_ips_ts = 0.0
         self._recent_cache = {}  # (src_ip, dst_port, proto) -> timestamp
+
+    def _get_fresh_local_ips(self):
+        now = time.monotonic()
+        if not self.local_ips or (now - self._local_ips_ts) > 60.0:
+            self.local_ips = set(get_local_ips())
+            self._local_ips_ts = now
+        return self.local_ips
 
     def start(self):
         if self.running:
@@ -1878,23 +2049,12 @@ class GlobalPortSniffer:
 
                     # 1. 严格方向判定：数据包的目的 IP (dst_ip) 必须是本机拥有的网卡 IP 或全局广播地址
                     # 避免系统主动向外发起连接时的外部回包被逆向判为恶意探测
-                    if dst_ip and dst_ip not in self.local_ips and not dst_ip.startswith("255.") and not dst_ip.startswith("224.") and not dst_ip.startswith("ff02"):
-                        # 如果目的 IP 不是本机网卡，说明是本机路由转发或出站相关报文，绝对忽略
+                    local_ips_now = self._get_fresh_local_ips()
+                    if dst_ip and dst_ip not in local_ips_now and not dst_ip.startswith("255.") and not dst_ip.startswith("224.") and not dst_ip.startswith("ff02"):
                         continue
 
-                    # 2. 过滤本机发出的包、回环流量、私网地址 (10.x, 192.168.x, 172.16-31.x)、IPv6 内部地址与私有 Docker 内部流量
-                    if (src_ip in self.local_ips
-                            or src_ip.startswith("127.")
-                            or src_ip == "0.0.0.0"
-                            or src_ip.startswith("10.")
-                            or src_ip.startswith("192.168.")
-                            or src_ip.startswith("172.16.") or src_ip.startswith("172.17.")
-                            or src_ip.startswith("172.18.") or src_ip.startswith("172.19.")
-                            or src_ip.startswith("172.2") or src_ip.startswith("172.3")
-                            or src_ip == "::1"
-                            or src_ip.startswith("fe80:")
-                            or src_ip.startswith("fc")
-                            or src_ip.startswith("fd")):
+                    # 2. 基于 RFC 标准精确过滤本机网卡、回环、私网 (10/8, 172.16/12, 192.168/16, fc00::/7) 与链路本地流量，杜绝误漏放 172.2/172.3/172.32+/172.200+ 公网段
+                    if src_ip in local_ips_now or _is_private_or_internal_ip(src_ip):
                         continue
 
                     now_ts = time.time()
@@ -2249,8 +2409,10 @@ class SiteLogCollector:
                                         client_ip = v_cand
                                         break
                                         
-                            if not validate_ip(client_ip) and not (":" in client_ip or "." in client_ip):
+                            v_client = validate_ip(client_ip)
+                            if not v_client or "/" in v_client:
                                 continue
+                            client_ip = v_client
 
                             time_str = m.group("time")
                             request = m.group("request") or ""
@@ -2306,16 +2468,19 @@ class SiteLogCollector:
                     except Exception:
                         pass
 
+                if len(self._file_offsets) > 256:
+                    active_paths = {fp for fp, _ in log_targets}
+                    self._file_offsets = {fp: off for fp, off in self._file_offsets.items() if fp in active_paths}
+
                 if new_records:
                     try:
-                        conn = get_db()
-                        c = conn.cursor()
-                        c.executemany("""
-                        INSERT INTO access_logs (ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, new_records)
-                        conn.commit()
-                        conn.close()
+                        with closing(get_db()) as conn:
+                            c = conn.cursor()
+                            c.executemany("""
+                            INSERT INTO access_logs (ip, domain, method, path, status_code, user_agent, country, region, city, isp, access_time, timestamp)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, new_records)
+                            conn.commit()
                     except Exception:
                         pass
 
@@ -2343,12 +2508,9 @@ trap_instance = TrapServer()
 sniffer_instance = GlobalPortSniffer()
 site_collector_instance = SiteLogCollector()
 
-# 启动异步批量日志落盘线程
-_batch_worker_thread = threading.Thread(target=_batch_log_worker, daemon=True, name="BatchLogWorker")
-_batch_worker_thread.start()
-
 if __name__ == "__main__":
     init_db()
+    _ensure_batch_log_worker()
     init_firewall_ipset()
     trap_instance.start()
     sniffer_instance.start()

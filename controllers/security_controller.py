@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from contextlib import closing
 import json
 import time
 import re
@@ -37,89 +38,90 @@ def handle_attacker_timeline(req, parsed):
         req._send_json({"error": "缺少 IP 参数"}, status=400)
         return
     conn = get_db()
-    c = conn.cursor()
-    # 1. 查找历史拦截事件时间线
-    c.execute("""
-        SELECT id, port, proto, port_name, category, level, attack_time, timestamp, status
-        FROM events WHERE ip = ? ORDER BY timestamp DESC LIMIT 100
-    """, (att_ip,))
-    events_list = [dict(r) for r in c.fetchall()]
-
-    # 2. 查找黑名单阻断记录
-    c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist WHERE ip = ?", (att_ip,))
-    ban_record = c.fetchone()
-    ban_dict = dict(ban_record) if ban_record else None
-
-    # 3. 统计总探测次数及首见/末见时间
-    c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM events WHERE ip = ?", (att_ip,))
-    ev_stats = c.fetchone()
-    total_events = ev_stats[0] if ev_stats and ev_stats[0] else 0
-
-    c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM port_access_logs WHERE ip = ?", (att_ip,))
-    pal_stats = c.fetchone()
-    total_pal = pal_stats[0] if pal_stats and pal_stats[0] else 0
-
-    total_probes = max(total_events, total_pal, len(events_list))
-
-    min_ts = None
-    max_ts = None
-    if ev_stats and ev_stats[1]:
-        min_ts = ev_stats[1]
-    if pal_stats and pal_stats[1]:
-        min_ts = min(min_ts, pal_stats[1]) if min_ts else pal_stats[1]
-
-    if ev_stats and ev_stats[2]:
-        max_ts = ev_stats[2]
-    if pal_stats and pal_stats[2]:
-        max_ts = max(max_ts, pal_stats[2]) if max_ts else pal_stats[2]
-
-    first_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min_ts)) if min_ts else "--"
-    last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(max_ts)) if max_ts else "--"
-
-    # 4. 查找所有端口访问探测足迹 (distinct ports)
-    c.execute("SELECT DISTINCT port, port_name, action FROM port_access_logs WHERE ip = ? ORDER BY id DESC", (att_ip,))
-    footprints = [dict(r) for r in c.fetchall()]
-
-    c.execute("SELECT DISTINCT port FROM events WHERE ip = ? AND port IS NOT NULL", (att_ip,))
-    ports_ev = [r[0] for r in c.fetchall() if r[0]]
-    ports_pal = [f["port"] for f in footprints if f.get("port")]
-    ports_hit = sorted(list(set(ports_ev + ports_pal)))
-
-    # 5. 提取捕获的恶意载荷与木马 URL
-    extracted_payloads = []
-    for ev in events_list:
-        pname = ev.get("port_name") or ""
-        if "[提取木马下载源:" in pname:
-            try:
-                m = re.search(r"\[提取木马下载源:\s*([^\]]+)\]", pname)
-                if m:
-                    for u in m.group(1).split(","):
-                        u_c = u.strip()
-                        if u_c and u_c not in extracted_payloads:
-                            extracted_payloads.append(u_c)
-            except Exception:
-                pass
-        elif "[捕获载荷:" in pname:
-            try:
-                m = re.search(r"\[捕获载荷:\s*([^\]]+)\]", pname)
-                if m:
-                    p_c = m.group(1).strip()
-                    if p_c and p_c not in extracted_payloads:
-                        extracted_payloads.append(p_c)
-            except Exception:
-                pass
-
-    # 6. 统计同 C 段 (/24) 活跃攻击威胁源
-    c_subnet_ips = []
     try:
-        if "." in att_ip:
-            c_prefix = ".".join(att_ip.split(".")[:3]) + ".%"
-            c.execute("SELECT DISTINCT ip FROM events WHERE ip LIKE ? AND ip != ? LIMIT 10", (c_prefix, att_ip))
-            c_subnet_ips = [r[0] for r in c.fetchall()]
-    except Exception:
-        pass
+        c = conn.cursor()
+        # 1. 查找历史拦截事件时间线
+        c.execute("""
+            SELECT id, port, proto, port_name, category, level, attack_time, timestamp, status
+            FROM events WHERE ip = ? ORDER BY timestamp DESC LIMIT 100
+        """, (att_ip,))
+        events_list = [dict(r) for r in c.fetchall()]
 
-    conn.close()
+        # 2. 查找黑名单阻断记录
+        c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist WHERE ip = ?", (att_ip,))
+        ban_record = c.fetchone()
+        ban_dict = dict(ban_record) if ban_record else None
+
+        # 3. 统计总探测次数及首见/末见时间
+        c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM events WHERE ip = ?", (att_ip,))
+        ev_stats = c.fetchone()
+        total_events = ev_stats[0] if ev_stats and ev_stats[0] else 0
+
+        c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM port_access_logs WHERE ip = ?", (att_ip,))
+        pal_stats = c.fetchone()
+        total_pal = pal_stats[0] if pal_stats and pal_stats[0] else 0
+
+        total_probes = max(total_events, total_pal, len(events_list))
+
+        min_ts = None
+        max_ts = None
+        if ev_stats and ev_stats[1]:
+            min_ts = ev_stats[1]
+        if pal_stats and pal_stats[1]:
+            min_ts = min(min_ts, pal_stats[1]) if min_ts else pal_stats[1]
+
+        if ev_stats and ev_stats[2]:
+            max_ts = ev_stats[2]
+        if pal_stats and pal_stats[2]:
+            max_ts = max(max_ts, pal_stats[2]) if max_ts else pal_stats[2]
+
+        first_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min_ts)) if min_ts else "--"
+        last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(max_ts)) if max_ts else "--"
+
+        # 4. 查找所有端口访问探测足迹 (distinct ports)
+        c.execute("SELECT DISTINCT port, port_name, action FROM port_access_logs WHERE ip = ? ORDER BY id DESC", (att_ip,))
+        footprints = [dict(r) for r in c.fetchall()]
+
+        c.execute("SELECT DISTINCT port FROM events WHERE ip = ? AND port IS NOT NULL", (att_ip,))
+        ports_ev = [r[0] for r in c.fetchall() if r[0]]
+        ports_pal = [f["port"] for f in footprints if f.get("port")]
+        ports_hit = sorted(list(set(ports_ev + ports_pal)))
+
+        # 5. 提取捕获的恶意载荷与木马 URL
+        extracted_payloads = []
+        for ev in events_list:
+            pname = ev.get("port_name") or ""
+            if "[提取木马下载源:" in pname:
+                try:
+                    m = re.search(r"\[提取木马下载源:\s*([^\]]+)\]", pname)
+                    if m:
+                        for u in m.group(1).split(","):
+                            u_c = u.strip()
+                            if u_c and u_c not in extracted_payloads:
+                                extracted_payloads.append(u_c)
+                except Exception:
+                    pass
+            elif "[捕获载荷:" in pname:
+                try:
+                    m = re.search(r"\[捕获载荷:\s*([^\]]+)\]", pname)
+                    if m:
+                        p_c = m.group(1).strip()
+                        if p_c and p_c not in extracted_payloads:
+                            extracted_payloads.append(p_c)
+                except Exception:
+                    pass
+
+        # 6. 统计同 C 段 (/24) 活跃攻击威胁源
+        c_subnet_ips = []
+        try:
+            if "." in att_ip:
+                c_prefix = ".".join(att_ip.split(".")[:3]) + ".%"
+                c.execute("SELECT DISTINCT ip FROM events WHERE ip LIKE ? AND ip != ? LIMIT 10", (c_prefix, att_ip))
+                c_subnet_ips = [r[0] for r in c.fetchall()]
+        except Exception:
+            pass
+    finally:
+        conn.close()
 
     geo = _GEO_CACHE.get(att_ip) or resolve_ip_geo_local(att_ip) or {}
     threat_tags = get_ip_threat_tags(att_ip, geo)
@@ -158,17 +160,16 @@ def handle_ip_info(req, parsed):
     geo = resolve_ip_geo(ip)
     geo["threat_tags"] = get_ip_threat_tags(ip, geo)
     try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT reason, ban_time FROM blacklist WHERE ip = ? LIMIT 1", (ip,))
-        b_row = c.fetchone()
-        conn.close()
-        if b_row:
-            geo["is_banned"] = True
-            geo["ban_reason"] = b_row["reason"] or ""
-        else:
-            geo["is_banned"] = False
-            geo["ban_reason"] = ""
+        with closing(get_db()) as conn:
+            c = conn.cursor()
+            c.execute("SELECT reason, ban_time FROM blacklist WHERE ip = ? LIMIT 1", (ip,))
+            b_row = c.fetchone()
+            if b_row:
+                geo["is_banned"] = True
+                geo["ban_reason"] = b_row["reason"] or ""
+            else:
+                geo["is_banned"] = False
+                geo["ban_reason"] = ""
     except Exception:
         pass
     req._send_json(geo)
@@ -213,34 +214,33 @@ def handle_blacklist(req, parsed):
             req._send_json(cached_data)
             return
 
-    conn = get_db()
-    c = conn.cursor()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
 
-    base_where = " WHERE ip NOT IN (SELECT ip FROM hidden_ips)"
-    where_params = []
-    if search_kw:
-        base_where += " AND (ip LIKE ? OR reason LIKE ? OR source_node LIKE ? OR country LIKE ?)"
-        kw_like = f"%{search_kw}%"
-        where_params.extend([kw_like, kw_like, kw_like, kw_like])
+        base_where = " WHERE ip NOT IN (SELECT ip FROM hidden_ips)"
+        where_params = []
+        if search_kw:
+            base_where += " AND (ip LIKE ? OR reason LIKE ? OR source_node LIKE ? OR country LIKE ?)"
+            kw_like = f"%{search_kw}%"
+            where_params.extend([kw_like, kw_like, kw_like, kw_like])
 
-    # 统计总数 (仅在分页模式或全量导出下高效统计)
-    total_count = 0
-    if is_paginated_mode or is_all:
-        c.execute("SELECT COUNT(*) FROM blacklist" + base_where, tuple(where_params))
-        total_count = c.fetchone()[0]
+        # 统计总数 (仅在分页模式或全量导出下高效统计)
+        total_count = 0
+        if is_paginated_mode or is_all:
+            c.execute("SELECT COUNT(*) FROM blacklist" + base_where, tuple(where_params))
+            total_count = c.fetchone()[0]
 
-    sql = "SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist" + base_where
-    params = list(where_params)
-    sql += " ORDER BY timestamp DESC"
+        sql = "SELECT ip, reason, country, level, ban_time, timestamp, source_node FROM blacklist" + base_where
+        params = list(where_params)
+        sql += " ORDER BY timestamp DESC"
 
-    if not is_all:
-        offset = max(0, (page - 1) * page_size)
-        sql += " LIMIT ? OFFSET ?"
-        params.extend([page_size, offset])
+        if not is_all:
+            offset = max(0, (page - 1) * page_size)
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([page_size, offset])
 
-    c.execute(sql, tuple(params))
-    rows = [dict(r) for r in c.fetchall()]
-    conn.close()
+        c.execute(sql, tuple(params))
+        rows = [dict(r) for r in c.fetchall()]
 
     for r in rows:
         ip_k = r["ip"]
@@ -294,11 +294,10 @@ def handle_whitelist(req, parsed):
 
 
 def handle_blacklist_export(req, parsed):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
-    rows = [dict(r) for r in c.fetchall()]
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT ip, reason, country, level, ban_time, timestamp FROM blacklist WHERE ip NOT IN (SELECT ip FROM hidden_ips) ORDER BY timestamp DESC")
+        rows = [dict(r) for r in c.fetchall()]
     req._send_json(rows)
     return
 
@@ -321,8 +320,14 @@ def handle_unban(req, parsed, req_data):
     # 广播解封至全网集群协同节点
     broadcast_cluster_unban(ip)
     invalidate_blacklist_cache()
-    req._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封 IP: {ip}（已同步全网集群协同解封）"})
+    req._send_json({"success": True, "msg": f"已成功从内核黑名单与防火墙中解封: {ip}（已同步全网集群协同解封）"})
     return
+
+
+def _resolve_req_client_ip(req):
+    if hasattr(req, "_get_real_client_ip"):
+        return req._get_real_client_ip()
+    return getattr(req, "client_address", ("", 0))[0]
 
 
 def handle_ban(req, parsed, req_data):
@@ -337,24 +342,32 @@ def handle_ban(req, parsed, req_data):
         return
     ip = valid_ip
 
-    # 防自锁与白名单保护：当前控制台客户端、活跃SSH管理会话及安全白名单严禁封禁
-    client_ip = getattr(req, "client_address", ("", 0))[0]
-    if ip == client_ip:
-        req._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 为当前登录控制台的客户端地址，触发管理员防自锁保护！"}, status=400)
-        return
+    # 防自锁与白名单保护：使用真实客户端 IP（兼容反向代理）检查当前控制台客户端
+    client_ip = _resolve_req_client_ip(req)
+    if client_ip:
+        if "/" in ip:
+            try:
+                if ipaddress.ip_address(client_ip) in ipaddress.ip_network(ip, strict=False):
+                    req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{ip}] 包含了当前登录控制台的客户端地址 [{client_ip}]，触发管理员防自锁保护！"}, status=400)
+                    return
+            except Exception:
+                pass
+        elif ip == client_ip:
+            req._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 为当前登录控制台的客户端地址，触发管理员防自锁保护！"}, status=400)
+            return
     if ip_in_whitelist(ip):
         req._send_json({"success": False, "msg": f"操作已阻断：目标 IP [{ip}] 属于系统安全白名单或活跃管理会话，严禁封禁！"}, status=400)
         return
 
     ban_ip(ip, reason=reason, category="manual", level="极高危")
     invalidate_blacklist_cache()
-    req._send_json({"success": True, "msg": f"已成功永久封禁 IP: {ip}（已下发内核防火墙并同步集群协同阻断）"})
+    req._send_json({"success": True, "msg": f"已成功封禁目标: {ip}（已下发内核防火墙并同步集群协同阻断）"})
     return
 
 
 
 def handle_ban_subnet(req, parsed, req_data):
-    # 一键封禁整个 /24 C段网段
+    # 一键封禁整个 /24 C段或自定义 CIDR 网段（挂载在白名单集合之后，支持通过 unban_ip_core 完整解封）
     subnet = req_data.get("subnet", "").strip()
     ip = req_data.get("ip", "").strip()
     reason = req_data.get("reason", "管理员手动封禁攻击源 /24 C段").strip()
@@ -370,16 +383,20 @@ def handle_ban_subnet(req, parsed, req_data):
     try:
         net_obj = ipaddress.ip_network(subnet, strict=False)
 
-        # 防自锁与白名单保护：检查当前控制台客户端、活跃白名单是否落在目标网段内
-        client_ip = getattr(req, "client_address", ("", 0))[0]
+        # 防自锁与白名单保护：检查真实控制台客户端、公共 CDN 及活跃白名单是否与目标网段存在交集
+        client_ip = _resolve_req_client_ip(req)
         if client_ip:
             try:
                 c_addr = ipaddress.ip_address(client_ip)
-                if c_addr in net_obj:
+                if c_addr.version == net_obj.version and c_addr in net_obj:
                     req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 包含了当前登录控制台的客户端 IP [{client_ip}]，触发管理员防自锁保护！"}, status=400)
                     return
             except Exception:
                 pass
+
+        if ip_in_whitelist(str(net_obj)):
+            req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 与系统安全白名单存在冲突，严禁封禁！"}, status=400)
+            return
 
         cfg = load_config()
         whitelist = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
@@ -391,23 +408,18 @@ def handle_ban_subnet(req, parsed, req_data):
             try:
                 if "/" in w_ip_str:
                     w_net = ipaddress.ip_network(w_ip_str, strict=False)
-                    if net_obj.overlaps(w_net):
+                    if net_obj.version == w_net.version and net_obj.overlaps(w_net):
                         req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 与系统安全白名单网段 [{w_ip_str}] 存在重叠冲突，严禁封禁！"}, status=400)
                         return
                 else:
                     w_addr = ipaddress.ip_address(w_ip_str)
-                    if w_addr in net_obj:
+                    if w_addr.version == net_obj.version and w_addr in net_obj:
                         req._send_json({"success": False, "msg": f"操作已阻断：目标网段 [{net_obj}] 包含了系统安全白名单 IP [{w_ip_str}]，严禁封禁！"}, status=400)
                         return
             except Exception:
                 pass
 
-        # 下发网段级黑洞路由与防火墙拦截 (兼容 IPv4 与 IPv6 网段)
-        is_v6 = net_obj.version == 6
-        fw_tool = "ip6tables" if is_v6 else "iptables"
-        route_cmd = ["ip", "-6", "route", "add", "blackhole", str(net_obj)] if is_v6 else ["ip", "route", "add", "blackhole", str(net_obj)]
-        subprocess.run(route_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run([fw_tool, "-I", "INPUT", "-s", str(net_obj), "-j", "DROP"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 统一交由升级后原生兼容 CIDR 的 ban_ip 下发（自动挂载在白名单集合之后并入库，支持一键解封）
         ban_ip(str(net_obj), reason=reason, category="subnet_ban", level="极高危")
         invalidate_blacklist_cache()
         req._send_json({"success": True, "msg": f"已成功对 {net_obj} 整个网段实施内核黑洞阻断与拦截！"})
@@ -420,47 +432,46 @@ def handle_ban_subnet(req, parsed, req_data):
 def handle_batch_ban_all(req, parsed, req_data):
     cfg = load_config()
     whitelist = cfg.get("whitelist", [])
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT DISTINCT ip, port FROM port_access_logs WHERE (action = 'PROBE' OR action = 'WATCH' OR action = 'INTERCEPTED') AND ip NOT IN ('127.0.0.1', '::1', '0.0.0.0')")
-    rows = c.fetchall()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT ip, port FROM port_access_logs WHERE (action = 'PROBE' OR action = 'WATCH' OR action = 'INTERCEPTED') AND ip NOT IN ('127.0.0.1', '::1', '0.0.0.0')")
+        rows = c.fetchall()
 
-    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    now_ts = int(time.time())
-    auto_clean_days = int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30)
-    ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        now_ts = int(time.time())
+        auto_clean_days = int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30)
+        ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
 
-    count = 0
-    for ip, port in rows:
-        v = validate_ip(ip)
-        if not v or ip_in_whitelist(v, whitelist):
-            continue
-        c.execute("SELECT ip FROM blacklist WHERE ip = ?", (v,))
-        if c.fetchone():
-            continue
-        cached_geo = _GEO_CACHE.get(v, {})
-        country = cached_geo.get("country", "公网探测")
+        count = 0
+        for ip, port in rows:
+            v = validate_ip(ip)
+            if not v or ip_in_whitelist(v, whitelist):
+                continue
+            c.execute("SELECT ip FROM blacklist WHERE ip = ?", (v,))
+            if c.fetchone():
+                continue
+            cached_geo = _GEO_CACHE.get(v, {})
+            country = cached_geo.get("country", "公网探测")
 
-        # 统一通过底层高性能 ipset + 黑洞路由下发阻断，杜绝逐条iptables规则线性膨胀
-        if cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True):
-            ban_ip_firewall(v, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None))
+            if (cfg.get("ban_action_iptables", True) or cfg.get("ban_action_blackhole", True)) and not cfg.get("defense_paused", False):
+                ban_ip_firewall(v, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None), cfg=cfg)
 
-        c.execute("""
-        INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
-        VALUES (?, ?, ?, '高危', ?, ?, ?)
-        """, (v, f"未开放端口扫描探测 (端口 {port})", country, now_str, now_ts, ban_expire))
+            c.execute("""
+            INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire)
+            VALUES (?, ?, ?, '高危', ?, ?, ?)
+            """, (v, f"未开放端口扫描探测 (端口 {port})", country, now_str, now_ts, ban_expire))
 
-        c.execute("""
-        INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-        VALUES (?, ?, 'TCP', '多端口扫描探测', 'scan', '高危', ?, '', '', '', ?, ?, 'BANNED')
-        """, (v, port, country, now_str, now_ts))
+            c.execute("""
+            INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
+            VALUES (?, ?, 'TCP', '多端口扫描探测', 'scan', '高危', ?, '', '', '', ?, ?, 'BANNED')
+            """, (v, port, country, now_str, now_ts))
 
-        if not cached_geo:
-            _EXECUTOR.submit(resolve_ip_geo, v)
-        count += 1
+            if not cached_geo:
+                _EXECUTOR.submit(resolve_ip_geo, v)
+            count += 1
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    invalidate_blacklist_cache()
     req._send_json({"success": True, "count": count, "msg": f"已成功将 {count} 个恶意探测 IP 批量加入黑名单并下发内核阻断。"})
     return
 
@@ -482,64 +493,63 @@ def handle_blacklist_import(req, parsed, req_data):
         req._send_json({"success": False, "msg": "未解析到有效的 IP 数据"}, status=400)
         return
 
-    conn = get_db()
-    c = conn.cursor()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
 
-    if mode == "replace":
-        c.execute("SELECT ip FROM blacklist")
-        for (old_ip,) in c.fetchall():
-            v_old = validate_ip(old_ip)
-            if v_old:
-                unban_ip_core(v_old, status_event="REPLACED")
-        c.execute("DELETE FROM blacklist")
+        if mode == "replace":
+            c.execute("SELECT ip FROM blacklist")
+            for (old_ip,) in c.fetchall():
+                v_old = validate_ip(old_ip)
+                if v_old:
+                    unban_ip_core(v_old, status_event="REPLACED")
+            c.execute("DELETE FROM blacklist")
+            conn.commit()
+
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        now_ts = int(time.time())
+
+        cfg_import = load_config()
+        auto_clean_days = int(cfg_import.get("auto_clean_days", 30) or 30)
+        ban_expire = now_ts + (auto_clean_days * 86400) if auto_clean_days > 0 else None
+        node_name = cfg_import.get("node_name", "本机") or "本机"
+
+        success_count = 0
+        for item in parsed_items:
+            if isinstance(item, dict):
+                ip = str(item.get("ip", "")).strip()
+                reason = str(item.get("reason", "批量导入封禁")).strip()
+                country = str(item.get("country", "手动导入")).strip()
+                level = str(item.get("level", "极高危")).strip()
+                ban_time = str(item.get("ban_time", now_str)).strip()
+            elif isinstance(item, str):
+                parts = item.strip().split(maxsplit=1)
+                ip = parts[0].strip() if parts else ""
+                reason = parts[1].strip() if len(parts) > 1 else "批量导入封禁"
+                country = "手动导入"
+                level = "极高危"
+                ban_time = now_str
+            else:
+                continue
+
+            if not ip or len(ip) < 3:
+                continue
+            valid_ip = validate_ip(ip)
+            if not valid_ip or ip_in_whitelist(valid_ip):
+                continue
+            ip = valid_ip
+
+            if (cfg_import.get("ban_action_iptables", True) or cfg_import.get("ban_action_blackhole", True)) and not cfg_import.get("defense_paused", False):
+                ban_ip_firewall(ip, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None), cfg=cfg_import)
+
+            c.execute("""
+            INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ip, reason, country, level, ban_time, now_ts, ban_expire, f"批量导入 ({node_name})"))
+            success_count += 1
+
         conn.commit()
 
-    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    now_ts = int(time.time())
-
-    cfg_import = load_config()
-    auto_clean_days = int(cfg_import.get("auto_clean_days", 30) or 30)
-    ban_expire = now_ts + (auto_clean_days * 86400) if auto_clean_days > 0 else None
-    node_name = cfg_import.get("node_name", "本机") or "本机"
-
-    success_count = 0
-    for item in parsed_items:
-        if isinstance(item, dict):
-            ip = str(item.get("ip", "")).strip()
-            reason = str(item.get("reason", "批量导入封禁")).strip()
-            country = str(item.get("country", "手动导入")).strip()
-            level = str(item.get("level", "极高危")).strip()
-            ban_time = str(item.get("ban_time", now_str)).strip()
-        elif isinstance(item, str):
-            parts = item.strip().split(maxsplit=1)
-            ip = parts[0].strip() if parts else ""
-            reason = parts[1].strip() if len(parts) > 1 else "批量导入封禁"
-            country = "手动导入"
-            level = "极高危"
-            ban_time = now_str
-        else:
-            continue
-
-        if not ip or len(ip) < 7:
-            continue
-        valid_ip = validate_ip(ip)
-        if not valid_ip or ip_in_whitelist(valid_ip):
-            continue
-        ip = valid_ip
-
-        # 统一使用 ipset + 黑洞路由高速阻断
-        if cfg_import.get("ban_action_iptables", True) or cfg_import.get("ban_action_blackhole", True):
-            ban_ip_firewall(ip, expire_seconds=(auto_clean_days * 86400 if auto_clean_days > 0 else None))
-
-        c.execute("""
-        INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ip, reason, country, level, ban_time, now_ts, ban_expire, f"批量导入 ({node_name})"))
-        success_count += 1
-
-    conn.commit()
-    conn.close()
-
+    invalidate_blacklist_cache()
     req._send_json({"success": True, "msg": f"黑名单导入成功！共写入 {success_count} 个拦截目标", "count": success_count})
     return
 
@@ -560,15 +570,15 @@ def handle_whitelist_add(req, parsed, req_data):
 
     # 检查该 IP 是否存在于黑名单库中
     was_banned = False
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT ip FROM blacklist WHERE ip = ?", (ip,))
-    if c.fetchone():
-        was_banned = True
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("SELECT ip FROM blacklist WHERE ip = ?", (ip,))
+        if c.fetchone():
+            was_banned = True
 
     # 自动联动从内核防火墙、黑洞路由与黑名单库中解封
     unban_ip_core(ip, status_event="WHITELIST")
+    invalidate_blacklist_cache()
 
     cfg = load_config()
     node_name = cfg.get("node_name", "本机") or "本机"
@@ -592,12 +602,18 @@ def handle_whitelist_add(req, parsed, req_data):
 
 def handle_whitelist_delete(req, parsed, req_data):
     ip = req_data.get("ip", "").strip()
+    if ip in ("127.0.0.1", "::1"):
+        req._send_json({"success": False, "msg": "核心回环地址受防自锁保护，禁止移除"}, status=400)
+        return
     cfg = load_config()
-    cfg["whitelist"] = [w for w in cfg.get("whitelist", []) if (w.get("ip") if isinstance(w, dict) else w) != ip]
+    new_whitelist = [w for w in cfg.get("whitelist", []) if (w.get("ip") if isinstance(w, dict) else w) != ip]
+    cfg["whitelist"] = new_whitelist
     save_config(cfg)
+    # 同步刷新内核 portguard_whitelist 集合，剔除已移除的白名单项
+    auto_heal_whitelist_ips(new_whitelist)
     # 广播至集群协同节点
     broadcast_cluster_whitelist("delete", ip)
-    req._send_json({"success": True, "msg": f"已移除白名单: {ip}"})
+    req._send_json({"success": True, "msg": f"已移除白名单并同步更新内核规则: {ip}"})
     return
 
 

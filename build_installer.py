@@ -313,7 +313,7 @@ chmod 755 "${INSTALL_DIR}/uninstall.sh" "${INSTALL_DIR}/update.sh" 2>/dev/null |
 chmod 644 "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" "${INSTALL_DIR}/chart.min.js" 2>/dev/null || true
 
 # 验证核心程序文件解包完整性
-if ! python3 -m py_compile "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" "${INSTALL_DIR}/controllers"/*.py "${INSTALL_DIR}/geo"/*.py "${INSTALL_DIR}/collectors"/*.py >/dev/null 2>&1; then
+if ! python3 -m py_compile "${INSTALL_DIR}/web_server.py" "${INSTALL_DIR}/sentry_daemon.py" "${INSTALL_DIR}/core"/*.py "${INSTALL_DIR}/controllers"/*.py "${INSTALL_DIR}/geo"/*.py "${INSTALL_DIR}/collectors"/*.py >/dev/null 2>&1; then
     echo -e "${RED}[ERROR] 解包的核心 Python 代码校验失败，请检查系统 gzip/base64 支持！${NC}"
     exit 1
 fi

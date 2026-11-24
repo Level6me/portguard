@@ -1101,6 +1101,84 @@ class OptimizationAndHardeningTest(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_rfc1918_172_public_ranges_not_treated_as_private(self):
+        from sentry_daemon import _is_private_or_internal_ip
+        self.assertFalse(_is_private_or_internal_ip("172.2.1.1"))
+        self.assertFalse(_is_private_or_internal_ip("172.15.255.254"))
+        self.assertFalse(_is_private_or_internal_ip("172.32.0.1"))
+        self.assertFalse(_is_private_or_internal_ip("172.200.10.20"))
+        self.assertTrue(_is_private_or_internal_ip("172.16.0.1"))
+        self.assertTrue(_is_private_or_internal_ip("172.31.255.254"))
+        self.assertTrue(_is_private_or_internal_ip("127.0.0.1"))
+
+    def test_cidr_subnet_ban_and_unban_via_blacknet(self):
+        from core.firewall import ban_ip_firewall, unban_ip_core, invalidate_whitelist_cache
+        from sentry_daemon import get_db, init_db
+        init_db()
+        subnet = "203.0.113.0/24"
+        conn = get_db()
+        conn.execute(
+            "INSERT OR REPLACE INTO blacklist (ip, reason, ban_time, timestamp) VALUES (?, ?, ?, ?)",
+            (subnet, "测试网段封禁", "2026-11-24 12:00:00", 1795492800),
+        )
+        conn.commit()
+        conn.close()
+
+        try:
+            with mock.patch("core.firewall.is_ipset_available", return_value=True), \
+                 mock.patch("core.firewall._ensure_ipset_timeout_set", return_value=True), \
+                 mock.patch("core.firewall.load_config", return_value={"ban_action_iptables": True, "ban_action_blackhole": False, "whitelist": []}), \
+                 mock.patch("subprocess.run") as mock_sub:
+                invalidate_whitelist_cache()
+                ban_ip_firewall(subnet)
+                called_cmds = [c.args[0] for c in mock_sub.call_args_list if c.args]
+                self.assertTrue(any(cmd[:3] == ["ipset", "add", "portguard_blacknet_v4"] and subnet in cmd for cmd in called_cmds))
+                self.assertFalse(any("blackhole" in cmd for cmd in called_cmds))
+
+                res = unban_ip_core(subnet)
+                self.assertTrue(res)
+        finally:
+            invalidate_whitelist_cache()
+
+        conn2 = get_db()
+        row = conn2.execute("SELECT ip FROM blacklist WHERE ip = ?", (subnet,)).fetchone()
+        conn2.close()
+        self.assertIsNone(row)
+
+    def test_ipv6_extension_header_tcp_syn_parsed(self):
+        import socket
+        import struct
+        from collectors.packet import parse_packet
+        eth = b"\x00\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa\xbb\x86\xdd"
+        src6 = socket.inet_pton(socket.AF_INET6, "2001:db8::10")
+        dst6 = socket.inet_pton(socket.AF_INET6, "2001:db8::20")
+        # Next Header = 0 (Hop-by-Hop, 8 bytes), followed by TCP (Next Header = 6, 20 bytes)
+        ext_hbh = struct.pack("!BB6s", 6, 0, b"\x00" * 6)
+        tcp_hdr = struct.pack("!HHIIBBHHH", 54321, 3306, 1, 0, 0x50, 0x02, 65535, 0, 0)
+        ipv6_hdr = struct.pack("!IHBB", (6 << 28), len(ext_hbh) + len(tcp_hdr), 0, 64) + src6 + dst6
+        parsed = parse_packet(eth + ipv6_hdr + ext_hbh + tcp_hdr)
+        self.assertEqual(parsed, ("2001:db8::10", 3306, "TCP"))
+        self.assertEqual(parsed.dst_ip, "2001:db8::20")
+
+    def test_proc_tcp6_dual_stack_and_native_endpoint_parse(self):
+        import socket
+        import struct
+        from sentry_daemon import _parse_proc_tcp_endpoint
+        for raw_ip, expected_ip in [("::ffff:203.0.113.9", "203.0.113.9"), ("2001:db8::abcd", "2001:db8::abcd")]:
+            words = struct.unpack("=IIII", socket.inet_pton(socket.AF_INET6, raw_ip))
+            hex_ep = "{:08X}{:08X}{:08X}{:08X}:{:04X}".format(*words, 4444)
+            ip_out, port_out = _parse_proc_tcp_endpoint(hex_ep, is_v6=True)
+            self.assertEqual(ip_out, expected_ip)
+            self.assertEqual(port_out, 4444)
+
+    def test_load_config_returns_deepcopy_preventing_cache_pollution(self):
+        from core.db import load_config
+        cfg1 = load_config()
+        orig_len = len(cfg1.get("whitelist", []))
+        cfg1.setdefault("whitelist", []).append({"ip": "192.0.2.123", "remark": "污染测试"})
+        cfg2 = load_config()
+        self.assertEqual(len(cfg2.get("whitelist", [])), orig_len)
+
 
 if __name__ == "__main__":
     unittest.main()

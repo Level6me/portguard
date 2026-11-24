@@ -421,6 +421,7 @@ class FeishuWsManager:
     def stop(self):
         self.is_running = False
         self.is_connected = False
+        old_thread = self.thread
         if self.client:
             try:
                 if hasattr(self.client, "stop"):
@@ -432,38 +433,99 @@ class FeishuWsManager:
                             asyncio.run(self.client._disconnect())
                         else:
                             loop = asyncio.new_event_loop()
-                            loop.run_until_complete(self.client._disconnect())
-                            loop.close()
+                            try:
+                                loop.run_until_complete(self.client._disconnect())
+                            finally:
+                                loop.close()
             except Exception:
                 pass
             self.client = None
+        if old_thread and old_thread.is_alive() and old_thread is not threading.current_thread():
+            try:
+                old_thread.join(timeout=1.5)
+            except Exception:
+                pass
         self.thread = None
 
     def _run_ws(self):
         """长连接后台工作线程"""
         new_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(new_loop)
-
-        # 优先使用 PortGuard 内置原生 WebSocket 客户端 (兼容 Python 3.6+，零外部依赖包)
         try:
-            from core.ws_client import FeishuWebSocketClient
-            
-            def _on_event(event_dict):
+            # 优先使用 PortGuard 内置原生 WebSocket 客户端 (兼容 Python 3.6+，零外部依赖包)
+            try:
+                from core.ws_client import FeishuWebSocketClient
+                
+                def _on_event(event_dict):
+                    try:
+                        self.last_active_ts = time.time()
+                        self.is_connected = True
+                        header = event_dict.get("header", {})
+                        evt_type = header.get("event_type")
+                        if evt_type != "im.message.receive_v1":
+                            return
+                        
+                        event = event_dict.get("event", {})
+                        msg = event.get("message", {})
+                        chat_id = msg.get("chat_id", "")
+                        content_str = msg.get("content", "{}")
+                        sender = event.get("sender", {})
+                        sender_id = sender.get("sender_id", {})
+                        open_id = sender_id.get("open_id", "")
+
+                        try:
+                            c_dict = json.loads(content_str)
+                            raw_text = c_dict.get("text", "").strip()
+                        except Exception:
+                            raw_text = content_str.strip()
+
+                        self._handle_auto_bind_and_command(chat_id, open_id, raw_text)
+                    except Exception as e:
+                        print(f"[Feishu WS] 处理消息异常: {e}")
+
+                ws_cli = FeishuWebSocketClient(
+                    self.app_id,
+                    self.app_secret,
+                    message_callback=_on_event,
+                    loop=new_loop
+                )
+                self.client = ws_cli
+                print(f"[Feishu WS] 🚀 正在启动 PortGuard 原生飞书长连接网关 (AppID: {self.app_id})...")
+                self.is_connected = True
+                new_loop.run_until_complete(ws_cli.start())
+                return
+            except Exception as native_e:
+                print(f"[Feishu WS] 原生长连接启动受阻 ({native_e})，尝试回退检查 lark_oapi...")
+
+            # 回退至 lark_oapi 方案
+            try:
+                import lark_oapi as lark
+                from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
+            except ImportError:
+                self.last_error = "未安装 WebSocket 长连接支持库"
+                self.is_running = False
+                print(f"[Feishu WS] 错误: {self.last_error}")
+                return
+
+            def _on_message_receive(data: P2ImMessageReceiveV1):
+                """处理飞书收到的交互消息"""
                 try:
                     self.last_active_ts = time.time()
                     self.is_connected = True
-                    header = event_dict.get("header", {})
-                    evt_type = header.get("event_type")
-                    if evt_type != "im.message.receive_v1":
+                    event = getattr(data, "event", None)
+                    if not event:
                         return
-                    
-                    event = event_dict.get("event", {})
-                    msg = event.get("message", {})
-                    chat_id = msg.get("chat_id", "")
-                    content_str = msg.get("content", "{}")
-                    sender = event.get("sender", {})
-                    sender_id = sender.get("sender_id", {})
-                    open_id = sender_id.get("open_id", "")
+
+                    msg = getattr(event, "message", None)
+                    if not msg:
+                        return
+
+                    chat_id = getattr(msg, "chat_id", "")
+                    content_str = getattr(msg, "content", "{}")
+                    sender = getattr(event, "sender", None)
+                    open_id = ""
+                    if sender and getattr(sender, "sender_id", None):
+                        open_id = getattr(sender.sender_id, "open_id", "")
 
                     try:
                         c_dict = json.loads(content_str)
@@ -471,92 +533,47 @@ class FeishuWsManager:
                     except Exception:
                         raw_text = content_str.strip()
 
+                    # 自动纳管绑定接收群
                     self._handle_auto_bind_and_command(chat_id, open_id, raw_text)
                 except Exception as e:
                     print(f"[Feishu WS] 处理消息异常: {e}")
 
-            ws_cli = FeishuWebSocketClient(
+            # 构建事件分发处理器
+            event_handler = lark.EventDispatcherHandler.builder("", "") \
+                .register_p2_im_message_receive_v1(_on_message_receive) \
+                .build()
+
+            from lark_oapi.ws import client as ws_client_mod
+            ws_cli = ws_client_mod.Client(
                 self.app_id,
                 self.app_secret,
-                message_callback=_on_event,
-                loop=new_loop
+                event_handler=event_handler,
+                log_level=lark.LogLevel.WARNING,
+                auto_reconnect=True
             )
             self.client = ws_cli
-            print(f"[Feishu WS] 🚀 正在启动 PortGuard 原生飞书长连接网关 (AppID: {self.app_id})...")
-            self.is_connected = True
-            new_loop.run_until_complete(ws_cli.start())
-            return
-        except Exception as native_e:
-            print(f"[Feishu WS] 原生长连接启动受阻 ({native_e})，尝试回退检查 lark_oapi...")
+            ws_client_mod.loop = new_loop
 
-        # 回退至 lark_oapi 方案
-        try:
-            import lark_oapi as lark
-            from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
-        except ImportError:
-            self.last_error = "未安装 WebSocket 长连接支持库"
-            self.is_running = False
-            print(f"[Feishu WS] 错误: {self.last_error}")
-            return
-
-        def _on_message_receive(data: P2ImMessageReceiveV1):
-            """处理飞书收到的交互消息"""
             try:
-                self.last_active_ts = time.time()
+                print(f"[Feishu WS] 🚀 正在连接飞书长连接网关 (AppID: {self.app_id})...")
                 self.is_connected = True
-                event = getattr(data, "event", None)
-                if not event:
-                    return
-
-                msg = getattr(event, "message", None)
-                if not msg:
-                    return
-
-                chat_id = getattr(msg, "chat_id", "")
-                content_str = getattr(msg, "content", "{}")
-                sender = getattr(event, "sender", None)
-                open_id = ""
-                if sender and getattr(sender, "sender_id", None):
-                    open_id = getattr(sender.sender_id, "open_id", "")
-
-                try:
-                    c_dict = json.loads(content_str)
-                    raw_text = c_dict.get("text", "").strip()
-                except Exception:
-                    raw_text = content_str.strip()
-
-                # 自动纳管绑定接收群
-                self._handle_auto_bind_and_command(chat_id, open_id, raw_text)
+                ws_cli.start()
             except Exception as e:
-                print(f"[Feishu WS] 处理消息异常: {e}")
-
-        # 构建事件分发处理器
-        event_handler = lark.EventDispatcherHandler.builder("", "") \
-            .register_p2_im_message_receive_v1(_on_message_receive) \
-            .build()
-
-        from lark_oapi.ws import client as ws_client_mod
-        ws_cli = ws_client_mod.Client(
-            self.app_id,
-            self.app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.WARNING,
-            auto_reconnect=True
-        )
-        self.client = ws_cli
-        ws_client_mod.loop = new_loop
-
-        try:
-            print(f"[Feishu WS] 🚀 正在连接飞书长连接网关 (AppID: {self.app_id})...")
-            self.is_connected = True
-            ws_cli.start()
-        except Exception as e:
-            self.last_error = str(e)
-            self.is_connected = False
-            print(f"[Feishu WS] 长连接异常退出: {e}")
+                self.last_error = str(e)
+                self.is_connected = False
+                print(f"[Feishu WS] 长连接异常退出: {e}")
         finally:
             self.is_running = False
             self.is_connected = False
+            try:
+                pending = asyncio.all_tasks(new_loop) if hasattr(asyncio, "all_tasks") else asyncio.Task.all_tasks(new_loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                new_loop.close()
+            except Exception:
+                pass
 
     def _handle_auto_bind_and_command(self, chat_id, open_id, text):
         """自动绑定群聊与执行命令指令"""
@@ -618,13 +635,31 @@ class FeishuWsManager:
         op = parts[0].lower()
         args = parts[1:]
 
+        known_ops = {
+            "/status", "状态", "status", "/s",
+            "/ban", "封禁", "拉黑",
+            "/unban", "解封",
+            "/white", "/wl", "加白", "加白名单",
+            "/unwhite", "/delwhite", "减白", "删白",
+            "/whitelist", "白名单",
+            "/ports", "端口", "ports",
+            "/port", "/addport", "加端口", "放行",
+            "/delport", "删端口",
+            "/pause", "暂停", "暂停防御",
+            "/resume", "恢复", "恢复防御",
+            "/check", "查", "查ip",
+            "/help", "帮助", "help", "?", "？",
+        }
+
         if not admin_open_ids or not open_id or open_id not in admin_open_ids:
-            send_feishu_app_message(
-                self.app_id,
-                self.app_secret,
-                target_id,
-                text_content=f"⛔ 权限不足：仅授权管理员可执行 PortGuard 控制指令（请将您的 OpenID `{open_id or '未知'}` 配置至 feishu_bot.admin_open_ids）。"
-            )
+            # 仅当尝试触发控制指令或以 / 开头时才提示权限不足，避免群内普通闲聊被刷屏
+            if op.startswith("/") or op in known_ops or "@_user_" in text:
+                send_feishu_app_message(
+                    self.app_id,
+                    self.app_secret,
+                    target_id,
+                    text_content="⛔ 权限不足：仅授权管理员可执行 PortGuard 控制指令。"
+                )
             return
 
         # 1. 状态查看: /status, 状态, /s
@@ -692,13 +727,22 @@ class FeishuWsManager:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content="💡 使用方法: /unban <IP地址>")
                 return
             ip = args[0].strip()
-            from sentry_daemon import validate_ip, unban_ip_core
+            from sentry_daemon import validate_ip, unban_ip_core, broadcast_cluster_unban
             v_ip = validate_ip(ip)
             if not v_ip:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 地址: {ip}")
                 return
             try:
                 unban_ip_core(v_ip)
+                try:
+                    broadcast_cluster_unban(v_ip)
+                except Exception:
+                    pass
+                try:
+                    from controllers.base import invalidate_blacklist_cache
+                    invalidate_blacklist_cache()
+                except Exception:
+                    pass
                 card = build_feishu_card(
                     "✅ PortGuard 解封成功",
                     f"已将目标 IP `{v_ip}` 从内核 IPSet 防火墙与黑洞路由中彻底解封！",
@@ -721,17 +765,8 @@ class FeishuWsManager:
                 return
             ip = args[0].strip()
             remark = " ".join(args[1:]).strip() if len(args) > 1 else "飞书快捷加白"
-            from sentry_daemon import validate_ip, unban_ip_core, broadcast_cluster_whitelist
-            is_cidr = "/" in ip
-            if is_cidr:
-                import ipaddress
-                try:
-                    ipaddress.ip_network(ip, strict=False)
-                    v_ip = ip
-                except Exception:
-                    v_ip = None
-            else:
-                v_ip = validate_ip(ip)
+            from sentry_daemon import validate_ip, unban_ip_core, broadcast_cluster_whitelist, auto_heal_whitelist_ips
+            v_ip = validate_ip(ip)
             if not v_ip:
                 send_feishu_app_message(self.app_id, self.app_secret, target_id, text_content=f"❌ 无效的 IP 或子网: {ip}")
                 return
@@ -753,6 +788,10 @@ class FeishuWsManager:
                 cfg["whitelist"] = current_wl
                 save_config(cfg)
                 unban_ip_core(v_ip, status_event="WHITELIST")
+                try:
+                    auto_heal_whitelist_ips(current_wl)
+                except Exception:
+                    pass
                 broadcast_cluster_whitelist("add", v_ip, remark)
                 card = build_feishu_card(
                     "🛡️ PortGuard 添加白名单成功",
@@ -786,9 +825,15 @@ class FeishuWsManager:
                 return
             cfg["whitelist"] = new_wl
             save_config(cfg)
+            try:
+                from sentry_daemon import auto_heal_whitelist_ips, broadcast_cluster_whitelist
+                auto_heal_whitelist_ips(new_wl)
+                broadcast_cluster_whitelist("delete", ip)
+            except Exception:
+                pass
             card = build_feishu_card(
                 "🗑️ PortGuard 移除白名单成功",
-                f"已将目标 `{ip}` 从放行白名单中移除，后续异常访问将正常受到防护审计。",
+                f"已将目标 `{ip}` 从放行白名单与内核优先集合中同步移除，后续异常访问将正常受到防护审计。",
                 fields=[("🖥️ 操作节点", node_name), ("🎯 移除目标", ip), ("⏰ 时间", time.strftime("%Y-%m-%d %H:%M:%S"))],
                 color="orange"
             )

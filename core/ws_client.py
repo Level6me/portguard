@@ -160,8 +160,18 @@ class FeishuWebSocketClient:
                 self.ws = None
 
     def stop(self):
-        """停止长连接"""
+        """停止长连接并安全唤醒关闭底层 WebSocket 句柄"""
         self.is_running = False
         self.is_connected = False
         if self._ping_task:
-            self._ping_task.cancel()
+            try:
+                self._ping_task.cancel()
+            except Exception:
+                pass
+        ws_ref = self.ws
+        loop_ref = self.loop
+        if ws_ref is not None and loop_ref is not None and loop_ref.is_running():
+            try:
+                loop_ref.call_soon_threadsafe(lambda: asyncio.ensure_future(ws_ref.close(), loop=loop_ref))
+            except Exception:
+                pass

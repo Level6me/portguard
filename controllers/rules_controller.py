@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from contextlib import closing
 import json
 import time
 import re
@@ -6,9 +7,28 @@ from urllib.parse import parse_qs
 from sentry_daemon import (
     get_db, load_config, save_config, DEFAULT_CONFIG, PORT_DESCRIPTIONS,
     DEFAULT_HTTP_TRAPS, get_http_traps, normalize_trap_item, trap_instance,
-    get_all_business_ports_info
+    get_all_business_ports_info, invalidate_system_ports_cache
 )
 from controllers.base import parse_loose_json_or_lines
+
+_VALID_LEVELS = ("极高危", "高危", "中危", "低危")
+_VALID_HTTP_MATCH_TYPES = ("path_keyword", "ua_keyword", "status_rate", "status_code", "survey_engine", "direct_ip")
+
+def _clean_level(val, default="高危"):
+    s = str(val or "").strip()
+    return s if s in _VALID_LEVELS else default
+
+def _clean_category(val, default="custom"):
+    s = re.sub(r"[^a-zA-Z0-9_\-]", "", str(val or "").strip())[:32]
+    return s or default
+
+def _clean_match_type(val):
+    s = str(val or "").strip()
+    return s if s in _VALID_HTTP_MATCH_TYPES else "path_keyword"
+
+def _clean_rule_id(val, fallback):
+    s = re.sub(r"[^a-zA-Z0-9_\-]", "", str(val or "").strip())[:64]
+    return s or fallback
 
 
 def _validate_http_trap_pattern(mtype, pattern):
@@ -208,11 +228,10 @@ def handle_traps_toggle(req, parsed, req_data):
 def handle_http_traps_toggle(req, parsed, req_data):
     rule_id = req_data.get("id")
     enabled = 1 if req_data.get("enabled") else 0
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("UPDATE http_traps SET enabled = ? WHERE id = ? OR rule_id = ?", (enabled, rule_id, str(rule_id)))
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("UPDATE http_traps SET enabled = ? WHERE id = ? OR rule_id = ?", (enabled, rule_id, str(rule_id)))
+        conn.commit()
     req._send_json({"success": True, "msg": f"请求特征策略已{'启用' if enabled else '停用'}"})
     return
 
@@ -220,13 +239,16 @@ def handle_http_traps_toggle(req, parsed, req_data):
 
 def handle_http_traps_add(req, parsed, req_data):
     name = str(req_data.get("name", "")).strip()
-    mtype = str(req_data.get("match_type", "path_keyword")).strip()
+    mtype = _clean_match_type(req_data.get("match_type", "path_keyword"))
     pattern = str(req_data.get("pattern", "")).strip()
-    threshold = int(req_data.get("threshold") or 6)
-    window = int(req_data.get("window") or 30)
-    level = str(req_data.get("level", "高危")).strip()
+    try:
+        threshold = max(1, min(10000, int(req_data.get("threshold") or 6)))
+        window = max(1, min(86400, int(req_data.get("window") or 30)))
+    except Exception:
+        threshold, window = 6, 30
+    level = _clean_level(req_data.get("level", "高危"), default="高危")
     desc = str(req_data.get("description", "")).strip()
-    rule_id = "ht_" + str(int(time.time()))
+    rule_id = "ht_" + str(int(time.time() * 1000))
     now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     if not name:
         req._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
@@ -235,14 +257,13 @@ def handle_http_traps_add(req, parsed, req_data):
     if not ok_pat:
         req._send_json({"success": False, "msg": err_pat}, status=400)
         return
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-    INSERT INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, 1, ?, ?)
-    """, (rule_id, name, mtype, pattern, threshold, window, level, desc, now_dt))
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("""
+        INSERT INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, 1, ?, ?)
+        """, (rule_id, name, mtype, pattern, threshold, window, level, desc, now_dt))
+        conn.commit()
     req._send_json({"success": True, "msg": f"已添加请求特征策略: {name}"})
     return
 
@@ -251,11 +272,14 @@ def handle_http_traps_add(req, parsed, req_data):
 def handle_http_traps_edit(req, parsed, req_data):
     rule_db_id = req_data.get("id")
     name = str(req_data.get("name", "")).strip()
-    mtype = str(req_data.get("match_type", "path_keyword")).strip()
+    mtype = _clean_match_type(req_data.get("match_type", "path_keyword"))
     pattern = str(req_data.get("pattern", "")).strip()
-    threshold = int(req_data.get("threshold") or 6)
-    window = int(req_data.get("window") or 30)
-    level = str(req_data.get("level", "高危")).strip()
+    try:
+        threshold = max(1, min(10000, int(req_data.get("threshold") or 6)))
+        window = max(1, min(86400, int(req_data.get("window") or 30)))
+    except Exception:
+        threshold, window = 6, 30
+    level = _clean_level(req_data.get("level", "高危"), default="高危")
     desc = str(req_data.get("description", "")).strip()
     if not name:
         req._send_json({"success": False, "msg": "策略名称不能为空"}, status=400)
@@ -264,14 +288,13 @@ def handle_http_traps_edit(req, parsed, req_data):
     if not ok_pat:
         req._send_json({"success": False, "msg": err_pat}, status=400)
         return
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""
-    UPDATE http_traps SET name = ?, match_type = ?, pattern = ?, threshold = ?, window = ?, level = ?, description = ?
-    WHERE id = ? OR rule_id = ?
-    """, (name, mtype, pattern, threshold, window, level, desc, rule_db_id, str(rule_db_id)))
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("""
+        UPDATE http_traps SET name = ?, match_type = ?, pattern = ?, threshold = ?, window = ?, level = ?, description = ?
+        WHERE id = ? OR rule_id = ?
+        """, (name, mtype, pattern, threshold, window, level, desc, rule_db_id, str(rule_db_id)))
+        conn.commit()
     req._send_json({"success": True, "msg": f"已更新请求特征策略: {name}"})
     return
 
@@ -279,11 +302,10 @@ def handle_http_traps_edit(req, parsed, req_data):
 
 def handle_http_traps_delete(req, parsed, req_data):
     rule_db_id = req_data.get("id")
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("DELETE FROM http_traps WHERE id = ? OR rule_id = ?", (rule_db_id, str(rule_db_id)))
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM http_traps WHERE id = ? OR rule_id = ?", (rule_db_id, str(rule_db_id)))
+        conn.commit()
     req._send_json({"success": True, "msg": "已删除请求特征策略"})
     return
 
@@ -305,37 +327,39 @@ def handle_http_traps_import(req, parsed, req_data):
         req._send_json({"success": False, "msg": "未解析到有效的请求特征策略数据，请检查格式"}, status=400)
         return
 
-    conn = get_db()
-    c = conn.cursor()
-    if mode == "replace":
-        c.execute("DELETE FROM http_traps")
+    with closing(get_db()) as conn:
+        c = conn.cursor()
+        if mode == "replace":
+            c.execute("DELETE FROM http_traps")
 
-    count = 0
-    now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    for idx, item in enumerate(parsed_items):
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name", f"导入策略-{idx+1}")).strip()
-        mtype = str(item.get("match_type", "path_keyword")).strip()
-        pattern = str(item.get("pattern", "")).strip()
-        ok_pat, _ = _validate_http_trap_pattern(mtype, pattern)
-        if not ok_pat:
-            continue
-        threshold = int(item.get("threshold") or 6)
-        window = int(item.get("window") or 30)
-        level = str(item.get("level", "极高危")).strip()
-        desc = str(item.get("description", "")).strip()
-        enabled = 1 if item.get("enabled") is not False else 0
-        rule_id = str(item.get("rule_id") or f"ht_{int(time.time())}_{idx}")
+        count = 0
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        for idx, item in enumerate(parsed_items):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", f"导入策略-{idx+1}")).strip()
+            mtype = _clean_match_type(item.get("match_type", "path_keyword"))
+            pattern = str(item.get("pattern", "")).strip()
+            ok_pat, _ = _validate_http_trap_pattern(mtype, pattern)
+            if not ok_pat:
+                continue
+            try:
+                threshold = max(1, min(10000, int(item.get("threshold") or 6)))
+                window = max(1, min(86400, int(item.get("window") or 30)))
+            except Exception:
+                threshold, window = 6, 30
+            level = _clean_level(item.get("level", "极高危"), default="极高危")
+            desc = str(item.get("description", "")).strip()
+            enabled = 1 if item.get("enabled") is not False else 0
+            rule_id = _clean_rule_id(item.get("rule_id"), f"ht_{int(time.time())}_{idx}")
 
-        c.execute("""
-        INSERT OR REPLACE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, ?, ?, ?)
-        """, (rule_id, name, mtype, pattern, threshold, window, level, enabled, desc, now_dt))
-        count += 1
+            c.execute("""
+            INSERT OR REPLACE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'ban', ?, ?, ?, ?)
+            """, (rule_id, name, mtype, pattern, threshold, window, level, enabled, desc, now_dt))
+            count += 1
 
-    conn.commit()
-    conn.close()
+        conn.commit()
     req._send_json({"success": True, "msg": f"成功{'全量覆盖' if mode=='replace' else '增量导入'} {count} 条请求特征策略"})
     return
 
@@ -432,6 +456,7 @@ def handle_business_ports_add(req, parsed, req_data):
         excluded.remove(port)
         cfg["excluded_business_ports"] = sorted(list(excluded))
     save_config(cfg)
+    invalidate_system_ports_cache()
     req._send_json({"success": True, "msg": f"已成功添加正常业务端口: {port} ({name})"})
     return
 
@@ -480,6 +505,7 @@ def handle_business_ports_edit(req, parsed, req_data):
         excluded.remove(port)
         cfg["excluded_business_ports"] = sorted(list(excluded))
     save_config(cfg)
+    invalidate_system_ports_cache()
     req._send_json({"success": True, "msg": f"已成功更新业务端口: {port}"})
     return
 
@@ -505,6 +531,7 @@ def handle_business_ports_delete(req, parsed, req_data):
     excluded.add(port)
     cfg["excluded_business_ports"] = sorted(list(excluded))
     save_config(cfg)
+    invalidate_system_ports_cache()
     req._send_json({"success": True, "msg": f"已成功删除业务端口: {port}"})
     return
 

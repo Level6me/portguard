@@ -3955,9 +3955,20 @@
         }
     }
 
+    function fetchJsonAuth(url) {
+        return fetch(url).then(res => {
+            if (res.status === 401) {
+                if (typeof checkAuthStatus === 'function') checkAuthStatus();
+                throw new Error('Unauthorized');
+            }
+            return res.json();
+        });
+    }
+
     function fetchData(showNotice = false, isPeriodic = false) {
         // 1. 核心态势指标与图表（高频实时刷新）
-        fetch('/api/stats').then(res => res.json()).then(data => {
+        fetchJsonAuth('/api/stats').then(data => {
+            if (!data || data.error) return;
             if (data.defense_paused !== undefined) {
                 updateDefensePauseUI(data.defense_paused);
             }
@@ -3985,15 +3996,16 @@
 
             renderGeoRank(data.geo_rank || []);
             if (showNotice) showToast('态势数据已同步最新');
-        });
+        }).catch(() => {});
 
         // 2. 实时拦截事件日志（高频实时刷新）
-        fetch('/api/events').then(res => res.json()).then(events => {
+        fetchJsonAuth('/api/events').then(events => {
+            if (!Array.isArray(events)) return;
             allEvents = events;
             document.getElementById('cnt-log-all').innerText = events.length;
             renderLogsTable();
             renderRecentThreats(events.slice(0, 5));
-        });
+        }).catch(() => {});
 
         checkC2CompromiseStatus(false);
 
@@ -4004,36 +4016,41 @@
             } else {
                 fetchWhitelist();
             }
-            fetch('/api/hidden-ips').then(res => res.json()).then(data => {
-                allHiddenIPs = data || [];
+            fetchJsonAuth('/api/hidden-ips').then(data => {
+                if (!Array.isArray(data)) return;
+                allHiddenIPs = data;
                 updateHiddenBadge(allHiddenIPs.length);
             }).catch(() => {});
         }
 
         // 4. 静态规则与配置数据：仅处于诱捕防御页面时拉取
         if (currentTabKey === 'traps') {
-            fetch('/api/traps').then(res => res.json()).then(data => {
+            fetchJsonAuth('/api/traps').then(data => {
+                if (!Array.isArray(data)) return;
                 allTraps = data;
                 if (currentTrapTab === 'port') renderTrapsTable();
-            });
+            }).catch(() => {});
 
-            fetch('/api/business_ports').then(res => res.json()).then(data => {
+            fetchJsonAuth('/api/business_ports').then(data => {
+                if (!Array.isArray(data)) return;
                 allBusinessPorts = data;
                 if (currentTrapTab === 'biz') renderTrapsTable();
             }).catch(() => {});
 
-            fetch('/api/http_traps').then(res => res.json()).then(data => {
+            fetchJsonAuth('/api/http_traps').then(data => {
+                if (!Array.isArray(data)) return;
                 allHttpTraps = data;
                 if (currentTrapTab === 'req') renderTrapsTable();
-            });
+            }).catch(() => {});
         }
 
         if (currentTabKey === 'access-logs') {
-            fetch(`/api/access_logs?type=${currentAccessLogMode}`).then(res => res.json()).then(data => {
+            fetchJsonAuth(`/api/access_logs?type=${currentAccessLogMode}`).then(data => {
+                if (!Array.isArray(data)) return;
                 if (currentAccessLogMode === 'port') allPortLogs = data;
                 else allWebLogs = data;
                 renderAccessLogsTable();
-            });
+            }).catch(() => {});
         }
 
         if (currentTabKey === 'overview' && currentOverviewSubTab === 'analysis') {
@@ -4729,9 +4746,11 @@
         }));
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = `portguard_business_ports_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast('已开始导出业务端口列表 (JSON)', '📤');
     }
 
@@ -4748,9 +4767,11 @@
         }));
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = `portguard_hidden_ips_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast('已开始导出隐藏 IP 列表 (JSON)', '📤');
     }
 
@@ -4849,9 +4870,11 @@
         }));
         const blob = new Blob([JSON.stringify(exportList, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = `portguard_http_traps_${new Date().toISOString().slice(0, 10)}.json`;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast('已开始导出请求特征策略 (JSON)', '📤');
     }
 
@@ -5012,13 +5035,13 @@
                 const proto = (t.protocol || 'tcp').toUpperCase();
                 const level = t.level || '高危';
                 const portDisplay = String(t.port || (t.port_start === t.port_end ? t.port_start : `${t.port_start}-${t.port_end}`));
-                const safePortParam = portDisplay.replace(/'/g, "\\'");
+                const safePortParam = jsEscape(portDisplay);
                 html += `
                 <tr>
-                    <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${proto} / ${portDisplay}</span></td>
+                    <td><span class="tag neutral" style="font-size:12px; font-weight:700;">${escapeHtml(proto)} / ${escapeHtml(portDisplay)}</span></td>
                     <td><span style="color:var(--text); font-size:12px; font-weight:600; line-height:1.4; display:inline-block;">${escapeHtml(desc)}</span>${bizTag}</td>
-                    <td><span class="tag accent">${catName}</span></td>
-                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
+                    <td><span class="tag accent">${escapeHtml(catName)}</span></td>
+                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${escapeHtml(level)}</span></td>
                     <td>${statusTag}</td>
                     <td>
                         <div style="display: flex; gap: 6px; align-items: center;">
@@ -5059,11 +5082,11 @@
 
             let html = '';
             pageList.forEach(b => {
-                const port = b.port;
+                const port = parseInt(b.port, 10) || 0;
                 const name = b.name || `业务端口 (${port})`;
                 const cat = b.category || 'custom';
                 const catName = BIZ_CAT_LABELS[cat] || cat;
-                const originTag = `<span class="tag accent" style="font-size:11px;">🛡️ ${catName}</span>`;
+                const originTag = `<span class="tag accent" style="font-size:11px;">🛡️ ${escapeHtml(catName)}</span>`;
                 
                 let statusBadges = '<span class="tag success" style="font-weight:700;">🟢 正常业务放行</span>';
                 if (b.block_scanner) {
@@ -5087,7 +5110,7 @@
                         <span style="color:var(--text); font-size:13px; font-weight:700; line-height:1.4; display:inline-block;">${escapeHtml(name)}</span>
                         ${b.remark ? `<div style="font-size:11px; color:var(--text-sec); margin-top:2px;">${escapeHtml(b.remark)}</div>` : ''}
                     </td>
-                    <td><span class="tag accent">${catName}</span></td>
+                    <td><span class="tag accent">${escapeHtml(catName)}</span></td>
                     <td>${originTag}</td>
                     <td>${statusBadges}</td>
                     <td>${opHtml}</td>
@@ -5151,18 +5174,19 @@
                     ruleContentHtml += `<div style="font-size:11px; color:var(--text-sec); margin-top:3px;">${escapeHtml(rule.description)}</div>`;
                 }
 
+                const safeRuleId = jsEscape(rule.id || rule.rule_id || '');
                 html += `
                 <tr>
                     <td><span style="font-weight:700; font-size:13px; color:var(--text);">${escapeHtml(rule.name)}</span></td>
-                    <td><span class="tag accent" style="font-weight:700;">${mtypeName}</span></td>
+                    <td><span class="tag accent" style="font-weight:700;">${escapeHtml(mtypeName)}</span></td>
                     <td>${ruleContentHtml}</td>
-                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${level}</span></td>
+                    <td><span class="tag ${level === '极高危' ? 'danger' : 'warning'}">${escapeHtml(level)}</span></td>
                     <td>${statusTag}</td>
                     <td>
                         <div style="display: flex; gap: 6px; align-items: center;">
-                            <button class="action-btn" onclick="openEditHttpTrapModal('${rule.id || rule.rule_id}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
-                            <button class="action-btn ${btnClass}" onclick="toggleHttpTrap('${rule.id || rule.rule_id}', ${!isEnabled})">${btnText}</button>
-                            <button class="action-btn danger" onclick="deleteHttpTrap('${rule.id || rule.rule_id}')" title="删除此规则">🗑️</button>
+                            <button class="action-btn" onclick="openEditHttpTrapModal('${safeRuleId}')" style="background: var(--card-sec); color: var(--text); border: 1px solid var(--border);">✏️ 编辑</button>
+                            <button class="action-btn ${btnClass}" onclick="toggleHttpTrap('${safeRuleId}', ${!isEnabled})">${btnText}</button>
+                            <button class="action-btn danger" onclick="deleteHttpTrap('${safeRuleId}')" title="删除此规则">🗑️</button>
                         </div>
                     </td>
                 </tr>
@@ -5660,9 +5684,11 @@
         }
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = `portguard_${currentAccessLogMode}_access_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast(`已开始下载${currentAccessLogMode === 'port' ? '端口访问' : '443访问'}审计报表 CSV`, '📥');
     }
 
@@ -6182,9 +6208,11 @@
         const jsonStr = JSON.stringify(dataObj, null, 2);
         const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = fileName;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     function exportLogsCSV() {
@@ -6195,9 +6223,11 @@
         });
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        link.href = url;
         link.download = `portguard_audit_logs_${new Date().toISOString().slice(0,10)}.csv`;
         link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         showToast('已开始下载 CSV 审计报表', '📥');
     }
 
@@ -7252,7 +7282,7 @@
                     ${escapeHtml(item.create_time || '--')}
                 </td>
                 <td style="padding: 10px 12px; text-align: right; white-space: nowrap;">
-                    <button class="pill-btn danger" onclick="removeHiddenIP('${escapeHtml(item.ip)}')" style="padding: 4px 10px; font-size: 11px;" title="取消隐藏此 IP 并恢复其在前台全部日志与图表中的显示">
+                    <button class="pill-btn danger" onclick="removeHiddenIP('${jsEscape(item.ip)}')" style="padding: 4px 10px; font-size: 11px;" title="取消隐藏此 IP 并恢复其在前台全部日志与图表中的显示">
                         删除
                     </button>
                 </td>
@@ -7356,10 +7386,10 @@
                 html += `
                 <tr style="border-bottom: 1px solid var(--border-subtle);">
                     <td style="padding: 10px 12px; font-family: monospace; font-weight: 700; color: var(--text);">${escapeHtml(s.filename)}</td>
-                    <td style="padding: 10px 12px; color: var(--text-sec); font-size: 11px;">${escapeHtml(s.backup_time || '--')}</td>
+                    <td style="padding: 10px 12px; color: var(--text-sec); font-size: 11px;">${escapeHtml(s.datetime || s.backup_time || '--')}</td>
                     <td style="padding: 10px 12px; font-size: 11px; color: var(--text-sec); font-family: monospace;">${sizeKb}</td>
                     <td style="padding: 10px 12px; text-align: right;">
-                        <button class="pill-btn danger" onclick="rollbackConfigSnapshot('${escapeHtml(s.filename)}')" style="padding: 4px 10px; font-size: 11px; font-weight: 700;">⏪ 一键回滚此版本</button>
+                        <button class="pill-btn danger" onclick="rollbackConfigSnapshot('${jsEscape(s.filename)}')" style="padding: 4px 10px; font-size: 11px; font-weight: 700;">⏪ 一键回滚此版本</button>
                     </td>
                 </tr>
                 `;
@@ -7626,12 +7656,12 @@
             <div style="background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
                     <div style="display: flex; align-items: center; gap: 6px;">
-                        <span style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--text);">${escapeHtml(item.remote_ip)}:${item.remote_port}</span>
+                        <span style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--text);">${escapeHtml(item.remote_ip)}:${escapeHtml(item.remote_port)}</span>
                         <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: ${badgeBg}; color: ${badgeColor}; font-weight: 600;">${badgeText}</span>
                     </div>
                     <div style="display: flex; gap: 6px;">
-                        <button class="pill-btn" onclick="openAttackerTimelineModal('${escapeHtml(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">🔍 查看画像</button>
-                        <button class="pill-btn accent" onclick="quickAddWhiteFromC2('${escapeHtml(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">✅ 放行白名单</button>
+                        <button class="pill-btn" onclick="openAttackerTimelineModal('${jsEscape(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">🔍 查看画像</button>
+                        <button class="pill-btn accent" onclick="quickAddWhiteFromC2('${jsEscape(item.remote_ip)}')" style="padding: 2px 8px; font-size: 11px;">✅ 放行白名单</button>
                     </div>
                 </div>
                 

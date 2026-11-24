@@ -1,3 +1,4 @@
+from contextlib import closing
 import threading
 import time
 import html
@@ -28,106 +29,78 @@ def handle_stats(req, parsed):
             return
 
     conn = get_db()
-    c = conn.cursor()
-
-    hidden_set = get_hidden_ips_set()
-    has_hidden = len(hidden_set) > 0
-
-    c.execute("SELECT COUNT(*) FROM blacklist")
-    total_banned = c.fetchone()[0] or 0
-    if has_hidden:
-        c.execute("SELECT COUNT(*) FROM blacklist WHERE ip IN (SELECT ip FROM hidden_ips)")
-        total_banned = max(0, total_banned - (c.fetchone()[0] or 0))
-
-    today_prefix = time.strftime("%Y-%m-%d", time.localtime())
     try:
-        today_start_ts = int(time.mktime(time.strptime(today_prefix, "%Y-%m-%d")))
-        c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?", (today_start_ts,))
-        today_events = c.fetchone()[0] or 0
-        if has_hidden:
-            c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND ip IN (SELECT ip FROM hidden_ips)", (today_start_ts,))
-            today_events = max(0, today_events - (c.fetchone()[0] or 0))
-    except Exception:
-        c.execute("SELECT COUNT(*) FROM events WHERE attack_time LIKE ?", (f"{today_prefix}%",))
-        today_events = c.fetchone()[0] or 0
+        c = conn.cursor()
 
-    c.execute("""
-    SELECT port, port_name, COUNT(*) as cnt 
-    FROM events 
-    GROUP BY port 
-    ORDER BY cnt DESC 
-    LIMIT 10
-    """)
-    port_rows = {row["port"]: {"name": row["port_name"], "count": row["cnt"]} for row in c.fetchall()}
-    if has_hidden:
-        c.execute("SELECT port, COUNT(*) as cnt FROM events WHERE ip IN (SELECT ip FROM hidden_ips) GROUP BY port")
-        for row in c.fetchall():
-            p = row["port"]
-            if p in port_rows:
-                port_rows[p]["count"] -= row["cnt"]
-    port_dist = [{"port": p, "name": v["name"], "count": v["count"]} for p, v in port_rows.items() if v["count"] > 0][:5]
+        hidden_set = get_hidden_ips_set()
+        has_hidden = len(hidden_set) > 0
+        hidden_clause = " WHERE ip NOT IN (SELECT ip FROM hidden_ips)" if has_hidden else ""
+        hidden_and = " AND ip NOT IN (SELECT ip FROM hidden_ips)" if has_hidden else ""
 
-    # 国家排行 Top 10
-    c.execute("""
-    SELECT country, COUNT(*) as cnt 
-    FROM events 
-    WHERE country IS NOT NULL AND country != '' 
-      AND country NOT IN ('分析中...', '未知地域', 'Localhost', '本地回环')
-    GROUP BY country 
-    ORDER BY cnt DESC 
-    LIMIT 15
-    """)
-    geo_rows = {row["country"]: row["cnt"] for row in c.fetchall()}
-    if has_hidden:
-        c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE ip IN (SELECT ip FROM hidden_ips) GROUP BY country")
-        for row in c.fetchall():
-            c_name = row["country"]
-            if c_name in geo_rows:
-                geo_rows[c_name] -= row["cnt"]
-    geo_rank = [{"country": k, "count": v} for k, v in geo_rows.items() if v > 0][:10]
+        c.execute("SELECT COUNT(*) FROM blacklist" + hidden_clause)
+        total_banned = c.fetchone()[0] or 0
 
-    # 24小时趋势优化：单次聚合查询，避免循环执行 24 次独立 SQL
-    labels = []
-    full_labels = []
-    data_points = []
-    now_ts = int(time.time())
-    start_24h = now_ts - 24 * 3600
-    c.execute("""
-        SELECT ((timestamp - ?) / 3600) as slot, COUNT(*) as cnt 
+        today_prefix = time.strftime("%Y-%m-%d", time.localtime())
+        try:
+            today_start_ts = int(time.mktime(time.strptime(today_prefix, "%Y-%m-%d")))
+            c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ?" + hidden_and, (today_start_ts,))
+            today_events = c.fetchone()[0] or 0
+        except Exception:
+            c.execute("SELECT COUNT(*) FROM events WHERE attack_time LIKE ?" + hidden_and, (f"{today_prefix}%",))
+            today_events = c.fetchone()[0] or 0
+
+        c.execute(f"""
+        SELECT port, MAX(port_name) as port_name, COUNT(*) as cnt 
         FROM events 
-        WHERE timestamp >= ? AND timestamp < ?
-        GROUP BY slot
-    """, (start_24h, start_24h, now_ts))
-    slot_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
-    if has_hidden:
-        c.execute("""
+        {hidden_clause}
+        GROUP BY port 
+        ORDER BY cnt DESC 
+        LIMIT 5
+        """)
+        port_dist = [{"port": row["port"], "name": row["port_name"], "count": row["cnt"]} for row in c.fetchall() if row["cnt"] > 0]
+
+        # 国家排行 Top 10（直接在 SQL 过滤隐藏 IP，杜绝先截断后扣减引发漏项与顺序错乱）
+        c.execute(f"""
+        SELECT country, COUNT(*) as cnt 
+        FROM events 
+        WHERE country IS NOT NULL AND country != '' 
+          AND country NOT IN ('分析中...', '未知地域', 'Localhost', '本地回环')
+          {hidden_and}
+        GROUP BY country 
+        ORDER BY cnt DESC 
+        LIMIT 10
+        """)
+        geo_rank = [{"country": row["country"], "count": row["cnt"]} for row in c.fetchall() if row["cnt"] > 0]
+
+        # 24小时趋势优化：单次聚合查询
+        labels = []
+        full_labels = []
+        data_points = []
+        now_ts = int(time.time())
+        start_24h = now_ts - 24 * 3600
+        c.execute(f"""
             SELECT ((timestamp - ?) / 3600) as slot, COUNT(*) as cnt 
             FROM events 
-            WHERE timestamp >= ? AND timestamp < ? AND ip IN (SELECT ip FROM hidden_ips)
+            WHERE timestamp >= ? AND timestamp < ? {hidden_and}
             GROUP BY slot
         """, (start_24h, start_24h, now_ts))
-        for row in c.fetchall():
-            s = row[0]
-            if s is not None and s in slot_map:
-                slot_map[s] = max(0, slot_map[s] - row[1])
+        slot_map = {row[0]: row[1] for row in c.fetchall() if row[0] is not None}
 
-    for i in range(23, -1, -1):
-        hour_start = now_ts - (i * 3600)
-        slot_idx = (hour_start - start_24h) // 3600
-        hour_label = time.strftime("%H:00", time.localtime(hour_start))
-        full_label = time.strftime("%Y-%m-%d %H:00", time.localtime(hour_start))
-        labels.append(hour_label)
-        full_labels.append(full_label)
-        data_points.append(slot_map.get(slot_idx, 0))
+        for i in range(23, -1, -1):
+            hour_start = now_ts - (i * 3600)
+            slot_idx = (hour_start - start_24h) // 3600
+            hour_label = time.strftime("%H:00", time.localtime(hour_start))
+            full_label = time.strftime("%Y-%m-%d %H:00", time.localtime(hour_start))
+            labels.append(hour_label)
+            full_labels.append(full_label)
+            data_points.append(slot_map.get(slot_idx, 0))
 
-    c.execute("SELECT count(*) FROM (SELECT DISTINCT ip FROM events)")
-    unique_attackers = c.fetchone()[0] or 0
-    if has_hidden:
-        c.execute("SELECT count(DISTINCT ip) FROM events WHERE ip IN (SELECT ip FROM hidden_ips)")
-        unique_attackers = max(0, unique_attackers - (c.fetchone()[0] or 0))
+        c.execute(f"SELECT COUNT(DISTINCT ip) FROM events {hidden_clause}")
+        unique_attackers = c.fetchone()[0] or 0
 
-    cfg = load_config()
-    conn.close()
+        cfg = load_config()
+    finally:
+        conn.close()
 
     raw_traps = cfg.get("trap_ports", DEFAULT_CONFIG["trap_ports"])
     active_traps = sum(1 for t in raw_traps if (t.get("enabled", True) if isinstance(t, dict) else True))
@@ -163,41 +136,38 @@ def handle_stats(req, parsed):
 
 def handle_report_export(req, parsed):
     conn = get_db()
-    c = conn.cursor()
-    now_ts = int(time.time())
-    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ts))
-    cfg = load_config()
+    try:
+        c = conn.cursor()
+        now_ts = int(time.time())
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now_ts))
+        cfg = load_config()
 
-    c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist")
-    total_banned = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(DISTINCT ip) FROM blacklist")
+        total_banned = c.fetchone()[0] or 0
 
-    c.execute("SELECT COUNT(*) FROM events")
-    total_events = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM events")
+        total_events = c.fetchone()[0] or 0
 
-    c.execute("SELECT COUNT(*) FROM port_access_logs")
-    total_access = c.fetchone()[0] or 0
+        c.execute("SELECT COUNT(*) FROM port_access_logs")
+        total_access = c.fetchone()[0] or 0
 
-    # 严重级别分布 (所有插值字段统一 HTML 转义，杜绝攻击者可控 reason/port_name 注入导出报告)
-    c.execute("SELECT level, COUNT(*) as cnt FROM events GROUP BY level ORDER BY cnt DESC")
-    level_rows = c.fetchall()
-    level_summary = "".join([f"<li><strong>{html.escape(str(r['level'] or '未知'))}:</strong> {r['cnt']} 次</li>" for r in level_rows]) or "<li>暂无事件</li>"
+        c.execute("SELECT level, COUNT(*) as cnt FROM events GROUP BY level ORDER BY cnt DESC")
+        level_rows = c.fetchall()
+        level_summary = "".join([f"<li><strong>{html.escape(str(r['level'] or '未知'))}:</strong> {r['cnt']} 次</li>" for r in level_rows]) or "<li>暂无事件</li>"
 
-    # Top 10 攻击源国家/地区
-    c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE country != '' GROUP BY country ORDER BY cnt DESC LIMIT 10")
-    country_rows = c.fetchall()
-    country_table = "".join([f"<tr><td>{idx+1}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{r['cnt']}</td></tr>" for idx, r in enumerate(country_rows)]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+        c.execute("SELECT country, COUNT(*) as cnt FROM events WHERE country != '' GROUP BY country ORDER BY cnt DESC LIMIT 10")
+        country_rows = c.fetchall()
+        country_table = "".join([f"<tr><td>{idx+1}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{r['cnt']}</td></tr>" for idx, r in enumerate(country_rows)]) or "<tr><td colspan='3'>暂无数据</td></tr>"
 
-    # Top 10 被攻击端口
-    c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events GROUP BY port ORDER BY cnt DESC LIMIT 10")
-    port_rows = c.fetchall()
-    port_table = "".join([f"<tr><td>{r['port']}</td><td>{html.escape(str(r['port_name'] or ''))}</td><td>{r['cnt']}</td></tr>" for r in port_rows]) or "<tr><td colspan='3'>暂无数据</td></tr>"
+        c.execute("SELECT port, port_name, COUNT(*) as cnt FROM events GROUP BY port ORDER BY cnt DESC LIMIT 10")
+        port_rows = c.fetchall()
+        port_table = "".join([f"<tr><td>{r['port']}</td><td>{html.escape(str(r['port_name'] or ''))}</td><td>{r['cnt']}</td></tr>" for r in port_rows]) or "<tr><td colspan='3'>暂无数据</td></tr>"
 
-    # 最近 20 条阻断记录
-    c.execute("SELECT ip, reason, country, level, ban_time FROM blacklist ORDER BY timestamp DESC LIMIT 20")
-    ban_rows = c.fetchall()
-    ban_table = "".join([f"<tr><td><code>{html.escape(str(r['ip'] or ''))}</code></td><td>{html.escape(str(r['level'] or ''))}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{html.escape(str(r['reason'] or ''))}</td><td>{html.escape(str(r['ban_time'] or ''))}</td></tr>" for r in ban_rows]) or "<tr><td colspan='5'>暂无封禁</td></tr>"
-
-    conn.close()
+        c.execute("SELECT ip, reason, country, level, ban_time FROM blacklist ORDER BY timestamp DESC LIMIT 20")
+        ban_rows = c.fetchall()
+        ban_table = "".join([f"<tr><td><code>{html.escape(str(r['ip'] or ''))}</code></td><td>{html.escape(str(r['level'] or ''))}</td><td>{html.escape(str(r['country'] or ''))}</td><td>{html.escape(str(r['reason'] or ''))}</td><td>{html.escape(str(r['ban_time'] or ''))}</td></tr>" for r in ban_rows]) or "<tr><td colspan='5'>暂无封禁</td></tr>"
+    finally:
+        conn.close()
 
     tpl = load_report_template()
     if tpl:
@@ -362,8 +332,17 @@ def handle_analytics(req, parsed):
     c.execute("SELECT COUNT(*) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
     total_intercepted = (c.fetchone()[0] or 0) + sum(int(r[3] or 0) for r in archived_summary_rows)
 
-    c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
-    unique_attackers = (c.fetchone()[0] or 0) + sum(int(r[7] or 0) for r in archived_summary_rows)
+    if archived_summary_rows:
+        c.execute("SELECT DISTINCT ip FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+        live_att_ips = {str(r[0]) for r in c.fetchall() if r[0]}
+        arch_att_ips = {str(r[1]) for r in archived_dim_rows if r[0] in ("attacker_ip", "attacker") and r[1]}
+        if arch_att_ips:
+            unique_attackers = len(live_att_ips | arch_att_ips)
+        else:
+            unique_attackers = len(live_att_ips) + max((int(r[7] or 0) for r in archived_summary_rows), default=0)
+    else:
+        c.execute("SELECT COUNT(DISTINCT ip) FROM events WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
+        unique_attackers = c.fetchone()[0] or 0
 
     c.execute("SELECT DISTINCT country FROM events WHERE timestamp >= ? AND timestamp < ? AND country NOT IN ('分析中...', '', '未知地域', 'Localhost', '本地回环') AND ip NOT IN (SELECT ip FROM hidden_ips)", (live_cutoff_ts, end_ts))
     live_country_set = {r[0] for r in c.fetchall() if r[0]}

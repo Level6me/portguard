@@ -190,37 +190,50 @@ def _extract_host_only(host_hdr):
 
 class RequestHandler(BaseHTTPRequestHandler):
     def _get_real_client_ip(self):
-        """安全提取客户端真实 IP：仅当直连来源是本机回环或受信任的 RFC1918 私网反代时，才提取反代头 (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)"""
+        """安全提取客户端真实 IP：仅当直连来源是本机回环或 config.json 中显式配置的 trusted_proxies 时，才解析反代头，杜绝局域网/容器内任意节点伪造反代头触发反射误封"""
         direct_ip = self.client_address[0].replace("::ffff:", "")
         is_trusted_proxy = False
-        if direct_ip in ("127.0.0.1", "::1", "localhost"):
+        if direct_ip in ("127.0.0.1", "::1", "localhost") or direct_ip.startswith("127."):
             is_trusted_proxy = True
         else:
             try:
-                ip_obj = ipaddress.ip_address(direct_ip)
-                if ip_obj.is_loopback or ip_obj.is_private:
-                    is_trusted_proxy = True
+                trusted_list = load_config().get("trusted_proxies", []) or []
+                if trusted_list:
+                    d_addr = ipaddress.ip_address(direct_ip)
+                    for tp in trusted_list:
+                        tp_str = str(tp or "").strip()
+                        if not tp_str:
+                            continue
+                        if "/" in tp_str:
+                            tp_net = ipaddress.ip_network(tp_str, strict=False)
+                            if d_addr.version == tp_net.version and d_addr in tp_net:
+                                is_trusted_proxy = True
+                                break
+                        elif direct_ip == tp_str:
+                            is_trusted_proxy = True
+                            break
             except Exception:
                 pass
 
         if is_trusted_proxy:
             cf_ip = self.headers.get("CF-Connecting-IP", "").strip()
-            if cf_ip and validate_ip(cf_ip):
-                return cf_ip
+            v_cf = validate_ip(cf_ip)
+            if v_cf and "/" not in v_cf:
+                return v_cf
             x_real = self.headers.get("X-Real-IP", "").strip()
-            if x_real and validate_ip(x_real):
-                return x_real
+            v_real = validate_ip(x_real)
+            if v_real and "/" not in v_real:
+                return v_real
             xff = self.headers.get("X-Forwarded-For", "").strip()
             if xff:
-                # 取最右侧条目：X-Forwarded-For 最左端的值由客户端任意伪造，
-                # 仅可信反代自身追加的最右条目不可伪造，防止未鉴权请求伪造 XFF 触发任意 IP 封禁 (防自锁)
                 for cand in reversed([x.strip() for x in xff.split(",")]):
-                    if cand and validate_ip(cand):
-                        return cand
+                    v_cand = validate_ip(cand)
+                    if v_cand and "/" not in v_cand:
+                        return v_cand
         return direct_ip
 
     def send_response(self, code, message=None):
-        # 在响应层统一记录访问日志：真实状态码、覆盖 GET/POST/HEAD/OPTIONS/404/400 等全部请求
+        self._resp_started = True
         super().send_response(code, message)
         try:
             client_ip = self._get_real_client_ip()
@@ -479,13 +492,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"error": "Not Found"}, status=404)
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
-            try:
-                self._send_json({"error": str(e)}, status=500)
-            except Exception:
-                pass
+            if not getattr(self, "_resp_started", False):
+                try:
+                    self._send_json({"error": "Internal Server Error", "msg": "服务器内部处理异常"}, status=500)
+                except Exception:
+                    pass
 
     def do_POST(self):
         try:
@@ -523,13 +537,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"error": "Not Found"}, status=404)
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
-            try:
-                self._send_json({"error": str(e)}, status=500)
-            except Exception:
-                pass
+            if not getattr(self, "_resp_started", False):
+                try:
+                    self._send_json({"error": "Internal Server Error", "msg": "服务器内部处理异常"}, status=500)
+                except Exception:
+                    pass
 
     def do_DELETE(self):
         try:
@@ -565,25 +580,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json({"error": "Not Found"}, status=404)
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
-            try:
-                self._send_json({"error": str(e)}, status=500)
-            except Exception:
-                pass
+            if not getattr(self, "_resp_started", False):
+                try:
+                    self._send_json({"error": "Internal Server Error", "msg": "服务器内部处理异常"}, status=500)
+                except Exception:
+                    pass
 
 
 _CLUSTER_SERVER_SYNC_LOCK = threading.Lock()
 
 class ClusterRequestHandler(BaseHTTPRequestHandler):
     """
-    专门处理多机网格情报联防的独立安全通信通道 (与 Web UI 完全隔离)
-    只接收与处理带有效 HMAC-SHA256 签名的集群指令 (ping, sync_ban, sync_whitelist)
-    对任何未授权或非集群请求直接返回 403 Forbidden，不暴露 Web 控制台与登录界面。
+    专门处理多机网格情报联防的独立安全通信通道 (与 Web UI 完全隔离)：
+    统一复用 controllers.cluster_controller 中的单一权威集群逻辑，彻底消除 9098/9099 双轨分叉。
     """
     def log_message(self, format, *args):
         pass
+
+    def send_response(self, code, message=None):
+        self._resp_started = True
+        super().send_response(code, message)
 
     def _send_json(self, data, status=200):
         try:
@@ -605,20 +624,9 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = parsed.path
-        if path == "/api/cluster/ping":
-            token = self.headers.get("X-Cluster-Token", "").strip()
-            cfg = load_config()
-            cluster_cfg = cfg.get("cluster_sync", {})
-            secret = cluster_cfg.get("cluster_secret", "").strip()
-            if not secret or not verify_cluster_token("ping", token, secret):
-                self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
-                return
-            self._send_json({
-                "success": True,
-                "node_name": cfg.get("node_name", "远程节点"),
-                "version": "2.0.0"
-            })
+        if parsed.path in _CLUSTER_PEER_GET_ENDPOINTS:
+            from controllers.cluster_controller import handle_cluster_ping
+            handle_cluster_ping(self, parsed, None)
             return
         self._send_json({"error": "Forbidden: Dedicated PortGuard Cluster Channel"}, status=403)
 
@@ -644,327 +652,20 @@ class ClusterRequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 req_data = {}
 
-            if path == "/api/cluster/ping":
-                token = self.headers.get("X-Cluster-Token", "").strip()
-                cfg = load_config()
-                cluster_cfg = cfg.get("cluster_sync", {})
-                secret = cluster_cfg.get("cluster_secret", "").strip()
-                if not secret or not verify_cluster_token("ping", token, secret, body=raw_body_bytes):
-                    self._send_json({"success": False, "msg": "集群鉴权密钥无效或未配置"}, status=403)
-                    return
-                self._send_json({
-                    "success": True,
-                    "node_name": cfg.get("node_name", "远程节点"),
-                    "version": "2.0.0"
-                })
-                return
-
-            if path == "/api/cluster/sync_ban":
-                token = self.headers.get("X-Cluster-Token", "").strip()
-                cfg = load_config()
-                cluster_cfg = cfg.get("cluster_sync", {})
-                secret = cluster_cfg.get("cluster_secret", "").strip()
-
-                ip = req_data.get("ip", "").strip()
-                reason = req_data.get("reason", "集群威胁同步").strip()
-                level = req_data.get("level", "极高危").strip()
-                source_node = req_data.get("source_node", "远程探针").strip()
-
-                if not verify_cluster_token(ip, token, secret, body=raw_body_bytes):
-                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
-                    return
-
-                valid_ip = validate_ip(ip)
-                if not valid_ip:
-                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
-                    return
-                ip = valid_ip
-
-                if ip_in_whitelist(ip):
-                    self._send_json({"success": True, "msg": "本地白名单已忽略"})
-                    return
-
-                ban_ip_firewall(ip)
-                now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                now_ts = int(time.time())
-                auto_clean_days = int(cfg.get("auto_clean_days", 30) or 30)
-                ban_expire = now_ts + auto_clean_days * 86400 if auto_clean_days > 0 else None
-
-                geo_country = req_data.get("country") or ""
-                geo_region = req_data.get("region") or ""
-                geo_city = req_data.get("city") or ""
-                geo_isp = req_data.get("isp") or ""
-
-                if not geo_country or geo_country in ("集群联防", "公网节点", "未知地域", ""):
-                    geo = resolve_ip_geo(ip) or {}
-                    geo_country = geo.get("country") or "公网探测"
-                    geo_region = geo.get("region") or ""
-                    geo_city = geo.get("city") or ""
-                    geo_isp = geo.get("isp") or ""
-
-                synced_port = int(req_data.get("port") or 443)
-                synced_proto = str(req_data.get("proto") or "TCP").upper()
-                synced_category = req_data.get("category") or "mesh"
-
-                conn = get_db()
-                c = conn.cursor()
-                c.execute("""
-                INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (ip, f"[{source_node}联防] {reason}", geo_country, level, now_str, now_ts, ban_expire, f"集群 ({source_node})"))
-                c.execute("""
-                INSERT INTO events (ip, port, proto, port_name, category, level, country, region, city, isp, attack_time, timestamp, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BANNED')
-                """, (ip, synced_port, synced_proto, f"[{source_node}联防] {reason}", synced_category, level, geo_country, geo_region, geo_city, geo_isp, now_str, now_ts))
-                conn.commit()
-                conn.close()
-
-                _EXECUTOR.submit(resolve_ip_geo, ip)
-                self._send_json({"success": True, "msg": f"已完成集群同步封禁: {ip}"})
-                return
-
-            if path == "/api/cluster/sync_unban":
-                token = self.headers.get("X-Cluster-Token", "").strip()
-                cfg = load_config()
-                cluster_cfg = cfg.get("cluster_sync", {})
-                secret = cluster_cfg.get("cluster_secret", "").strip()
-
-                ip = req_data.get("ip", "").strip()
-                if not verify_cluster_token(f"unban_{ip}", token, secret, body=raw_body_bytes):
-                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
-                    return
-
-                valid_ip = validate_ip(ip)
-                if not valid_ip:
-                    self._send_json({"success": False, "msg": "IP格式不合法"}, status=400)
-                    return
-                source_node = req_data.get("source_node", "协同节点").strip()
-                unban_ip_core(valid_ip, status_event="UNBANNED", source_node=f"集群解封({source_node})")
-                self._send_json({"success": True, "msg": f"已协同解封: {valid_ip}"})
-                return
-
-            if path == "/api/cluster/sync_state_exchange":
-                token = self.headers.get("X-Cluster-Token", "").strip()
-                cfg = load_config()
-                cluster_cfg = cfg.get("cluster_sync", {})
-                secret = cluster_cfg.get("cluster_secret", "").strip()
-                if not verify_cluster_token("sync_state_exchange", token, secret, body=raw_body_bytes):
-                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
-                    return
-
-                if not _CLUSTER_SERVER_SYNC_LOCK.acquire(blocking=False):
-                    self._send_json({
-                        "success": True,
-                        "msg": "集群状态对齐正在进行中，已自动合并防并发",
-                        "added_bans": 0,
-                        "added_whites": 0,
-                        "remote_blacklist": [],
-                        "remote_unbanned": [],
-                        "remote_whitelist": []
-                    })
-                    return
-
-                try:
-                    source_node = req_data.get("source_node", "远程节点").strip()
-                    remote_bans = req_data.get("blacklist", [])
-                    remote_unbanned = req_data.get("unbanned_list", [])
-                    remote_whites = req_data.get("whitelist", [])
-
-                    conn = get_db()
-                    c = conn.cursor()
-                    c.execute("CREATE TABLE IF NOT EXISTS unbanned_ips (ip TEXT PRIMARY KEY, unban_time TEXT, timestamp INTEGER, source_node TEXT)")
-                    c.execute("SELECT ip, reason, country, level, ban_time, timestamp, ban_expire, source_node FROM blacklist")
-                    local_rows = c.fetchall()
-                    local_bans_map = { r[0]: { "ip": r[0], "reason": r[1], "country": r[2], "level": r[3], "ban_time": r[4], "timestamp": r[5], "ban_expire": r[6], "source_node": r[7] } for r in local_rows }
-                    c.execute("SELECT ip, unban_time, timestamp, source_node FROM unbanned_ips")
-                    local_unbanned_rows = c.fetchall()
-                    local_unbanned_map = { r[0]: int(r[2] or 0) for r in local_unbanned_rows if r[0] }
-                    conn.close()
-
-                    # 1. 优先对齐远端发来的解封墓碑
-                    for ru in remote_unbanned:
-                        ru_ip = validate_ip(ru.get("ip", ""))
-                        ru_ts = int(ru.get("timestamp", 0) or 0)
-                        if ru_ip:
-                            if ru_ip in local_bans_map:
-                                local_ban_ts = int(local_bans_map[ru_ip].get("timestamp", 0) or 0)
-                                if ru_ts >= local_ban_ts:
-                                    unban_ip_core(ru_ip, status_event="UNBANNED", source_node=f"集群同步({source_node})")
-                            local_unbanned_map[ru_ip] = ru_ts
-
-                    # 2. 吸纳对方有而本地没有的黑名单 (比对解封墓碑，批量极速下发内核)
-                    added_bans = 0
-                    now_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                    now_ts = int(time.time())
-                    
-                    exact_whitelist, nets_whitelist = get_compiled_whitelist()
-                    new_ban_ips = []
-                    new_db_rows = []
-
-                    for rb in remote_bans:
-                        rb_ip = validate_ip(rb.get("ip", ""))
-                        if not rb_ip or rb_ip in exact_whitelist or ip_in_whitelist(rb_ip):
-                            continue
-                        rb_ts = int(rb.get("timestamp", 0) or 0)
-                        local_unban_ts = local_unbanned_map.get(rb_ip)
-                        if local_unban_ts is not None and local_unban_ts >= rb_ts:
-                            continue
-
-                        if rb_ip not in local_bans_map:
-                            new_ban_ips.append(rb_ip)
-                            src = rb.get("source_node", source_node)
-                            geo_country = rb.get("country")
-                            if not geo_country or geo_country in ("集群联防", "未知地域", "公网节点", ""):
-                                geo = resolve_ip_geo_local(rb_ip) or {}
-                                geo_country = geo.get("country") or "公网探测"
-
-                            new_db_rows.append((
-                                rb_ip, rb.get("reason", f"[{source_node}对齐] 威胁同步"), geo_country,
-                                rb.get("level", "极高危"), rb.get("ban_time", now_str),
-                                rb.get("timestamp", rb_ts or now_ts), rb.get("ban_expire"), f"集群 ({src})"
-                            ))
-                            if len(new_ban_ips) <= 20 and geo_country == "公网探测":
-                                _EXECUTOR.submit(resolve_ip_geo, rb_ip)
-                            added_bans += 1
-
-                    if new_ban_ips:
-                        batch_ban_ip_firewall(new_ban_ips)
-                        conn = get_db()
-                        c = conn.cursor()
-                        c.executemany("""
-                        INSERT OR REPLACE INTO blacklist (ip, reason, country, level, ban_time, timestamp, ban_expire, source_node)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, new_db_rows)
-                        c.executemany("DELETE FROM unbanned_ips WHERE ip = ?", [(ip,) for ip in new_ban_ips])
-                        conn.commit()
-                        conn.close()
-
-                    # 3. 合并白名单
-                    whitelist = cfg.get("whitelist", [])
-                    w_map = { (w.get("ip") if isinstance(w, dict) else w): (w if isinstance(w, dict) else {"ip": w, "remark": "信任IP"}) for w in whitelist }
-                    added_whites = 0
-                    for rw in remote_whites:
-                        rw_ip = validate_ip(rw.get("ip") if isinstance(rw, dict) else rw)
-                        if not rw_ip:
-                            continue
-                        unban_ip_core(rw_ip, status_event="WHITELIST")
-                        rw_rem = rw.get("remark", "集群对齐白名单") if isinstance(rw, dict) else "集群对齐白名单"
-                        if rw_ip not in w_map:
-                            w_map[rw_ip] = {"ip": rw_ip, "remark": rw_rem}
-                            added_whites += 1
-                    if added_whites > 0:
-                        cfg["whitelist"] = list(w_map.values())
-                        save_config(cfg)
-
-                    # 返回本地独有的黑名单、解封墓碑与白名单给发起端
-                    remote_ban_ips = { rb.get("ip") for rb in remote_bans if rb.get("ip") }
-                    missing_for_remote_bans = [ b for ip_k, b in local_bans_map.items() if ip_k not in remote_ban_ips and ip_k not in local_unbanned_map ]
-
-                    remote_white_ips = { (w.get("ip") if isinstance(w, dict) else w) for w in remote_whites if (w.get("ip") if isinstance(w, dict) else w) }
-                    missing_for_remote_whites = [ w for ip_k, w in w_map.items() if ip_k not in remote_white_ips ]
-
-                    # 本地解封墓碑数据（只返回最近 48 小时内的墓碑，避免大体积冗余传输）
-                    cutoff_unban_ts = now_ts - (48 * 3600)
-                    local_unbanned_resp = [
-                        { "ip": r[0], "unban_time": r[1], "timestamp": r[2], "source_node": r[3] }
-                        for r in local_unbanned_rows if r[0] and (int(r[2] or 0) >= cutoff_unban_ts)
-                    ]
-
-                    self._send_json({
-                        "success": True,
-                        "added_bans": added_bans,
-                        "added_whites": added_whites,
-                        "remote_blacklist": missing_for_remote_bans,
-                        "remote_unbanned": local_unbanned_resp,
-                        "remote_whitelist": missing_for_remote_whites
-                    })
-                    return
-                finally:
-                    _CLUSTER_SERVER_SYNC_LOCK.release()
-
-            if path == "/api/cluster/sync_whitelist":
-                token = self.headers.get("X-Cluster-Token", "").strip()
-                cfg = load_config()
-                cluster_cfg = cfg.get("cluster_sync", {})
-                secret = cluster_cfg.get("cluster_secret", "").strip()
-
-                action = req_data.get("action", "add").strip()
-                data = req_data.get("data")
-                remark = req_data.get("remark", "集群协同白名单").strip()
-                source_node = req_data.get("source_node", "远程节点").strip()
-
-                sign_target = f"whitelist_{action}"
-                if not verify_cluster_token(sign_target, token, secret, body=raw_body_bytes):
-                    self._send_json({"success": False, "msg": "集群鉴权签名无效"}, status=403)
-                    return
-
-                whitelist = cfg.get("whitelist", [])
-
-                if action == "add":
-                    ip = str(data or "").strip()
-                    valid_ip = validate_ip(ip)
-                    if not valid_ip:
-                        self._send_json({"success": False, "msg": "IP 格式不合法"}, status=400)
-                        return
-                    ip = valid_ip
-                    unban_ip_core(ip, status_event="WHITELIST")
-                    if not any(w.get("ip") == ip if isinstance(w, dict) else w == ip for w in whitelist):
-                        node_remark = f"[{source_node}联防] {remark}" if not str(remark).startswith(f"[{source_node}") else remark
-                        whitelist.append({"ip": ip, "remark": node_remark})
-                        cfg["whitelist"] = whitelist
-                        save_config(cfg)
-                    auto_heal_whitelist_ips(cfg.get("whitelist", []))
-                    self._send_json({"success": True, "msg": f"已成功同步添加白名单: {ip}"})
-                    return
-
-                elif action == "delete":
-                    ip = str(data or "").strip()
-                    whitelist = [w for w in whitelist if (w.get("ip") if isinstance(w, dict) else w) != ip]
-                    cfg["whitelist"] = whitelist
-                    save_config(cfg)
-                    self._send_json({"success": True, "msg": f"已成功同步移除白名单: {ip}"})
-                    return
-
-                elif action in ("batch_add", "sync_all"):
-                    items = data if isinstance(data, list) else []
-                    updated_cnt = 0
-                    current_map = {}
-                    for w in whitelist:
-                        w_ip = w.get("ip") if isinstance(w, dict) else w
-                        if w_ip:
-                            current_map[w_ip] = w if isinstance(w, dict) else {"ip": w_ip, "remark": "信任IP"}
-
-                    for it in items:
-                        if isinstance(it, dict):
-                            it_ip = str(it.get("ip", "")).strip()
-                            it_rem = str(it.get("remark", remark)).strip()
-                        else:
-                            it_ip = str(it).strip()
-                            it_rem = remark
-                        v_ip = validate_ip(it_ip)
-                        if not v_ip:
-                            continue
-                        unban_ip_core(v_ip, status_event="WHITELIST")
-                        node_rem = f"[{source_node}联防] {it_rem}" if not it_rem.startswith(f"[{source_node}") else it_rem
-                        if v_ip not in current_map:
-                            current_map[v_ip] = {"ip": v_ip, "remark": node_rem}
-                            updated_cnt += 1
-
-                    cfg["whitelist"] = list(current_map.values())
-                    save_config(cfg)
-                    auto_heal_whitelist_ips(cfg.get("whitelist", []))
-                    self._send_json({"success": True, "msg": f"已批量同步 {updated_cnt} 条协同白名单", "count": updated_cnt})
-                    return
-
-                self._send_json({"success": False, "msg": "未知的白名单同步操作"}, status=400)
+            if path in _CLUSTER_PEER_POST_ENDPOINTS and dispatch_post(self, parsed, req_data):
                 return
 
             self._send_json({"error": "Forbidden: Dedicated PortGuard Cluster Channel"}, status=403)
-        except Exception as e:
-            self._send_json({"error": str(e)}, status=500)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            if not getattr(self, "_resp_started", False):
+                self._send_json({"error": "Internal Server Error"}, status=500)
 
 def run_server():
+    from sentry_daemon import _ensure_batch_log_worker
     init_db()
+    _ensure_batch_log_worker()
     cfg = load_config()
     try:
         healed = auto_heal_whitelist_ips()

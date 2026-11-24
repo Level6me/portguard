@@ -70,34 +70,63 @@ pkill -9 -f "/opt/portguard/sentry_daemon.py" 2>/dev/null || true
 pkill -9 -f "/opt/portsentry-ui/web_server.py" 2>/dev/null || true
 pkill -9 -f "/opt/portsentry-ui/sentry_daemon.py" 2>/dev/null || true
 
-# 清理可能残留的 iptables / ip6tables、ipset 与黑洞路由规则
+# 预读当前配置的控制台端口与集群通信端口，以便精准清理系统防火墙规则
+PG_WEB_PORT="9099"
+PG_CLUSTER_PORT="9098"
+if [ -f "${INSTALL_DIR}/config.json" ] && command -v python3 >/dev/null 2>&1; then
+    PG_WEB_PORT=$(python3 -c "import json; print(int(json.load(open('${INSTALL_DIR}/config.json')).get('web_port', 9099)))" 2>/dev/null || echo "9099")
+    PG_CLUSTER_PORT=$(python3 -c "import json; print(int((json.load(open('${INSTALL_DIR}/config.json')).get('cluster_sync') or {}).get('port', 9098)))" 2>/dev/null || echo "9098")
+fi
+
+# 清理可能残留的 iptables / ip6tables、ipset 与 PortGuard 自身写入的黑洞路由规则
 if command -v iptables >/dev/null 2>&1; then
-    for set_n in portguard_whitelist_v4 portguard_blacklist_v4; do
+    for set_n in portguard_whitelist_v4 portguard_blacklist_v4 portguard_blacknet_v4; do
         while iptables -D INPUT -m set --match-set "$set_n" src -j ACCEPT 2>/dev/null || iptables -D INPUT -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
+        while iptables -D FORWARD -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
     done
-    iptables -D FORWARD -m set --match-set portguard_blacklist_v4 src -j DROP 2>/dev/null || true
 fi
 if command -v ip6tables >/dev/null 2>&1; then
-    for set_n in portguard_whitelist_v6 portguard_blacklist_v6; do
+    for set_n in portguard_whitelist_v6 portguard_blacklist_v6 portguard_blacknet_v6; do
         while ip6tables -D INPUT -m set --match-set "$set_n" src -j ACCEPT 2>/dev/null || ip6tables -D INPUT -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
+        while ip6tables -D FORWARD -m set --match-set "$set_n" src -j DROP 2>/dev/null; do :; done
     done
 fi
 if command -v ipset >/dev/null 2>&1; then
-    for set_n in portguard_blacklist_v4 portguard_blacklist_v6 portguard_whitelist_v4 portguard_whitelist_v6; do
+    for set_n in portguard_blacklist_v4 portguard_blacklist_v6 portguard_blacknet_v4 portguard_blacknet_v6 portguard_whitelist_v4 portguard_whitelist_v6; do
         ipset destroy "$set_n" 2>/dev/null || true
     done
 fi
-if command -v ip >/dev/null 2>&1; then
-    ip route show | awk '/^blackhole /{print $2}' | xargs -r -n1 ip route del blackhole 2>/dev/null || true
-    ip -6 route show | awk '/^blackhole /{print $2}' | xargs -r -n1 ip -6 route del blackhole 2>/dev/null || true
+if command -v ip >/dev/null 2>&1 && [ -f "${INSTALL_DIR}/data.db" ] && command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import sqlite3
+try:
+    conn = sqlite3.connect('${INSTALL_DIR}/data.db')
+    for (ip_str,) in conn.execute('SELECT ip FROM blacklist'):
+        if ip_str:
+            print(ip_str.strip())
+    conn.close()
+except Exception:
+    pass
+" 2>/dev/null | while IFS= read -r target_ip; do
+        [ -z "$target_ip" ] && continue
+        if [[ "$target_ip" == *:* ]]; then
+            ip -6 route del blackhole "$target_ip" 2>/dev/null || true
+        else
+            ip route del blackhole "$target_ip" 2>/dev/null || true
+        fi
+    done
 fi
 
-# 清理 UFW / firewalld 开放端口规则
+# 清理 UFW / firewalld 开放端口规则 (兼容自定义端口与默认端口)
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw "active"; then
-    ufw delete allow 9099/tcp 2>/dev/null || true
+    for p in 9099 9098 "$PG_WEB_PORT" "$PG_CLUSTER_PORT"; do
+        ufw delete allow "${p}/tcp" 2>/dev/null || true
+    done
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -qw "running"; then
-    firewall-cmd --remove-port=9099/tcp --permanent 2>/dev/null || true
+    for p in 9099 9098 "$PG_WEB_PORT" "$PG_CLUSTER_PORT"; do
+        firewall-cmd --remove-port="${p}/tcp" --permanent 2>/dev/null || true
+    done
     firewall-cmd --reload 2>/dev/null || true
 fi
 echo -e "${GREEN}[✓] 进程、网络规则与系统防火墙已全部释放清理${NC}"

@@ -77,7 +77,7 @@ BACKUP_DIR="${INSTALL_DIR}/backup"
 mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="${BACKUP_DIR}/portguard_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
 if [ -f "${INSTALL_DIR}/web_server.py" ]; then
-    tar -czf "$BACKUP_FILE" -C "$INSTALL_DIR" web_server.py sentry_daemon.py config.json 2>/dev/null || true
+    tar -czf "$BACKUP_FILE" -C "$INSTALL_DIR" web_server.py sentry_daemon.py chart.min.js config.json uninstall.sh core controllers geo collectors templates 2>/dev/null || true
     # 仅保留最近 3 份历史快照
     ls -t "${BACKUP_DIR}"/portguard_backup_*.tar.gz 2>/dev/null | tail -n +4 | xargs rm -f 2>/dev/null || true
     echo -e "${GREEN}[✓] 版本快照已存档至: ${BACKUP_FILE}${NC}"
@@ -171,15 +171,22 @@ if [ "$ARCHIVE_OK" = false ]; then
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/mesh.py" "core/mesh.py" 5000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/notify.py" "core/notify.py" 10000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_client.py" "core/ws_client.py" 3000 || true
-    mkdir -p core/ws_pb
+    mkdir -p core/ws_pb controllers geo collectors templates
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/__init__.py" "core/ws_pb/__init__.py" 10 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/pbbp2_pb2.py" "core/ws_pb/pbbp2_pb2.py" 2000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/core/ws_pb/gogo_pb2.py" "core/ws_pb/gogo_pb2.py" 10000 || true
+    for cfile in __init__.py base.py cluster_controller.py logs_controller.py rules_controller.py security_controller.py settings_controller.py stats_controller.py; do
+        download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/controllers/${cfile}" "controllers/${cfile}" 20 || true
+    done
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/geo/__init__.py" "geo/__init__.py" 1000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/collectors/packet.py" "collectors/packet.py" 1000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/index.html" "templates/index.html" 50000 || true
+    download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/templates/report.html" "templates/report.html" 2000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/uninstall.sh" "uninstall.sh" 1000 || true
     download_file_safe "https://raw.githubusercontent.com/Level6me/portguard/${REF_TARGET}/chart.min.js" "chart.min.js" 10000 || true
 fi
 
-if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ]; then
+if [ ! -s web_server.py ] || [ ! -s sentry_daemon.py ] || [ ! -s core/db.py ] || [ ! -s controllers/security_controller.py ] || [ ! -s templates/index.html ]; then
     echo -e "${RED}[ERROR] 下载更新文件失败，请检查网络连接！正在撤销本次更新。${NC}"
     rm -rf "$TMP_UPDATE_DIR"
     exit 1

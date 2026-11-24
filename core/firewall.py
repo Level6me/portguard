@@ -4,6 +4,7 @@
 PortGuard Core Firewall & Threat Interception Engine
 内核防火墙规则下发、IPSet 动态集合加速、黑洞路由与智能解封
 """
+from contextlib import closing
 import glob
 import ipaddress
 import os
@@ -11,6 +12,7 @@ import re
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 
@@ -143,14 +145,15 @@ def is_idc_hosting_ip(ip_str, geo_dict=None):
 
 _THREAT_TAGS_CACHE = {}
 _THREAT_TAGS_LOCK = threading.Lock()
+_MAX_THREAT_TAGS_CACHE = 10000
 
 def get_ip_threat_tags(ip_str, geo_dict=None):
-    """威胁情报标签与信誉综合研判：返回 IP 的多维信誉指纹标签列表"""
+    """威胁情报标签与信誉综合研判：返回 IP 的多维信誉指纹标签列表（带上限淘汰并防止未就绪空标签污染）"""
     if not ip_str or ip_str in ("127.0.0.1", "::1", "localhost") or ip_str.startswith("127."):
         return []
     with _THREAT_TAGS_LOCK:
         if ip_str in _THREAT_TAGS_CACHE:
-            return _THREAT_TAGS_CACHE[ip_str]
+            return list(_THREAT_TAGS_CACHE[ip_str])
     tags = []
     try:
         ip_obj = ipaddress.ip_address(ip_str)
@@ -165,7 +168,9 @@ def get_ip_threat_tags(ip_str, geo_dict=None):
         pass
 
     geo = geo_dict or _GEO_CACHE.get(ip_str) or {}
-    isp_text = (str(geo.get("isp", "")) + " " + str(geo.get("region", "")) + " " + str(geo.get("country", ""))).lower()
+    raw_country = str(geo.get("country", "") or "").strip()
+    raw_isp = str(geo.get("isp", "") or "").strip()
+    isp_text = (raw_isp + " " + str(geo.get("region", "")) + " " + raw_country).lower()
 
     if is_survey_scanner_ip(ip_str, geo):
         for kw in SURVEY_ENGINE_KEYWORDS:
@@ -183,8 +188,13 @@ def get_ip_threat_tags(ip_str, geo_dict=None):
         if not any("云机房" in t for t in tags):
             tags.append("☁️ 数据中心/IDC")
 
-    with _THREAT_TAGS_LOCK:
-        _THREAT_TAGS_CACHE[ip_str] = tags
+    geo_ready = bool(tags) or (raw_country and raw_country not in ("分析中...", "未知地域", "公网节点", "None", "null")) or bool(raw_isp)
+    if geo_ready:
+        with _THREAT_TAGS_LOCK:
+            if len(_THREAT_TAGS_CACHE) >= _MAX_THREAT_TAGS_CACHE:
+                for stale_k in list(_THREAT_TAGS_CACHE.keys())[:_MAX_THREAT_TAGS_CACHE // 5]:
+                    _THREAT_TAGS_CACHE.pop(stale_k, None)
+            _THREAT_TAGS_CACHE[ip_str] = list(tags)
     return tags
 
 def validate_ip(ip):
@@ -216,13 +226,41 @@ def is_ipset_available():
         _IPSET_AVAILABLE = False
     return _IPSET_AVAILABLE
 
-def _ensure_ipset_timeout_set(set_name, is_ipv6=False):
+def _run_ipset_restore(commands_list):
+    """安全执行 ipset restore，带超时并在超时异常时彻底回收子进程防僵尸残留"""
+    if not commands_list:
+        return True
+    p = None
+    try:
+        p = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p.communicate("".join(commands_list).encode("utf-8"), timeout=5)
+        return p.returncode == 0
+    except subprocess.TimeoutExpired:
+        if p is not None:
+            try:
+                p.kill()
+                p.wait(timeout=1)
+            except Exception:
+                pass
+        return False
+    except Exception as e:
+        if p is not None:
+            try:
+                p.kill()
+                p.wait(timeout=1)
+            except Exception:
+                pass
+        print(f"[Firewall] ipset restore 异常: {e}")
+        return False
+
+def _ensure_ipset_timeout_set(set_name, is_ipv6=False, set_type="hash:ip"):
     """确保 ipset 集合存在且支持 timeout 参数。若已存在且不支持 timeout 则平滑无感 swap 升级。"""
     try:
         tmp_name = f"pg_tmp_{int(time.time()*1000)%100000}"
-        create_args = ["hash:ip", "maxelem", "1000000", "timeout", "2147483"]
+        max_elem = "65536" if set_type == "hash:net" else "1000000"
+        create_args = [set_type, "maxelem", max_elem, "timeout", "2147483"]
         if is_ipv6:
-            create_args = ["hash:ip", "family", "inet6", "maxelem", "1000000", "timeout", "2147483"]
+            create_args = [set_type, "family", "inet6", "maxelem", max_elem, "timeout", "2147483"]
         
         probe = subprocess.run(["ipset", "list", set_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
         if probe.returncode == 0:
@@ -241,7 +279,6 @@ def _ensure_ipset_timeout_set(set_name, is_ipv6=False):
 def _ensure_ipset_net_set(set_name, is_ipv6=False):
     """确保 ipset 集合存在且为 hash:net 类型，完美支持单个 IP 及 CIDR 网段（如 111.181.0.0/16）。"""
     try:
-        tmp_name = f"pg_tmp_{int(time.time()*1000)%100000}"
         create_args = ["hash:net", "maxelem", "65536"]
         if is_ipv6:
             create_args = ["hash:net", "family", "inet6", "maxelem", "65536"]
@@ -256,54 +293,51 @@ def _ensure_ipset_net_set(set_name, is_ipv6=False):
         return False
 
 def init_firewall_ipset():
-    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载单一规则，实现 O(1) 百万级黑名单与内核级动态 timeout 自动老化。
-    核心安全铁律：白名单集合挂载在黑名单之前，享受 Linux 内核最高优先级绝对放行！"""
+    """初始化 ipset 哈希表并在 iptables / ip6tables INPUT 链首行挂载规则。
+    核心安全铁律：白名单集合挂载在第 1 行最高优先级绝对放行，黑名单单 IP 与 CIDR 网段集合挂载在其后！"""
     if not is_ipset_available():
         return False
     try:
-        # 1. 确保黑名单集合存在 (hash:ip 带 timeout)
-        _ensure_ipset_timeout_set("portguard_blacklist_v4", is_ipv6=False)
-        _ensure_ipset_timeout_set("portguard_blacklist_v6", is_ipv6=True)
+        # 1. 确保黑名单单 IP 与 CIDR 网段集合存在 (带 timeout)
+        _ensure_ipset_timeout_set("portguard_blacklist_v4", is_ipv6=False, set_type="hash:ip")
+        _ensure_ipset_timeout_set("portguard_blacklist_v6", is_ipv6=True, set_type="hash:ip")
+        _ensure_ipset_timeout_set("portguard_blacknet_v4", is_ipv6=False, set_type="hash:net")
+        _ensure_ipset_timeout_set("portguard_blacknet_v6", is_ipv6=True, set_type="hash:net")
 
         # 2. 确保白名单集合存在 (hash:net 支持单IP与CIDR网段)
         _ensure_ipset_net_set("portguard_whitelist_v4", is_ipv6=False)
         _ensure_ipset_net_set("portguard_whitelist_v6", is_ipv6=True)
 
-        # 3. iptables IPv4: 先挂载白名单放行，再挂载黑名单丢弃
-        check_w4 = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_whitelist_v4", "src", "-j", "ACCEPT"],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_w4.returncode != 0:
-            subprocess.run(["iptables", "-I", "INPUT", "1", "-m", "set", "--match-set", "portguard_whitelist_v4", "src", "-j", "ACCEPT"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 3. iptables IPv4: 第 1 位白名单 ACCEPT，第 2 位黑名单 IP DROP，第 3 位黑名单网段 DROP
+        for fw_bin, wl_set, bl_set, bn_set in (
+            ("iptables", "portguard_whitelist_v4", "portguard_blacklist_v4", "portguard_blacknet_v4"),
+            ("ip6tables", "portguard_whitelist_v6", "portguard_blacklist_v6", "portguard_blacknet_v6"),
+        ):
+            chk_w = subprocess.run([fw_bin, "-C", "INPUT", "-m", "set", "--match-set", wl_set, "src", "-j", "ACCEPT"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if chk_w.returncode != 0:
+                subprocess.run([fw_bin, "-I", "INPUT", "1", "-m", "set", "--match-set", wl_set, "src", "-j", "ACCEPT"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        check_v4 = subprocess.run(["iptables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_v4.returncode != 0:
-            subprocess.run(["iptables", "-I", "INPUT", "2", "-m", "set", "--match-set", "portguard_blacklist_v4", "src", "-j", "DROP"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            chk_b = subprocess.run([fw_bin, "-C", "INPUT", "-m", "set", "--match-set", bl_set, "src", "-j", "DROP"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if chk_b.returncode != 0:
+                subprocess.run([fw_bin, "-I", "INPUT", "2", "-m", "set", "--match-set", bl_set, "src", "-j", "DROP"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 4. ip6tables IPv6: 同步挂载白名单放行与黑名单丢弃
-        check_w6 = subprocess.run(["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_whitelist_v6", "src", "-j", "ACCEPT"],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_w6.returncode != 0:
-            subprocess.run(["ip6tables", "-I", "INPUT", "1", "-m", "set", "--match-set", "portguard_whitelist_v6", "src", "-j", "ACCEPT"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        check_v6 = subprocess.run(["ip6tables", "-C", "INPUT", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_v6.returncode != 0:
-            subprocess.run(["ip6tables", "-I", "INPUT", "2", "-m", "set", "--match-set", "portguard_blacklist_v6", "src", "-j", "DROP"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            chk_n = subprocess.run([fw_bin, "-C", "INPUT", "-m", "set", "--match-set", bn_set, "src", "-j", "DROP"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if chk_n.returncode != 0:
+                subprocess.run([fw_bin, "-I", "INPUT", "3", "-m", "set", "--match-set", bn_set, "src", "-j", "DROP"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT ip, ban_expire FROM blacklist")
-        black_rows = c.fetchall()
-        conn.close()
+        with closing(get_db()) as conn:
+            c = conn.cursor()
+            c.execute("SELECT ip, ban_expire FROM blacklist")
+            black_rows = c.fetchall()
 
         now_ts = int(time.time())
-        restore_v4 = []
-        restore_v6 = []
+        restore_cmds = []
 
         for row in black_rows:
             chk_ip = row["ip"]
@@ -322,57 +356,42 @@ def init_firewall_ipset():
                 remain = 2147483
 
             try:
-                addr_obj = ipaddress.ip_address(ip_val)
-                if addr_obj.version == 6:
-                    restore_v6.append(f"add portguard_blacklist_v6 {ip_val} timeout {remain} -exist\n")
+                if "/" in ip_val:
+                    net_obj = ipaddress.ip_network(ip_val, strict=False)
+                    sname = "portguard_blacknet_v6" if net_obj.version == 6 else "portguard_blacknet_v4"
+                    restore_cmds.append(f"add {sname} {net_obj} timeout {remain} -exist\n")
                 else:
-                    restore_v4.append(f"add portguard_blacklist_v4 {ip_val} timeout {remain} -exist\n")
+                    addr_obj = ipaddress.ip_address(ip_val)
+                    sname = "portguard_blacklist_v6" if addr_obj.version == 6 else "portguard_blacklist_v4"
+                    restore_cmds.append(f"add {sname} {ip_val} timeout {remain} -exist\n")
             except Exception:
                 pass
 
         for safe_ip in PUBLIC_INFRASTRUCTURE_IPS:
             unban_ip_core(safe_ip)
 
-        if restore_v4:
-            try:
-                p4 = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                p4.communicate("".join(restore_v4).encode("utf-8"))
-            except Exception:
-                pass
-
-        if restore_v6:
-            try:
-                p6 = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                p6.communicate("".join(restore_v6).encode("utf-8"))
-            except Exception:
-                pass
-
+        _run_ipset_restore(restore_cmds)
         return True
     except Exception as e:
         print(f"[IPSET] 初始化异常: {e}")
         return False
 
 def flush_firewall_blocks():
-    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并无 shell 注入风险地批量移除内核黑洞路由"""
+    """精准排空 PortGuard 自己下发的封禁拦截：清空 ipset 黑名单集合，并仅移除 PortGuard 黑名单库记录的黑洞路由"""
     try:
         if is_ipset_available():
-            subprocess.run(["ipset", "flush", "portguard_blacklist_v4"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["ipset", "flush", "portguard_blacklist_v6"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for sname in ("portguard_blacklist_v4", "portguard_blacklist_v6", "portguard_blacknet_v4", "portguard_blacknet_v6"):
+                subprocess.run(["ipset", "flush", sname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        for route_cmd, del_prefix in (
-            (["ip", "route", "show"], ["ip", "route", "del", "blackhole"]),
-            (["ip", "-6", "route", "show"], ["ip", "-6", "route", "del", "blackhole"]),
-        ):
-            try:
-                res = subprocess.run(route_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=5)
-                for line in (res.stdout or "").splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 2 and parts[0] == "blackhole":
-                        valid_target = validate_ip(parts[1])
-                        if valid_target:
-                            subprocess.run(del_prefix + [valid_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+        with closing(get_db()) as conn:
+            rows = conn.execute("SELECT ip FROM blacklist").fetchall()
+
+        for row in rows:
+            valid_target = validate_ip(row["ip"])
+            if not valid_target:
+                continue
+            del_cmd = ["ip", "-6", "route", "del", "blackhole", valid_target] if ":" in valid_target else ["ip", "route", "del", "blackhole", valid_target]
+            subprocess.run(del_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception as e:
         print(f"[Firewall] 清理阻断异常: {e}")
@@ -383,65 +402,98 @@ _BLACKLIST_IPS_CACHE_TIME = 0.0
 _BLACKLIST_IPS_LOCK = threading.Lock()
 
 def get_blacklisted_ips_set():
-    """获取内存级快速黑名单 IP 集合（5秒缓存），用于网络层嗅探毫秒级阻断与排除"""
-    global _BLACKLIST_IPS_CACHE_TIME
+    """获取内存级快速黑名单 IP 集合（5秒缓存，采用新集合引用原子替换避免并发遍历异常与清空瞬时漏判）"""
+    global _BLACKLIST_IPS_CACHE, _BLACKLIST_IPS_CACHE_TIME
     now = time.time()
+    cached_ref = _BLACKLIST_IPS_CACHE
     if _BLACKLIST_IPS_CACHE_TIME > 0 and (now - _BLACKLIST_IPS_CACHE_TIME < 5.0):
-        return _BLACKLIST_IPS_CACHE
+        return cached_ref
     with _BLACKLIST_IPS_LOCK:
         if _BLACKLIST_IPS_CACHE_TIME > 0 and (now - _BLACKLIST_IPS_CACHE_TIME < 5.0):
             return _BLACKLIST_IPS_CACHE
         try:
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("SELECT ip FROM blacklist")
-            rows = {row[0] for row in c.fetchall() if row[0]}
-            _BLACKLIST_IPS_CACHE.clear()
-            _BLACKLIST_IPS_CACHE.update(rows)
+            with closing(get_db()) as conn:
+                c = conn.cursor()
+                c.execute("SELECT ip FROM blacklist")
+                rows = {row[0] for row in c.fetchall() if row[0]}
+            _BLACKLIST_IPS_CACHE = rows
             _BLACKLIST_IPS_CACHE_TIME = now
-            conn.close()
         except Exception:
             pass
         return _BLACKLIST_IPS_CACHE
 
-def ban_ip_firewall(ip, expire_seconds=None):
-    """下发内核拦截：优先写入带 timeout 的 ipset 集合并下发黑洞路由，内核自动到期老化，降级兼容原生 iptables。"""
+def _parse_ip_or_cidr_target(ip_val):
+    """统一解析单个 IP 或 CIDR 网段，返回 (is_cidr, is_ipv6, canonical_str, route_target)"""
+    if "/" in ip_val:
+        net_obj = ipaddress.ip_network(ip_val, strict=False)
+        is_v6 = (net_obj.version == 6)
+        # 若前缀等于单主机掩码 (/32 或 /128)，归一为单 IP 处理
+        if (not is_v6 and net_obj.prefixlen == 32) or (is_v6 and net_obj.prefixlen == 128):
+            host_str = str(net_obj.network_address)
+            mask = "/128" if is_v6 else "/32"
+            return False, is_v6, host_str, f"{host_str}{mask}"
+        return True, is_v6, str(net_obj), str(net_obj)
+    addr_obj = ipaddress.ip_address(ip_val)
+    is_v6 = (addr_obj.version == 6)
+    host_str = str(addr_obj)
+    mask = "/128" if is_v6 else "/32"
+    return False, is_v6, host_str, f"{host_str}{mask}"
+
+def ban_ip_firewall(ip, expire_seconds=None, cfg=None):
+    """下发内核拦截：同时兼容单个 IP 与 CIDR 网段，严格遵循 ban_action_iptables 与 ban_action_blackhole 独立开关，绝不压过白名单优先级。"""
     valid_ip = validate_ip(ip)
     if not valid_ip or is_infrastructure_or_cdn_ip(valid_ip) or ip_in_whitelist(valid_ip):
         return
-    ip = valid_ip
     try:
-        addr_obj = ipaddress.ip_address(ip)
-        is_ipv6 = addr_obj.version == 6
-        set_name = "portguard_blacklist_v6" if is_ipv6 else "portguard_blacklist_v4"
+        if cfg is None:
+            cfg = load_config()
+        use_iptables = bool(cfg.get("ban_action_iptables", True))
+        use_blackhole = bool(cfg.get("ban_action_blackhole", True))
+        if not use_iptables and not use_blackhole:
+            return
+
+        is_cidr, is_ipv6, target_str, route_target = _parse_ip_or_cidr_target(valid_ip)
+        if is_cidr:
+            set_name = "portguard_blacknet_v6" if is_ipv6 else "portguard_blacknet_v4"
+            set_type = "hash:net"
+        else:
+            set_name = "portguard_blacklist_v6" if is_ipv6 else "portguard_blacklist_v4"
+            set_type = "hash:ip"
+
         fw_tool = "ip6tables" if is_ipv6 else "iptables"
+        wl_set = "portguard_whitelist_v6" if is_ipv6 else "portguard_whitelist_v4"
         save_tool = "ip6tables-save" if is_ipv6 else "iptables-save"
-        mask = "/128" if is_ipv6 else "/32"
 
-        if is_ipset_available():
-            timeout_val = min(2147483, max(60, int(expire_seconds))) if expire_seconds and expire_seconds > 0 else 2147483
-            res = subprocess.run(["ipset", "add", set_name, ip, "timeout", str(timeout_val), "-exist"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if res.returncode != 0:
-                _ensure_ipset_timeout_set(set_name, is_ipv6=is_ipv6)
-                subprocess.run(["ipset", "add", set_name, ip, "timeout", str(timeout_val), "-exist"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            chk = subprocess.run([fw_tool, "-C", "INPUT", "-s", ip, "-j", "DROP"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if chk.returncode != 0:
-                subprocess.run([fw_tool, "-I", "INPUT", "-s", ip, "-j", "DROP"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                run_firewall_cmd(save_tool)
+        if use_iptables:
+            if is_ipset_available():
+                timeout_val = min(2147483, max(60, int(expire_seconds))) if expire_seconds and expire_seconds > 0 else 2147483
+                res = subprocess.run(["ipset", "add", set_name, target_str, "timeout", str(timeout_val), "-exist"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if res.returncode != 0:
+                    _ensure_ipset_timeout_set(set_name, is_ipv6=is_ipv6, set_type=set_type)
+                    subprocess.run(["ipset", "add", set_name, target_str, "timeout", str(timeout_val), "-exist"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                chk = subprocess.run([fw_tool, "-C", "INPUT", "-s", target_str, "-j", "DROP"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if chk.returncode != 0:
+                    # 确保插入位置在白名单规则之后（若存在白名单集合规则则插在第 2 位）
+                    chk_wl = subprocess.run([fw_tool, "-C", "INPUT", "-m", "set", "--match-set", wl_set, "src", "-j", "ACCEPT"],
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    insert_pos = ["2"] if chk_wl.returncode == 0 else []
+                    subprocess.run([fw_tool, "-I", "INPUT"] + insert_pos + ["-s", target_str, "-j", "DROP"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    run_firewall_cmd(save_tool)
 
-        if is_ipv6:
-            subprocess.run(["ip", "-6", "route", "add", "blackhole", f"{ip}{mask}"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            subprocess.run(["ip", "route", "add", "blackhole", f"{ip}{mask}"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+        if use_blackhole:
+            if is_ipv6:
+                subprocess.run(["ip", "-6", "route", "add", "blackhole", route_target],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["ip", "route", "add", "blackhole", route_target],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"[Firewall] 下发封禁异常 ({valid_ip}): {e}")
 
 class ThreatScoreEngine:
     """动态威胁风险评分引擎 (带时间半衰期衰减模型，防止 NAT 误杀并捕获慢速探测)"""
@@ -605,6 +657,7 @@ def get_active_ssh_client_ips():
 
 _DEFAULT_GATEWAY_CACHE = None
 _DEFAULT_GATEWAY_LAST_CHECK = 0.0
+_DEFAULT_GATEWAY_LOCK = threading.Lock()
 
 def get_default_gateway():
     """动态通过 /proc/net/route 毫秒级提取默认路由网关 IP (防自锁保护，绝不误封上一级路由交换机)"""
@@ -613,24 +666,28 @@ def get_default_gateway():
     if _DEFAULT_GATEWAY_CACHE is not None and (now - _DEFAULT_GATEWAY_LAST_CHECK < 60.0):
         return _DEFAULT_GATEWAY_CACHE
 
-    gw = None
-    try:
-        if os.path.exists("/proc/net/route"):
-            with open("/proc/net/route", "r") as f:
-                lines = f.readlines()
-            for line in lines[1:]:
-                parts = line.strip().split()
-                if len(parts) >= 3 and parts[1] == "00000000":
-                    gw_hex = parts[2]
-                    if gw_hex != "00000000":
-                        gw = socket.inet_ntoa(struct.pack("<L", int(gw_hex, 16)))
-                        break
-    except Exception:
-        pass
+    with _DEFAULT_GATEWAY_LOCK:
+        if _DEFAULT_GATEWAY_CACHE is not None and (now - _DEFAULT_GATEWAY_LAST_CHECK < 60.0):
+            return _DEFAULT_GATEWAY_CACHE
 
-    _DEFAULT_GATEWAY_CACHE = gw
-    _DEFAULT_GATEWAY_LAST_CHECK = now
-    return gw
+        gw = None
+        try:
+            if os.path.exists("/proc/net/route"):
+                with open("/proc/net/route", "r") as f:
+                    lines = f.readlines()
+                for line in lines[1:]:
+                    parts = line.strip().split()
+                    if len(parts) >= 3 and parts[1] == "00000000":
+                        gw_hex = parts[2]
+                        if gw_hex != "00000000":
+                            gw = socket.inet_ntoa(struct.pack("<L", int(gw_hex, 16)))
+                            break
+        except Exception:
+            pass
+
+        _DEFAULT_GATEWAY_CACHE = gw
+        _DEFAULT_GATEWAY_LAST_CHECK = now
+        return gw
 
 _CLUSTER_NODES_IPS_CACHE = None
 _CLUSTER_NODES_IPS_LAST_CHECK = 0.0
@@ -664,6 +721,11 @@ _WHITELIST_CACHE_TIME = 0.0
 _WHITELIST_EXACT_IPS = set()
 _WHITELIST_NETS = []
 _WHITELIST_LOCK = threading.Lock()
+
+def invalidate_whitelist_cache():
+    global _WHITELIST_CACHE_TIME
+    with _WHITELIST_LOCK:
+        _WHITELIST_CACHE_TIME = 0.0
 
 def compile_whitelist_rules(whitelist_items):
     """预编译白名单规则，提取精确 IP set 和网络段 list，支持 O(1) 检索"""
@@ -708,7 +770,9 @@ def ip_in_whitelist(ip, whitelist_items=None):
     if is_infrastructure_or_cdn_ip(ip):
         return True
 
-    gw = get_default_gateway()
+    sd_mod = sys.modules.get("sentry_daemon")
+    gw_fn = getattr(sd_mod, "get_default_gateway", get_default_gateway) if sd_mod else get_default_gateway
+    gw = gw_fn()
     if gw and ip == gw:
         return True
 
@@ -730,27 +794,38 @@ def ip_in_whitelist(ip, whitelist_items=None):
 
     if nets:
         try:
-            ip_obj = ipaddress.ip_address(ip)
-            for net in nets:
-                if ip_obj in net:
-                    return True
+            if "/" in str(ip):
+                target_net = ipaddress.ip_network(ip, strict=False)
+                for net in nets:
+                    if target_net.version == net.version and target_net.overlaps(net):
+                        return True
+            else:
+                ip_obj = ipaddress.ip_address(ip)
+                for net in nets:
+                    if ip_obj in net:
+                        return True
         except Exception:
             pass
 
     return False
 
-def batch_ban_ip_firewall(ips, expire_seconds=None):
+def batch_ban_ip_firewall(ips, expire_seconds=None, cfg=None):
     """批量向内核 ipset 下发封禁规则，单次进程通信下发成百上千条，杜绝频繁 fork 造成的 CPU 脉冲"""
     if not ips:
         return
+    if cfg is None:
+        cfg = load_config()
+    use_iptables = bool(cfg.get("ban_action_iptables", True))
+    use_blackhole = bool(cfg.get("ban_action_blackhole", True))
+    if not use_iptables and not use_blackhole:
+        return
     if not is_ipset_available():
         for single_ip in ips:
-            ban_ip_firewall(single_ip, expire_seconds=expire_seconds)
+            ban_ip_firewall(single_ip, expire_seconds=expire_seconds, cfg=cfg)
         return
 
     timeout_val = min(2147483, max(60, int(expire_seconds))) if expire_seconds and expire_seconds > 0 else 2147483
-    v4_cmds = []
-    v6_cmds = []
+    restore_cmds = []
     
     exact_w, nets_w = get_compiled_whitelist()
     infra_set = PUBLIC_INFRASTRUCTURE_IPS
@@ -763,102 +838,105 @@ def batch_ban_ip_firewall(ips, expire_seconds=None):
         if not val_ip or val_ip in infra_set or val_ip == gw or val_ip in ssh_ips or val_ip in c_ips or val_ip in exact_w or is_infrastructure_or_cdn_ip(val_ip) or ip_in_whitelist(val_ip):
             continue
         try:
-            addr = ipaddress.ip_address(val_ip)
-            if addr.version == 6:
-                v6_cmds.append(f"add portguard_blacklist_v6 {val_ip} timeout {timeout_val} -exist\n")
-            else:
-                v4_cmds.append(f"add portguard_blacklist_v4 {val_ip} timeout {timeout_val} -exist\n")
+            is_cidr, is_v6, target_str, route_target = _parse_ip_or_cidr_target(val_ip)
+            if use_iptables:
+                if is_cidr:
+                    sname = "portguard_blacknet_v6" if is_v6 else "portguard_blacknet_v4"
+                else:
+                    sname = "portguard_blacklist_v6" if is_v6 else "portguard_blacklist_v4"
+                restore_cmds.append(f"add {sname} {target_str} timeout {timeout_val} -exist\n")
+            if use_blackhole:
+                if is_v6:
+                    subprocess.run(["ip", "-6", "route", "add", "blackhole", route_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.run(["ip", "route", "add", "blackhole", route_target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             continue
 
-    if v4_cmds:
-        try:
-            p = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            p.communicate("".join(v4_cmds).encode("utf-8"), timeout=5)
-        except Exception:
-            pass
-    if v6_cmds:
-        try:
-            p = subprocess.Popen(["ipset", "restore"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            p.communicate("".join(v6_cmds).encode("utf-8"), timeout=5)
-        except Exception:
-            pass
+    _run_ipset_restore(restore_cmds)
 
 def unban_ip_core(ip, status_event="UNBANNED", source_node="本机操作"):
-    """彻底解除对指定 IP 的内核防火墙封禁、ipset、黑洞路由及数据库黑名单记录，并登记防回潮墓碑。"""
+    """彻底解除对指定单个 IP 或 CIDR 网段的内核防火墙封禁、ipset、黑洞路由及数据库黑名单记录，并登记防回潮墓碑。"""
+    global _BLACKLIST_IPS_CACHE
     valid_ip = validate_ip(ip)
     if not valid_ip:
         return False
-    ip = valid_ip
     try:
-        addr_obj = ipaddress.ip_address(ip)
-        is_ipv6 = addr_obj.version == 6
-        set_name = "portguard_blacklist_v6" if is_ipv6 else "portguard_blacklist_v4"
+        is_cidr, is_ipv6, target_str, route_target = _parse_ip_or_cidr_target(valid_ip)
         fw_tool = "ip6tables" if is_ipv6 else "iptables"
         save_tool = "ip6tables-save" if is_ipv6 else "iptables-save"
-        mask = "/128" if is_ipv6 else "/32"
 
         if is_ipset_available():
-            subprocess.run(["ipset", "del", set_name, ip, "-exist"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if is_cidr:
+                net_set = "portguard_blacknet_v6" if is_ipv6 else "portguard_blacknet_v4"
+                subprocess.run(["ipset", "del", net_set, target_str, "-exist"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                ip_set = "portguard_blacklist_v6" if is_ipv6 else "portguard_blacklist_v4"
+                subprocess.run(["ipset", "del", ip_set, target_str, "-exist"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         cleaned_any = False
-        while True:
-            res = subprocess.run([fw_tool, "-D", "INPUT", "-s", ip, "-j", "DROP"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if res.returncode == 0:
-                cleaned_any = True
-            else:
-                break
+        for candidate_src in ({target_str, valid_ip} if target_str != valid_ip else {target_str}):
+            for _ in range(16):
+                res = subprocess.run([fw_tool, "-D", "INPUT", "-s", candidate_src, "-j", "DROP"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if res.returncode == 0:
+                    cleaned_any = True
+                else:
+                    break
         
         if cleaned_any:
             run_firewall_cmd(save_tool)
 
         if is_ipv6:
-            subprocess.run(["ip", "-6", "route", "del", "blackhole", f"{ip}{mask}"],
+            subprocess.run(["ip", "-6", "route", "del", "blackhole", route_target],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
-            subprocess.run(["ip", "route", "del", "blackhole", f"{ip}{mask}"],
+            subprocess.run(["ip", "route", "del", "blackhole", route_target],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         now_ts = int(time.time())
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS unbanned_ips (
-            ip TEXT PRIMARY KEY,
-            unban_time TEXT,
-            timestamp INTEGER,
-            source_node TEXT
-        )
-        """)
-        c.execute("""
-        INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
-        VALUES (?, ?, ?, ?)
-        """, (ip, now_str, now_ts, source_node))
-        c.execute("DELETE FROM blacklist WHERE ip = ?", (ip,))
-        c.execute("UPDATE events SET status = ? WHERE ip = ?", (status_event, ip))
-        c.execute("DELETE FROM unbanned_ips WHERE timestamp < ?", (now_ts - 7 * 86400,))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            c = conn.cursor()
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS unbanned_ips (
+                ip TEXT PRIMARY KEY,
+                unban_time TEXT,
+                timestamp INTEGER,
+                source_node TEXT
+            )
+            """)
+            c.execute("""
+            INSERT OR REPLACE INTO unbanned_ips (ip, unban_time, timestamp, source_node)
+            VALUES (?, ?, ?, ?)
+            """, (valid_ip, now_str, now_ts, source_node))
+            c.execute("DELETE FROM blacklist WHERE ip IN (?, ?)", (valid_ip, target_str))
+            c.execute("UPDATE events SET status = ? WHERE ip IN (?, ?)", (status_event, valid_ip, target_str))
+            c.execute("DELETE FROM unbanned_ips WHERE timestamp < ?", (now_ts - 7 * 86400,))
+            conn.commit()
 
-        _THREAT_ENGINE.reset_score(ip)
+        _THREAT_ENGINE.reset_score(valid_ip)
+        if target_str != valid_ip:
+            _THREAT_ENGINE.reset_score(target_str)
         with _BLACKLIST_IPS_LOCK:
-            _BLACKLIST_IPS_CACHE.discard(ip)
+            if valid_ip in _BLACKLIST_IPS_CACHE or target_str in _BLACKLIST_IPS_CACHE:
+                _BLACKLIST_IPS_CACHE = _BLACKLIST_IPS_CACHE - {valid_ip, target_str}
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[Firewall] 解封目标异常 ({valid_ip}): {e}")
         return False
 
 
 def auto_heal_whitelist_ips(whitelist_items=None):
     """
-    白名单内核强联动与全自动自愈机制：
-    反向比对当前 Linux 内核黑洞路由、ipset 阻断集合与数据库黑名单，
-    一旦发现任何属于白名单（含单个 IP 及 CIDR 网段）的地址仍处于被阻断状态，
-    瞬间自动从内核路由表与 ipset 中剔除解封，做到‘加白即物理连通’，彻底杜绝状态脱节。
+    白名单内核强联动与全自动双向同步自愈机制：
+    1. 反向比对当前 Linux 内核黑洞路由、ipset 阻断集合与数据库黑名单，若命中白名单则立刻解封；
+    2. 采用临时集合 + ipset swap 原子镜像同步 portguard_whitelist_v4/v6，新增立即放行、删除立即剔除，零幽灵残留！
     """
     try:
+        invalidate_whitelist_cache()
         if whitelist_items is None:
             cfg = load_config()
             whitelist_items = cfg.get("whitelist", DEFAULT_CONFIG.get("whitelist", []))
@@ -869,65 +947,74 @@ def auto_heal_whitelist_ips(whitelist_items=None):
         for cmd in (["ip", "route", "show"], ["ip", "-6", "route", "show"]):
             try:
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=2)
-                for line in res.stdout.splitlines():
+                for line in (res.stdout or "").splitlines():
                     if "blackhole" in line:
                         parts = line.strip().split()
                         if len(parts) >= 2:
-                            bh_ip = parts[1].split('/')[0].strip()
-                            if bh_ip:
-                                active_blackholes.add(bh_ip)
+                            bh_target = validate_ip(parts[1])
+                            if bh_target:
+                                active_blackholes.add(bh_target)
             except Exception:
                 pass
 
-        # 2. 扫描数据库黑名单中的 IP
+        # 2. 扫描数据库黑名单中的 IP / 网段
         try:
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("SELECT ip FROM blacklist")
-            for r in c.fetchall():
-                if r[0]:
-                    active_blackholes.add(r[0])
-            conn.close()
+            with closing(get_db()) as conn:
+                c = conn.cursor()
+                c.execute("SELECT ip FROM blacklist")
+                for r in c.fetchall():
+                    if r[0]:
+                        active_blackholes.add(r[0])
         except Exception:
             pass
 
-        # 3. 对所有处于阻断态的 IP 进行白名单核验，若在白名单中则立刻执行内核级解封
+        # 3. 对所有处于阻断态的目标进行白名单核验，若在白名单中则立刻执行内核级解封
         for test_ip in active_blackholes:
             if ip_in_whitelist(test_ip, whitelist_items=whitelist_items):
                 unban_ip_core(test_ip, status_event="WHITELIST", source_node="白名单自愈")
                 healed_count += 1
 
-        # 4. 确保所有白名单显式 IP 无论是否在黑名单中，都确保从黑名单 ipset 移除
+        # 4. 内核级白名单 IPSet 集合原子双向同步（swap 替换确保已删除的白名单项同步从内核移除）
         if is_ipset_available():
-            for item in whitelist_items:
+            _ensure_ipset_net_set("portguard_whitelist_v4", is_ipv6=False)
+            _ensure_ipset_net_set("portguard_whitelist_v6", is_ipv6=True)
+            tmp_v4 = f"pg_wl4_{int(time.time()*1000)%100000}"
+            tmp_v6 = f"pg_wl6_{int(time.time()*1000)%100000}"
+            restore_lines = [
+                f"create {tmp_v4} hash:net maxelem 65536 -exist\n",
+                f"flush {tmp_v4}\n",
+                f"create {tmp_v6} hash:net family inet6 maxelem 65536 -exist\n",
+                f"flush {tmp_v6}\n",
+            ]
+
+            for item in (whitelist_items or []):
                 w_ip = (item.get("ip") if isinstance(item, dict) else item) or ""
                 w_ip = str(w_ip).strip()
                 if not w_ip:
                     continue
-                if "/" not in w_ip:
-                    valid_ip = validate_ip(w_ip)
-                    if valid_ip:
-                        subprocess.run(["ipset", "del", "portguard_blacklist_v4", valid_ip, "-exist"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        subprocess.run(["ipset", "del", "portguard_blacklist_v6", valid_ip, "-exist"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
-                # 5. 内核级白名单 IPSet 集合实时同步：不管是单个 IP 还是 CIDR 网段，注入 portguard_whitelist 集合享受最高优先级放行
+                valid_w = validate_ip(w_ip)
+                if not valid_w:
+                    continue
                 try:
-                    if "/" in w_ip:
-                        net_obj = ipaddress.ip_network(w_ip, strict=False)
-                        target_set = "portguard_whitelist_v6" if net_obj.version == 6 else "portguard_whitelist_v4"
-                        subprocess.run(["ipset", "add", target_set, str(net_obj), "-exist"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    is_cidr, is_v6, target_str, _ = _parse_ip_or_cidr_target(valid_w)
+                    if not is_cidr:
+                        bl_set = "portguard_blacklist_v6" if is_v6 else "portguard_blacklist_v4"
+                        restore_lines.append(f"del {bl_set} {target_str} -exist\n")
                     else:
-                        valid_ip = validate_ip(w_ip)
-                        if valid_ip:
-                            ip_obj = ipaddress.ip_address(valid_ip)
-                            target_set = "portguard_whitelist_v6" if ip_obj.version == 6 else "portguard_whitelist_v4"
-                            subprocess.run(["ipset", "add", target_set, valid_ip, "-exist"],
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        bn_set = "portguard_blacknet_v6" if is_v6 else "portguard_blacknet_v4"
+                        restore_lines.append(f"del {bn_set} {target_str} -exist\n")
+                    wl_tmp = tmp_v6 if is_v6 else tmp_v4
+                    restore_lines.append(f"add {wl_tmp} {target_str} -exist\n")
                 except Exception:
                     pass
+
+            restore_lines.extend([
+                f"swap {tmp_v4} portguard_whitelist_v4\n",
+                f"destroy {tmp_v4}\n",
+                f"swap {tmp_v6} portguard_whitelist_v6\n",
+                f"destroy {tmp_v6}\n",
+            ])
+            _run_ipset_restore(restore_lines)
 
         return healed_count
     except Exception as e:

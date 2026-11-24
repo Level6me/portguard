@@ -4,6 +4,8 @@
 PortGuard Core Database & Configuration Management Module
 数据库管理、持久化存储与配置核心控制
 """
+from contextlib import closing
+import copy
 import glob
 import hashlib
 import hmac
@@ -12,6 +14,7 @@ import os
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import threading
 import time
 
@@ -201,7 +204,10 @@ PORT_DESCRIPTIONS = {t["port"]: t["name"] for t in DEFAULT_CONFIG["trap_ports"]}
 
 _CONFIG_CACHE = None
 _CONFIG_CACHE_MTIME = 0.0
-_CONFIG_LOCK = threading.Lock()
+_CONFIG_LOCK = threading.RLock()
+_CONFIG_IO_LOCK = threading.RLock()
+_GEO_HEAL_STARTED = False
+_GEO_HEAL_LOCK = threading.Lock()
 
 
 def _secure_file_permissions(path, mode=0o600):
@@ -291,227 +297,229 @@ def init_db(auto_heal=True):
             os.makedirs(dir_name, exist_ok=True)
         except Exception:
             pass
-    conn = sqlite3.connect(DB_PATH, timeout=20)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("PRAGMA journal_mode=WAL;")
-        cursor.execute("PRAGMA busy_timeout=15000;")
-        cursor.execute("PRAGMA synchronous=NORMAL;")
-    except Exception:
-        pass
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ip TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        proto TEXT DEFAULT 'TCP',
-        port_name TEXT,
-        category TEXT,
-        level TEXT,
-        country TEXT,
-        region TEXT,
-        city TEXT,
-        isp TEXT,
-        attack_time TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        status TEXT DEFAULT 'BANNED',
-        hit_count INTEGER DEFAULT 1
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ip ON events(ip)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_port ON events(port)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country ON events(country)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_name ON events(port, port_name)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_cov3 ON events(port, port_name, ip)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country_ip ON events(country, ip)")
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS blacklist (
-        ip TEXT PRIMARY KEY,
-        reason TEXT,
-        country TEXT,
-        level TEXT,
-        ban_time TEXT,
-        timestamp INTEGER,
-        ban_expire INTEGER,
-        source_node TEXT DEFAULT '本机'
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS unbanned_ips (
-        ip TEXT PRIMARY KEY,
-        unban_time TEXT,
-        timestamp INTEGER,
-        source_node TEXT
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_unbanned_ts ON unbanned_ips(timestamp)")
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS whitelist (
-        ip TEXT PRIMARY KEY,
-        remark TEXT,
-        create_time TEXT
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS access_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ip TEXT NOT NULL,
-        domain TEXT DEFAULT '',
-        method TEXT NOT NULL,
-        path TEXT NOT NULL,
-        status_code INTEGER DEFAULT 200,
-        user_agent TEXT,
-        country TEXT,
-        region TEXT,
-        city TEXT,
-        isp TEXT,
-        access_time TEXT NOT NULL,
-        timestamp INTEGER NOT NULL
-    )
-    """)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS port_access_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ip TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        proto TEXT DEFAULT 'TCP',
-        port_name TEXT,
-        country TEXT,
-        region TEXT,
-        city TEXT,
-        isp TEXT,
-        action TEXT DEFAULT 'INTERCEPTED',
-        access_time TEXT NOT NULL,
-        timestamp INTEGER NOT NULL
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_time ON port_access_logs(timestamp)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_ip ON port_access_logs(ip)")
-    
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS http_traps (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        rule_id TEXT UNIQUE,
-        name TEXT NOT NULL,
-        match_type TEXT NOT NULL,
-        pattern TEXT DEFAULT '',
-        threshold INTEGER DEFAULT 6,
-        window INTEGER DEFAULT 30,
-        action TEXT DEFAULT 'ban',
-        level TEXT DEFAULT '极高危',
-        enabled INTEGER DEFAULT 1,
-        description TEXT DEFAULT '',
-        created_at TEXT NOT NULL
-    )
-    """)
-    now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    for ht in DEFAULT_HTTP_TRAPS:
-        cursor.execute("""
-        INSERT OR IGNORE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS hidden_ips (
-        ip TEXT PRIMARY KEY,
-        country TEXT,
-        region TEXT,
-        city TEXT,
-        isp TEXT,
-        remark TEXT DEFAULT '',
-        create_time TEXT,
-        timestamp INTEGER
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_hidden_ip ON hidden_ips(ip)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ip ON access_logs(ip, id DESC)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_ts ON blacklist(timestamp DESC)")
-
-    for col_sql in (
-        "ALTER TABLE access_logs ADD COLUMN domain TEXT DEFAULT ''",
-        "ALTER TABLE blacklist ADD COLUMN country TEXT",
-        "ALTER TABLE blacklist ADD COLUMN level TEXT",
-        "ALTER TABLE blacklist ADD COLUMN ban_expire INTEGER",
-        "ALTER TABLE blacklist ADD COLUMN source_node TEXT DEFAULT '本机'",
-        "ALTER TABLE events ADD COLUMN category TEXT",
-        "ALTER TABLE events ADD COLUMN level TEXT",
-    ):
+    with closing(sqlite3.connect(DB_PATH, timeout=20)) as conn:
+        cursor = conn.cursor()
         try:
-            cursor.execute(col_sql)
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA busy_timeout=15000;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            proto TEXT DEFAULT 'TCP',
+            port_name TEXT,
+            category TEXT,
+            level TEXT,
+            country TEXT,
+            region TEXT,
+            city TEXT,
+            isp TEXT,
+            attack_time TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            status TEXT DEFAULT 'BANNED',
+            hit_count INTEGER DEFAULT 1
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_ip ON events(ip)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_port ON events(port)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country ON events(country)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_name ON events(port, port_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_port_cov3 ON events(port, port_name, ip)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_country_ip ON events(country, ip)")
+        
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist (
+            ip TEXT PRIMARY KEY,
+            reason TEXT,
+            country TEXT,
+            level TEXT,
+            ban_time TEXT,
+            timestamp INTEGER,
+            ban_expire INTEGER,
+            source_node TEXT DEFAULT '本机'
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS unbanned_ips (
+            ip TEXT PRIMARY KEY,
+            unban_time TEXT,
+            timestamp INTEGER,
+            source_node TEXT
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_unbanned_ts ON unbanned_ips(timestamp)")
+        
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS whitelist (
+            ip TEXT PRIMARY KEY,
+            remark TEXT,
+            create_time TEXT
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS access_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            domain TEXT DEFAULT '',
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status_code INTEGER DEFAULT 200,
+            user_agent TEXT,
+            country TEXT,
+            region TEXT,
+            city TEXT,
+            isp TEXT,
+            access_time TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS port_access_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            proto TEXT DEFAULT 'TCP',
+            port_name TEXT,
+            country TEXT,
+            region TEXT,
+            city TEXT,
+            isp TEXT,
+            action TEXT DEFAULT 'INTERCEPTED',
+            access_time TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_time ON port_access_logs(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_port_access_ip ON port_access_logs(ip)")
+        
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS http_traps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id TEXT UNIQUE,
+            name TEXT NOT NULL,
+            match_type TEXT NOT NULL,
+            pattern TEXT DEFAULT '',
+            threshold INTEGER DEFAULT 6,
+            window INTEGER DEFAULT 30,
+            action TEXT DEFAULT 'ban',
+            level TEXT DEFAULT '极高危',
+            enabled INTEGER DEFAULT 1,
+            description TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """)
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        for ht in DEFAULT_HTTP_TRAPS:
+            cursor.execute("""
+            INSERT OR IGNORE INTO http_traps (rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ht["rule_id"], ht["name"], ht["match_type"], ht["pattern"], ht["threshold"], ht["window"], ht["action"], ht["level"], ht["enabled"], ht["description"], now_dt))
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hidden_ips (
+            ip TEXT PRIMARY KEY,
+            country TEXT,
+            region TEXT,
+            city TEXT,
+            isp TEXT,
+            remark TEXT DEFAULT '',
+            create_time TEXT,
+            timestamp INTEGER
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hidden_ip ON hidden_ips(ip)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ip ON access_logs(ip, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_ts ON blacklist(timestamp DESC)")
+
+        for col_sql in (
+            "ALTER TABLE access_logs ADD COLUMN domain TEXT DEFAULT ''",
+            "ALTER TABLE blacklist ADD COLUMN country TEXT",
+            "ALTER TABLE blacklist ADD COLUMN level TEXT",
+            "ALTER TABLE blacklist ADD COLUMN ban_expire INTEGER",
+            "ALTER TABLE blacklist ADD COLUMN source_node TEXT DEFAULT '本机'",
+            "ALTER TABLE events ADD COLUMN category TEXT",
+            "ALTER TABLE events ADD COLUMN level TEXT",
+        ):
+            try:
+                cursor.execute(col_sql)
+            except Exception:
+                pass
+
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_domain ON access_logs(domain)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp)")
         except Exception:
             pass
 
-    try:
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_domain ON access_logs(domain)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp)")
-    except Exception:
-        pass
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_analytics_summary (
+            stat_date TEXT PRIMARY KEY,
+            day_ts INTEGER NOT NULL,
+            raw_port_probes INTEGER DEFAULT 0,
+            total_intercepted INTEGER DEFAULT 0,
+            non_intercepted_probes INTEGER DEFAULT 0,
+            total_web_requests INTEGER DEFAULT 0,
+            abnormal_web_requests INTEGER DEFAULT 0,
+            unique_attackers INTEGER DEFAULT 0,
+            unique_countries INTEGER DEFAULT 0
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_summary_ts ON daily_analytics_summary(day_ts)")
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS daily_analytics_summary (
-        stat_date TEXT PRIMARY KEY,
-        day_ts INTEGER NOT NULL,
-        raw_port_probes INTEGER DEFAULT 0,
-        total_intercepted INTEGER DEFAULT 0,
-        non_intercepted_probes INTEGER DEFAULT 0,
-        total_web_requests INTEGER DEFAULT 0,
-        abnormal_web_requests INTEGER DEFAULT 0,
-        unique_attackers INTEGER DEFAULT 0,
-        unique_countries INTEGER DEFAULT 0
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_summary_ts ON daily_analytics_summary(day_ts)")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS daily_analytics_dim (
-        stat_date TEXT NOT NULL,
-        dim_type TEXT NOT NULL,
-        dim_key TEXT NOT NULL,
-        dim_extra TEXT DEFAULT '',
-        cnt INTEGER DEFAULT 0,
-        PRIMARY KEY (stat_date, dim_type, dim_key)
-    )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_dim_type ON daily_analytics_dim(dim_type, stat_date)")
-        
-    conn.commit()
-    conn.close()
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_analytics_dim (
+            stat_date TEXT NOT NULL,
+            dim_type TEXT NOT NULL,
+            dim_key TEXT NOT NULL,
+            dim_extra TEXT DEFAULT '',
+            cnt INTEGER DEFAULT 0,
+            PRIMARY KEY (stat_date, dim_type, dim_key)
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_dim_type ON daily_analytics_dim(dim_type, stat_date)")
+            
+        conn.commit()
     if auto_heal:
         heal_cluster_geo_history()
 
 def heal_cluster_geo_history():
-    """后台自愈：将历史上所有未解析或标记为 未知地域/分析中 的 IP 归属地，异步重新解析"""
+    """后台自愈：将历史上所有未解析或标记为 未知地域/分析中 的 IP 归属地，异步重新解析（全局单实例保护）"""
+    global _GEO_HEAL_STARTED
+    with _GEO_HEAL_LOCK:
+        if _GEO_HEAL_STARTED:
+            return
+        _GEO_HEAL_STARTED = True
+
     def _worker():
         try:
             time.sleep(1.0)
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("UPDATE events SET port = 443, proto = 'TCP' WHERE port = 0 AND (port_name LIKE '%Web%' OR port_name LIKE '%HTTP%' OR port_name LIKE '%IP直连%' OR port_name LIKE '%诱捕%')")
-            c.execute("UPDATE events SET proto = 'TCP' WHERE proto = 'MESH'")
-            conn.commit()
-            conn.close()
+            with closing(get_db()) as conn:
+                c = conn.cursor()
+                c.execute("UPDATE events SET port = 443, proto = 'TCP' WHERE port = 0 AND (port_name LIKE '%Web%' OR port_name LIKE '%HTTP%' OR port_name LIKE '%IP直连%' OR port_name LIKE '%诱捕%')")
+                c.execute("UPDATE events SET proto = 'TCP' WHERE proto = 'MESH'")
+                conn.commit()
 
             unresolvable_cache = {}
 
             while True:
                 try:
-                    conn = get_db()
-                    c = conn.cursor()
-                    c.execute("SELECT DISTINCT ip FROM events WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL OR isp IN ('分析中...', '', '0', 'None', 'null') OR isp IS NULL LIMIT 200")
-                    event_ips = [r[0] for r in c.fetchall() if r[0]]
+                    with closing(get_db()) as conn:
+                        c = conn.cursor()
+                        c.execute("SELECT DISTINCT ip FROM events WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL OR isp IN ('分析中...', '', '0', 'None', 'null') OR isp IS NULL LIMIT 200")
+                        event_ips = [r[0] for r in c.fetchall() if r[0]]
 
-                    c.execute("SELECT DISTINCT ip FROM blacklist WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
-                    bl_ips = [r[0] for r in c.fetchall() if r[0]]
+                        c.execute("SELECT DISTINCT ip FROM blacklist WHERE country IN ('分析中...', '集群联防', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
+                        bl_ips = [r[0] for r in c.fetchall() if r[0]]
 
-                    c.execute("SELECT DISTINCT ip FROM port_access_logs WHERE country IN ('分析中...', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
-                    pal_ips = [r[0] for r in c.fetchall() if r[0]]
-
-                    conn.close()
+                        c.execute("SELECT DISTINCT ip FROM port_access_logs WHERE country IN ('分析中...', '未知地域', '', 'None', 'null') OR country IS NULL LIMIT 200")
+                        pal_ips = [r[0] for r in c.fetchall() if r[0]]
 
                     now = time.time()
                     target_ips = [
@@ -534,19 +542,18 @@ def heal_cluster_geo_history():
                         if not geo or not geo.get("country") or geo.get("country") in ("集群联防", "未知地域", "分析中...", "", None):
                             geo = resolve_ip_geo(ip)
                         if geo and geo.get("country") and geo.get("country") not in ("分析中...", "集群联防", "", None):
-                            u_conn = get_db()
-                            u_c = u_conn.cursor()
-                            c_val = geo.get("country") or "公网节点"
-                            r_val = geo.get("region", "")
-                            ci_val = geo.get("city", "")
-                            isp_val = geo.get("isp", "")
-                            u_c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
-                                      (c_val, r_val, ci_val, isp_val, ip))
-                            u_c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (c_val, ip))
-                            u_c.execute("UPDATE port_access_logs SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
-                                      (c_val, r_val, ci_val, isp_val, ip))
-                            u_conn.commit()
-                            u_conn.close()
+                            with closing(get_db()) as u_conn:
+                                u_c = u_conn.cursor()
+                                c_val = geo.get("country") or "公网节点"
+                                r_val = geo.get("region", "")
+                                ci_val = geo.get("city", "")
+                                isp_val = geo.get("isp", "")
+                                u_c.execute("UPDATE events SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                                          (c_val, r_val, ci_val, isp_val, ip))
+                                u_c.execute("UPDATE blacklist SET country = ? WHERE ip = ?", (c_val, ip))
+                                u_c.execute("UPDATE port_access_logs SET country = ?, region = ?, city = ?, isp = ? WHERE ip = ?",
+                                          (c_val, r_val, ci_val, isp_val, ip))
+                                u_conn.commit()
                             if ip in unresolvable_cache:
                                 del unresolvable_cache[ip]
                         else:
@@ -563,6 +570,33 @@ def heal_cluster_geo_history():
             pass
     threading.Thread(target=_worker, daemon=True, name="GeoHealWorker").start()
 
+def _atomic_write_json(target_path, data_obj, mode=0o600):
+    """同目录临时文件 + fsync + os.replace 原子写入 JSON，彻底杜绝截断空文件与半写损坏"""
+    dir_name = os.path.dirname(os.path.abspath(target_path)) or "."
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".pg_cfg_", suffix=".tmp", dir=dir_name)
+    try:
+        try:
+            os.chmod(tmp_path, mode)
+        except Exception:
+            pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data_obj, f, indent=2, ensure_ascii=False)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp_path, target_path)
+        _secure_file_permissions(target_path, mode)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        raise
+
 def load_config():
     global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
     try:
@@ -570,78 +604,98 @@ def load_config():
         if dir_name and not os.path.exists(dir_name):
             os.makedirs(dir_name, exist_ok=True)
         if not os.path.exists(CONFIG_PATH):
-            initial_cfg = dict(DEFAULT_CONFIG)
-            try:
-                initial_cfg["admin_password"] = hash_admin_password(secrets.token_urlsafe(12))
-            except Exception:
-                import uuid
-                initial_cfg["admin_password"] = hash_admin_password(uuid.uuid4().hex[:12])
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(initial_cfg, f, indent=2, ensure_ascii=False)
-            _secure_file_permissions(CONFIG_PATH, 0o600)
-            with _CONFIG_LOCK:
-                _CONFIG_CACHE = dict(initial_cfg)
-                _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
-            return dict(_CONFIG_CACHE)
+            with _CONFIG_IO_LOCK:
+                if not os.path.exists(CONFIG_PATH):
+                    initial_cfg = copy.deepcopy(DEFAULT_CONFIG)
+                    try:
+                        initial_cfg["admin_password"] = hash_admin_password(secrets.token_urlsafe(12))
+                    except Exception:
+                        import uuid
+                        initial_cfg["admin_password"] = hash_admin_password(uuid.uuid4().hex[:12])
+                    _atomic_write_json(CONFIG_PATH, initial_cfg, mode=0o600)
+                    with _CONFIG_LOCK:
+                        _CONFIG_CACHE = copy.deepcopy(initial_cfg)
+                        _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
+                    return copy.deepcopy(_CONFIG_CACHE)
 
         mtime = os.path.getmtime(CONFIG_PATH)
         with _CONFIG_LOCK:
             if _CONFIG_CACHE is not None and mtime == _CONFIG_CACHE_MTIME:
-                return dict(_CONFIG_CACHE)
+                return copy.deepcopy(_CONFIG_CACHE)
 
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            merged = {**DEFAULT_CONFIG, **cfg}
-        with _CONFIG_LOCK:
-            _CONFIG_CACHE = merged
-            _CONFIG_CACHE_MTIME = mtime
-        return dict(merged)
-    except Exception:
+        with _CONFIG_IO_LOCK:
+            mtime = os.path.getmtime(CONFIG_PATH)
+            with _CONFIG_LOCK:
+                if _CONFIG_CACHE is not None and mtime == _CONFIG_CACHE_MTIME:
+                    return copy.deepcopy(_CONFIG_CACHE)
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                raise ValueError("Invalid config.json root type")
+            merged = {**copy.deepcopy(DEFAULT_CONFIG), **cfg}
+            with _CONFIG_LOCK:
+                _CONFIG_CACHE = copy.deepcopy(merged)
+                _CONFIG_CACHE_MTIME = mtime
+            return copy.deepcopy(merged)
+    except Exception as e:
+        print(f"[Config] 读取配置文件异常，启用缓存或默认兜底: {e}")
         with _CONFIG_LOCK:
             if _CONFIG_CACHE is not None:
-                return dict(_CONFIG_CACHE)
-        return dict(DEFAULT_CONFIG)
+                return copy.deepcopy(_CONFIG_CACHE)
+        return copy.deepcopy(DEFAULT_CONFIG)
 
 def save_config(cfg):
     global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
-    try:
-        dir_name = os.path.dirname(CONFIG_PATH)
-        if dir_name and not os.path.exists(dir_name):
-            os.makedirs(dir_name, exist_ok=True)
-            
-        if os.path.exists(CONFIG_PATH):
-            try:
-                if not os.path.exists(CONFIG_SNAPSHOTS_DIR):
-                    os.makedirs(CONFIG_SNAPSHOTS_DIR, mode=0o700, exist_ok=True)
-                _secure_dir_permissions(CONFIG_SNAPSHOTS_DIR, 0o700)
-                snap_time = time.strftime("%Y%m%d_%H%M%S")
-                snap_path = os.path.join(CONFIG_SNAPSHOTS_DIR, f"config_{snap_time}.json")
-                shutil.copy2(CONFIG_PATH, snap_path)
-                _secure_file_permissions(snap_path, 0o600)
+    with _CONFIG_IO_LOCK:
+        try:
+            dir_name = os.path.dirname(CONFIG_PATH)
+            if dir_name and not os.path.exists(dir_name):
+                os.makedirs(dir_name, exist_ok=True)
                 
-                snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime)
-                if len(snaps) > 15:
-                    for old_snap in snaps[:-15]:
-                        try:
-                            os.remove(old_snap)
-                        except Exception:
-                            pass
+            if os.path.exists(CONFIG_PATH):
+                try:
+                    if not os.path.exists(CONFIG_SNAPSHOTS_DIR):
+                        os.makedirs(CONFIG_SNAPSHOTS_DIR, mode=0o700, exist_ok=True)
+                    _secure_dir_permissions(CONFIG_SNAPSHOTS_DIR, 0o700)
+                    snap_time = time.strftime("%Y%m%d_%H%M%S")
+                    snap_path = os.path.join(CONFIG_SNAPSHOTS_DIR, f"config_{snap_time}.json")
+                    if os.path.exists(snap_path):
+                        snap_path = os.path.join(CONFIG_SNAPSHOTS_DIR, f"config_{snap_time}_{int(time.time()*1000)%1000:03d}.json")
+                    shutil.copy2(CONFIG_PATH, snap_path)
+                    _secure_file_permissions(snap_path, 0o600)
+                    
+                    snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime)
+                    if len(snaps) > 15:
+                        for old_snap in snaps[:-15]:
+                            try:
+                                os.remove(old_snap)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            _atomic_write_json(CONFIG_PATH, cfg, mode=0o600)
+            try:
+                mtime = os.path.getmtime(CONFIG_PATH)
+                with _CONFIG_LOCK:
+                    _CONFIG_CACHE = copy.deepcopy({**copy.deepcopy(DEFAULT_CONFIG), **cfg})
+                    _CONFIG_CACHE_MTIME = mtime
             except Exception:
                 pass
+            return True
+        except Exception as e:
+            print(f"[Config] 保存配置文件失败: {e}")
+            return False
 
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-        _secure_file_permissions(CONFIG_PATH, 0o600)
-        try:
-            mtime = os.path.getmtime(CONFIG_PATH)
-            with _CONFIG_LOCK:
-                _CONFIG_CACHE = {**DEFAULT_CONFIG, **cfg}
-                _CONFIG_CACHE_MTIME = mtime
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+def update_config(mutator_fn):
+    """线程安全事务化读-改-写配置辅助方法，彻底消除并发保存的 Lost Update 竞态"""
+    with _CONFIG_IO_LOCK:
+        cfg = load_config()
+        res = mutator_fn(cfg)
+        if res is False:
+            return False, cfg
+        ok = save_config(cfg)
+        return ok, cfg
 
 def get_config_snapshots():
     results = []
@@ -651,10 +705,13 @@ def get_config_snapshots():
         snaps = sorted(glob.glob(os.path.join(CONFIG_SNAPSHOTS_DIR, "config_*.json")), key=os.path.getmtime, reverse=True)
         for s in snaps:
             fname = os.path.basename(s)
+            mtime = os.path.getmtime(s)
+            dt_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime))
             results.append({
                 "filename": fname,
-                "timestamp": int(os.path.getmtime(s)),
-                "datetime": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(s))),
+                "timestamp": int(mtime),
+                "datetime": dt_str,
+                "backup_time": dt_str,
                 "size": os.path.getsize(s)
             })
     except Exception:
@@ -662,39 +719,41 @@ def get_config_snapshots():
     return results
 
 def rollback_config_snapshot(filename):
-    try:
-        clean_fn = os.path.basename(filename)
-        target = os.path.join(CONFIG_SNAPSHOTS_DIR, clean_fn)
-        if not os.path.exists(target):
-            return False, "指定的快照文件不存在"
-        with open(target, "r", encoding="utf-8") as f:
-            snap_cfg = json.load(f)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(snap_cfg, f, indent=2, ensure_ascii=False)
-        _secure_file_permissions(CONFIG_PATH, 0o600)
-        return True, "配置已成功从快照回滚还原！"
-    except Exception as e:
-        return False, f"回滚失败: {e}"
+    global _CONFIG_CACHE, _CONFIG_CACHE_MTIME
+    with _CONFIG_IO_LOCK:
+        try:
+            clean_fn = os.path.basename(filename)
+            target = os.path.join(CONFIG_SNAPSHOTS_DIR, clean_fn)
+            if not os.path.exists(target):
+                return False, "指定的快照文件不存在"
+            with open(target, "r", encoding="utf-8") as f:
+                snap_cfg = json.load(f)
+            if not isinstance(snap_cfg, dict):
+                return False, "快照文件格式无效"
+            _atomic_write_json(CONFIG_PATH, snap_cfg, mode=0o600)
+            with _CONFIG_LOCK:
+                _CONFIG_CACHE = copy.deepcopy({**copy.deepcopy(DEFAULT_CONFIG), **snap_cfg})
+                _CONFIG_CACHE_MTIME = os.path.getmtime(CONFIG_PATH)
+            return True, "配置已成功从快照回滚还原！"
+        except Exception as e:
+            return False, f"回滚失败: {e}"
 
 def get_hidden_ips_set():
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ip FROM hidden_ips")
-        rows = cursor.fetchall()
-        conn.close()
-        return set(r[0] for r in rows if r[0])
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ip FROM hidden_ips")
+            rows = cursor.fetchall()
+            return set(r[0] for r in rows if r[0])
     except Exception:
         return set()
 
 def get_hidden_ips():
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ip, country, region, city, isp, remark, create_time, timestamp FROM hidden_ips ORDER BY timestamp DESC")
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
-        return rows
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ip, country, region, city, isp, remark, create_time, timestamp FROM hidden_ips ORDER BY timestamp DESC")
+            return [dict(r) for r in cursor.fetchall()]
     except Exception:
         return []
 
@@ -708,14 +767,13 @@ def add_hidden_ip(ip, remark=""):
         geo = resolve_ip_geo(ip) or {}
         now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         now_ts = int(time.time())
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT OR REPLACE INTO hidden_ips (ip, country, region, city, isp, remark, create_time, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ip, geo.get("country", "未知地域"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), remark, now_dt, now_ts))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO hidden_ips (ip, country, region, city, isp, remark, create_time, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ip, geo.get("country", "未知地域"), geo.get("region", ""), geo.get("city", ""), geo.get("isp", ""), remark, now_dt, now_ts))
+            conn.commit()
         return True, f"已成功将 IP {ip} 加入隐藏列表"
     except Exception as e:
         return False, str(e)
@@ -726,35 +784,32 @@ def remove_hidden_ip(ip):
     if not ip:
         return False, "无效的 IP 地址"
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM hidden_ips WHERE ip = ?", (ip,))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM hidden_ips WHERE ip = ?", (ip,))
+            conn.commit()
         return True, f"已从隐藏列表中移除 IP {ip}"
     except Exception as e:
         return False, str(e)
 
 def clear_hidden_ips():
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM hidden_ips")
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM hidden_ips")
+            conn.commit()
         return True, "已清空所有隐藏 IP"
     except Exception as e:
         return False, str(e)
 
 def get_http_traps():
     try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at FROM http_traps ORDER BY id ASC")
-        rows = cursor.fetchall()
-        conn.close()
-        if rows:
-            return [dict(r) for r in rows]
+        with closing(get_db()) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, rule_id, name, match_type, pattern, threshold, window, action, level, enabled, description, created_at FROM http_traps ORDER BY id ASC")
+            rows = cursor.fetchall()
+            if rows:
+                return [dict(r) for r in rows]
         return [dict(r) for r in DEFAULT_HTTP_TRAPS]
     except Exception:
         return [dict(r) for r in DEFAULT_HTTP_TRAPS]
@@ -909,6 +964,16 @@ def rollup_analytics_before_cleanup(conn, cutoff_ts):
                 "last_seen": ls_v or "--", "ports": ports_v or ""
             }, ensure_ascii=False)
             dim_rows.append((stat_date, "attacker", str(ip_v), extra, hits))
+
+        # 精确跨日去重集合支持：记录当日所有独立攻击者 IP
+        c.execute("""
+            SELECT ip, COUNT(*) as hits FROM events
+            WHERE timestamp >= ? AND timestamp < ? AND ip NOT IN (SELECT ip FROM hidden_ips)
+            GROUP BY ip
+        """, (day_start, day_end))
+        for ip_only, ip_hits in c.fetchall():
+            if ip_only:
+                dim_rows.append((stat_date, "attacker_ip", str(ip_only), "", ip_hits))
 
         if dim_rows:
             c.executemany("""

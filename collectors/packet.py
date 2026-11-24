@@ -52,12 +52,39 @@ def parse_packet(raw_data):
             if len(raw_data) < offset + 40:
                 return None
             ip_hdr = raw_data[offset:offset + 40]
-            proto_num = ip_hdr[6]  # next header
-            ihl = 40
-            if len(raw_data) < offset + ihl + 4:
-                return None
+            next_hdr = ip_hdr[6]
             src_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[8:24])
             dst_ip = socket.inet_ntop(socket.AF_INET6, ip_hdr[24:40])
+            cur_pos = offset + 40
+            # 链式跳过标准 IPv6 扩展首部（上限 8 层，防止畸形报文死循环或扫描逃逸）
+            ext_headers = (0, 43, 44, 51, 60, 135)
+            for _ in range(8):
+                if next_hdr not in ext_headers:
+                    break
+                if len(raw_data) < cur_pos + 8:
+                    return None
+                if next_hdr == 44:  # Fragment Header (固定 8 字节)
+                    frag_off_flags = struct.unpack("!H", raw_data[cur_pos + 2:cur_pos + 4])[0]
+                    if (frag_off_flags & 0xFFF8) != 0:
+                        return None  # 非首片不含四层端口头
+                    next_hdr = raw_data[cur_pos]
+                    cur_pos += 8
+                elif next_hdr == 51:  # Authentication Header
+                    ext_len = (raw_data[cur_pos + 1] + 2) * 4
+                    if ext_len <= 0 or len(raw_data) < cur_pos + ext_len:
+                        return None
+                    next_hdr = raw_data[cur_pos]
+                    cur_pos += ext_len
+                else:
+                    ext_len = (raw_data[cur_pos + 1] + 1) * 8
+                    if ext_len <= 0 or len(raw_data) < cur_pos + ext_len:
+                        return None
+                    next_hdr = raw_data[cur_pos]
+                    cur_pos += ext_len
+            proto_num = next_hdr
+            ihl = cur_pos - offset
+            if len(raw_data) < offset + ihl + 4:
+                return None
         else:
             return None
 
@@ -90,13 +117,11 @@ def parse_packet(raw_data):
             return None
         src_port, dst_port = struct.unpack("!HH", l4_hdr[:4])
 
-        # 若为 UDP 协议：必须严格过滤所有出站回包与代理转发流量！
+        # 若为 UDP 协议：严格过滤公共基础服务回包与本机客户端临时随机端口回包 (32768-65535)，同时保留 1-32767 标准服务诱捕端口
         if proto_num == 17:
-            # 1. 常见公共服务源端口返回流量（DNS 53/853/5353, NTP 123, HTTPS/QUIC 443/80, OpenVPN 1194 等）直接丢弃
             if src_port in (53, 123, 853, 5353, 443, 80, 1194, 51820):
                 return None
-            # 2. 目标端口属于出站临时随机回包端口 (ephemeral ports >= 1024) 彻底忽略
-            if dst_port >= 1024:
+            if dst_port >= 32768:
                 return None
 
         return ParsedPacket(src_ip, dst_port, proto_str, stealth_type=stealth_type, dst_ip=dst_ip)

@@ -8,9 +8,16 @@ from sentry_daemon import (
     load_config, save_config, get_config_snapshots, rollback_config_snapshot,
     check_c2_compromise_connections, trap_instance, sniffer_instance,
     site_collector_instance, init_firewall_ipset, flush_firewall_blocks,
-    validate_cluster_target, normalize_cluster_node
+    validate_cluster_target, normalize_cluster_node, auto_heal_whitelist_ips
 )
 from core.notify import send_test_feishu_message, is_feishu_ws_connected, reload_feishu_ws
+
+def _safe_int(val, default_val, min_val=0, max_val=36500):
+    try:
+        v = int(val)
+    except (ValueError, TypeError):
+        v = default_val
+    return max(min_val, min(max_val, v))
 
 _LOGIN_FAIL_LOCK = threading.Lock()
 _LOGIN_FAIL_TRACKER = {}  # ip -> {"fails": int, "first_ts": float, "lock_until": float}
@@ -60,7 +67,7 @@ def handle_settings_get(req, parsed):
         "auto_clean_days": int(cfg.get("auto_clean_days", 30) if cfg.get("auto_clean_days") is not None else 30),
         "defense_mode": cfg.get("defense_mode", "standard"),
         "enable_port_scan_defense": bool(cfg.get("enable_port_scan_defense", True)),
-        "port_scan_threshold": max(2, int(cfg.get("port_scan_threshold", 3) or 3)),
+        "port_scan_threshold": max(1, int(cfg.get("port_scan_threshold", 1) or 1)),
         "port_scan_window_seconds": int(cfg.get("port_scan_window_seconds", 15) or 15),
         "trap_all_ports": bool(cfg.get("trap_all_ports", False)),
         "trap_all_unopened_ports": bool(cfg.get("trap_all_unopened_ports", False)),
@@ -141,17 +148,17 @@ def handle_settings_post(req, parsed, req_data):
     if "node_name" in req_data:
         cfg["node_name"] = str(req_data["node_name"]).strip() or "本机节点"
     if "trap_threshold" in req_data:
-        cfg["trap_threshold"] = int(req_data["trap_threshold"])
+        cfg["trap_threshold"] = _safe_int(req_data["trap_threshold"], 2, 1, 1000)
     if "trap_window_seconds" in req_data:
-        cfg["trap_window_seconds"] = int(req_data["trap_window_seconds"])
+        cfg["trap_window_seconds"] = _safe_int(req_data["trap_window_seconds"], 30, 1, 86400)
     if "auto_clean_days" in req_data:
-        cfg["auto_clean_days"] = int(req_data["auto_clean_days"])
+        cfg["auto_clean_days"] = _safe_int(req_data["auto_clean_days"], 30, 0, 3650)
     if "enable_port_scan_defense" in req_data:
         cfg["enable_port_scan_defense"] = bool(req_data["enable_port_scan_defense"])
     if "port_scan_threshold" in req_data:
-        cfg["port_scan_threshold"] = max(2, int(req_data["port_scan_threshold"]))
+        cfg["port_scan_threshold"] = _safe_int(req_data["port_scan_threshold"], 1, 1, 1000)
     if "port_scan_window_seconds" in req_data:
-        cfg["port_scan_window_seconds"] = int(req_data["port_scan_window_seconds"])
+        cfg["port_scan_window_seconds"] = _safe_int(req_data["port_scan_window_seconds"], 15, 1, 86400)
     if "ban_action_iptables" in req_data:
         cfg["ban_action_iptables"] = bool(req_data["ban_action_iptables"])
     if "ban_action_blackhole" in req_data:
@@ -283,12 +290,20 @@ def handle_feishu_test(req, parsed, req_data):
 
 
 def handle_config_rollback(req, parsed, req_data):
-    # 快照一键回滚接口
+    # 快照一键回滚接口（同步刷新内存缓存、蜜罐套接字、内核白名单集合与飞书长连接）
     snap_filename = req_data.get("filename", "").strip()
     if not snap_filename:
         req._send_json({"success": False, "msg": "缺少快照文件名"}, status=400)
         return
     ok, msg = rollback_config_snapshot(snap_filename)
+    if ok:
+        try:
+            restored_cfg = load_config()
+            trap_instance.reload()
+            auto_heal_whitelist_ips(restored_cfg.get("whitelist", []))
+            reload_feishu_ws(restored_cfg)
+        except Exception:
+            pass
     req._send_json({"success": ok, "msg": msg})
     return
 
